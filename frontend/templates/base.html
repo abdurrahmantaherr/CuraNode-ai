@@ -1,0 +1,22 @@
+{#- Root layout. `dir` is derived from the locale here and NOWHERE else,
+    so no template decides direction for itself (TDD 2.3 rule 2). -#}
+<!DOCTYPE html>
+<html lang="{{ locale }}" dir="{{ direction }}" data-theme="{{ theme|default('light') }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ t('app.name') }}{% endblock %}</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  {#- Urdu is loaded only for ur: an unsubsetted Nastaliq face is a
+      multi-hundred-kilobyte download and would breach NFR1 on its own. -#}
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:wght@400;500;600&family=Public+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500{% if locale == 'ur' %}&family=Noto+Nastaliq+Urdu:wght@400;600{% endif %}&display=swap">
+
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  {% block body %}{% endblock %}
+</body>
+</html>

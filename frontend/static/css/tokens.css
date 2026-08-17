@@ -1,0 +1,127 @@
+/* CuraNode design tokens — values taken verbatim from docs/DESIGN.md §2.
+   Nothing in the application may write a raw hex value; every colour is
+   consumed through these custom properties (DESIGN.md §8 rule 1). */
+
+:root {
+  /* Brand & AI */
+  --brand: #0F5C56;
+  --brand-2: #0B4741;
+  --brand-soft: #E3EEEC;
+  --ai: #6B5FD9;
+  --ai-soft: #EDEBFB;
+
+  /* Status — semantic, never decorative (DESIGN.md §8 rule 3) */
+  --ok: #2F8F5B;
+  --ok-soft: #E4F1E9;
+  --warn: #C68A1F;
+  --warn-soft: #F8F0DE;
+  --err: #C0432E;
+  --err-soft: #F8E7E3;
+
+  /* Text & surface */
+  --ink: #1A2422;
+  --muted: #6B7A76;
+  --faint: #93A19D;
+  --surface: #FFFFFF;
+  --surface-2: #FBFAF7;
+  --bg: #F6F4F0;
+
+  --line: rgba(26, 36, 34, .10);
+  --line-2: rgba(26, 36, 34, .16);
+
+  /* Navigation — its own scale, near-identical across themes */
+  --nav: #0A1B19;
+  --nav-2: #081614;
+  --nav-ink: #DCE8E5;
+  --nav-muted: #7C948F;
+  --nav-active: #12433D;
+
+  --shadow: 0 1px 2px rgba(26, 36, 34, .05), 0 6px 18px rgba(26, 36, 34, .04);
+
+  /* Type */
+  --font-sans: 'Public Sans', system-ui, -apple-system, sans-serif;
+  --font-serif: 'Newsreader', Georgia, serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  /* Radius */
+  --r-pill: 999px;
+  --r-card: 16px;
+  --r-card-sm: 14px;
+  --r-row: 11px;
+  --r-control: 10px;
+  --r-chip: 6px;
+
+  /* Spacing rhythm (DESIGN.md §2) */
+  --sp-1: 7px;
+  --sp-2: 8px;
+  --sp-3: 10px;
+  --sp-4: 12px;
+  --sp-5: 14px;
+  --sp-6: 16px;
+  --sp-7: 18px;
+  --sp-card: 22px;
+
+  --stage-max: 1240px;
+}
+
+[data-theme="dark"] {
+  --brand: #3E9A91;
+  --brand-2: #2E7D75;
+  --brand-soft: #12302D;
+  --ai: #9B90F2;
+  --ai-soft: #231F3D;
+
+  --ok: #4FB37B;
+  --ok-soft: #132B1E;
+  --warn: #DFAA45;
+  --warn-soft: #33280F;
+  --err: #E06751;
+  --err-soft: #341C17;
+
+  --ink: #E9F1EE;
+  --muted: #94A5A1;
+  --faint: #6E8280;
+  --surface: #141E1C;
+  --surface-2: #101917;
+  --bg: #0B1211;
+
+  --line: rgba(255, 255, 255, .10);
+  --line-2: rgba(255, 255, 255, .18);
+
+  --nav: #060F0E;
+  --nav-2: #050C0B;
+  --nav-ink: #DCE8E5;
+  --nav-muted: #7C948F;
+  --nav-active: #123B36;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+}
+
+/* Respect the OS preference when the user has not chosen explicitly. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --brand: #3E9A91;
+    --brand-2: #2E7D75;
+    --brand-soft: #12302D;
+    --ai: #9B90F2;
+    --ai-soft: #231F3D;
+    --ok: #4FB37B;
+    --ok-soft: #132B1E;
+    --warn: #DFAA45;
+    --warn-soft: #33280F;
+    --err: #E06751;
+    --err-soft: #341C17;
+    --ink: #E9F1EE;
+    --muted: #94A5A1;
+    --faint: #6E8280;
+    --surface: #141E1C;
+    --surface-2: #101917;
+    --bg: #0B1211;
+    --line: rgba(255, 255, 255, .10);
+    --line-2: rgba(255, 255, 255, .18);
+    --nav: #060F0E;
+    --nav-2: #050C0B;
+    --nav-active: #123B36;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+  }
+}

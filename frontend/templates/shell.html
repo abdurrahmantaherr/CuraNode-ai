@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{#- Signed-in shell. Dashboards are placeholders: their content belongs to
+    later features. What is real here is the role-gated routing and the
+    unverified-doctor banner. -#}
+
+{% block body %}
+<div class="shell">
+  <header class="topbar">
+    <div>
+      <div class="topbar__crumb">{{ crumb }}</div>
+      <div class="topbar__title">{{ page_title }}</div>
+    </div>
+    <div class="topbar__spacer"></div>
+    <div class="topbar__actions">
+      <a class="btn btn--secondary" href="/{{ other_locale }}{{ path_suffix }}"
+         hreflang="{{ other_locale }}">{{ t('nav.language') }}</a>
+      <form method="post" action="/{{ locale }}/logout">
+        <button class="btn btn--secondary" type="submit">{{ t('nav.sign_out') }}</button>
+      </form>
+    </div>
+  </header>
+
+  <main class="content">
+    {% if show_unverified_banner %}
+      {#- FR3 — persistent and non-dismissible. No patient-data affordance is
+          rendered anywhere behind it. -#}
+      <div class="banner banner--warn" role="status">
+        <span aria-hidden="true">!</span>
+        <div>
+          <div class="banner__title">{{ t('doctor.pending_title') }}</div>
+          <div class="banner__body">{{ pending_message }}</div>
+        </div>
+      </div>
+    {% endif %}
+
+    <div class="panel">
+      <div class="panel__label">{{ page_title }}</div>
+      <div style="display:flex;gap:var(--sp-5);align-items:center">
+        <div class="avatar" aria-hidden="true">{{ initials }}</div>
+        <div>
+          <div style="font-size:14.5px;font-weight:600">{{ full_name }}</div>
+          <div class="mono">{{ role_label }}{% if passport_no %} · {{ passport_no }}{% endif %}</div>
+        </div>
+        {% if passport_no %}
+          <span class="chip">{{ t('patient.dashboard.passport') }}</span>
+        {% endif %}
+      </div>
+      <p style="margin:var(--sp-6) 0 0;font-size:13.5px;color:var(--muted);max-width:64ch">
+        {{ t('dashboard.placeholder') }}
+      </p>
+    </div>
+  </main>
+</div>
+{% endblock %}

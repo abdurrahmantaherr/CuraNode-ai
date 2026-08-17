@@ -1,0 +1,376 @@
+"""Server-rendered pages and form handling (SPEC 5).
+
+Role enforcement here is a second line only. The authoritative check is the
+backend dependency in `deps.py`; these handlers exist so a browser gets a
+redirect instead of a raw 403 page.
+
+Locale is a path prefix (`/en/...`, `/ur/...`), so switching language is a
+route change that preserves the page — FR28's "without losing the user's
+place" with no client state to juggle.
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Annotated, Any
+
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.templating import Jinja2Templates
+from pydantic import ValidationError
+from sqlalchemy import select
+
+from ..db.models import Clinic, User, UserRole
+from ..deps import OptionalActorDep, SessionDep, enforce_auth_rate_limit
+from ..errors import AppError, RateLimited, Unauthenticated, ValidationFailed
+from ..i18n.catalogue import direction, normalise_locale, translate
+from ..identity import service
+from ..identity.router import clear_session_cookies, set_session_cookies
+from ..identity.schemas import (
+    DoctorRegisterRequest,
+    LoginRequest,
+    PatientRegisterRequest,
+)
+from ..paths import TEMPLATES_DIR
+from ..settings import settings
+
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+router = APIRouter(tags=["web"])
+
+ROLE_LABEL = {
+    "patient": "auth.role.patient",
+    "doctor": "auth.role.doctor",
+    "clinic_admin": "admin.dashboard.title",
+}
+
+
+def _base_context(request: Request, locale: str) -> dict[str, Any]:
+    loc = normalise_locale(locale)
+    suffix = request.url.path[len(f"/{loc}") :] or "/"
+    return {
+        "request": request,
+        "locale": loc,
+        "direction": direction(loc),
+        "other_locale": "ur" if loc == "en" else "en",
+        "path_suffix": suffix,
+        "t": lambda key, **kw: translate(key, loc, **kw),
+    }
+
+
+def _render(
+    request: Request, template: str, locale: str, status_code: int = 200, **extra: Any
+) -> HTMLResponse:
+    ctx = _base_context(request, locale)
+    ctx.update(extra)
+    return templates.TemplateResponse(request, template, ctx, status_code=status_code)
+
+
+async def _clinic_options(session: SessionDep) -> list[dict[str, str]]:
+    rows = await session.execute(select(Clinic).order_by(Clinic.city, Clinic.name))
+    return [
+        {"value": str(c.id), "label": f"{c.name} — {c.city}"} for c in rows.scalars().all()
+    ]
+
+
+def _initials(name: str) -> str:
+    parts = [p for p in name.split() if p]
+    return "".join(p[0].upper() for p in parts[:2]) or "?"
+
+
+# ── Login ────────────────────────────────────────────────────────────────
+@router.get("/{locale}/login", response_class=HTMLResponse)
+async def login_page(
+    request: Request, locale: str, actor: OptionalActorDep
+) -> Response:
+    if actor is not None:
+        return RedirectResponse(
+            f"/{normalise_locale(locale)}/{_area(actor.role)}", status_code=303
+        )
+    return _render(
+        request, "auth/login.html", locale, role="patient", values={}, errors={}
+    )
+
+
+@router.post("/{locale}/login")
+async def login_submit(
+    request: Request,
+    locale: str,
+    session: SessionDep,
+    email: Annotated[str, Form()] = "",
+    password: Annotated[str, Form()] = "",
+    role: Annotated[str, Form()] = "",
+) -> Response:
+    loc = normalise_locale(locale)
+    selected = role if role in ("patient", "doctor") else ""
+
+    def fail(message_key: str, code: int = 400, **params: object) -> Response:
+        return _render(
+            request,
+            "auth/login.html",
+            loc,
+            status_code=code,
+            # Keep the toggle where the user left it, so the error makes sense.
+            role=selected or "patient",
+            values={"email": email},
+            errors={},
+            form_error=translate(message_key, loc, **params),
+        )
+
+    try:
+        await enforce_auth_rate_limit(request)
+    except RateLimited:
+        return fail("errors.rate_limited", 429)
+
+    try:
+        body = LoginRequest(email=email, password=password)
+    except ValidationError:
+        return fail("errors.unauthenticated", 401)
+
+    try:
+        out, pair = await service.login(
+            session,
+            body,
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except Unauthenticated:
+        return fail("errors.unauthenticated", 401)
+
+    # Role check runs AFTER the password is verified, so it can only ever be
+    # triggered by someone who already owns the account. It therefore reveals
+    # nothing an attacker could not already see, and the session is discarded
+    # rather than handed over (SPEC AC-23).
+    if selected and out.role != selected:
+        await service.discard_session(session, pair)
+        return fail(
+            "errors.role_mismatch",
+            403,
+            selected=translate(f"auth.role.{selected}", loc),
+        )
+
+    response = RedirectResponse(f"/{loc}/{_area(out.role)}", status_code=303)
+    set_session_cookies(response, pair)
+    return response
+
+
+# ── Register ─────────────────────────────────────────────────────────────
+@router.get("/{locale}/register", response_class=HTMLResponse)
+async def register_page(
+    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if actor is not None:
+        return RedirectResponse(
+            f"/{normalise_locale(locale)}/{_area(actor.role)}", status_code=303
+        )
+    return _render(
+        request,
+        "auth/register.html",
+        locale,
+        role="patient",
+        values={},
+        errors={},
+        clinics=await _clinic_options(session),
+    )
+
+
+@router.post("/{locale}/register")
+async def register_submit(
+    request: Request,
+    locale: str,
+    session: SessionDep,
+    full_name: Annotated[str, Form()] = "",
+    email: Annotated[str, Form()] = "",
+    password: Annotated[str, Form()] = "",
+    password_confirm: Annotated[str, Form()] = "",
+    phone_e164: Annotated[str, Form()] = "",
+    role: Annotated[str, Form()] = "patient",
+    pmdc_number: Annotated[str, Form()] = "",
+    specialty: Annotated[str, Form()] = "",
+    primary_clinic_id: Annotated[str, Form()] = "",
+    consent: Annotated[str | None, Form()] = None,
+) -> Response:
+    loc = normalise_locale(locale)
+    role = role if role in ("patient", "doctor") else "patient"
+    values = {
+        "full_name": full_name,
+        "email": email,
+        "phone_e164": phone_e164,
+        "pmdc_number": pmdc_number,
+        "specialty": specialty,
+        "primary_clinic_id": primary_clinic_id,
+        "consent": bool(consent),
+    }
+
+    async def rerender(
+        errors: dict[str, str], form_error: str | None = None, code: int = 422
+    ) -> Response:
+        return _render(
+            request,
+            "auth/register.html",
+            loc,
+            status_code=code,
+            role=role,
+            values=values,
+            errors=errors,
+            clinics=await _clinic_options(session),
+            form_error=form_error,
+        )
+
+    try:
+        await enforce_auth_rate_limit(request)
+    except RateLimited:
+        return await rerender({}, translate("errors.rate_limited", loc), 429)
+
+    # Presentation-layer checks that the API schema cannot express.
+    errors: dict[str, str] = {}
+    if not full_name.strip():
+        errors["full_name"] = translate("errors.name_required", loc)
+    if len(password) < 10:
+        errors["password"] = translate("errors.password_short", loc)
+    elif password != password_confirm:
+        errors["password_confirm"] = translate("errors.password_mismatch", loc)
+    if not consent:
+        errors["consent"] = translate("errors.consent_required", loc)
+    if errors:
+        return await rerender(errors)
+
+    payload: dict[str, Any] = {
+        "full_name": full_name,
+        "email": email,
+        "password": password,
+        "preferred_locale": loc,
+        "phone_e164": phone_e164.strip() or None,
+    }
+
+    try:
+        if role == "doctor":
+            if not (pmdc_number.strip() and specialty.strip() and primary_clinic_id):
+                return await rerender(
+                    {}, translate("errors.doctor_fields_required", loc)
+                )
+            body: Any = DoctorRegisterRequest(
+                role="doctor",
+                pmdc_number=pmdc_number.strip(),
+                specialty=specialty.strip(),
+                primary_clinic_id=uuid.UUID(primary_clinic_id),
+                **payload,
+            )
+        else:
+            body = PatientRegisterRequest(**payload)
+    except (ValidationError, ValueError):
+        return await rerender({"email": translate("errors.email_invalid", loc)})
+
+    try:
+        out, pair = await service.register(
+            session,
+            body,
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except ValidationFailed:
+        return await rerender({"primary_clinic_id": translate("errors.clinic_unknown", loc)})
+    except AppError:
+        return await rerender({}, translate("errors.internal", loc), 500)
+
+    if pair is None:
+        # Duplicate email. Do not confirm the address exists — send the user to
+        # sign in instead (SPEC AC-24, BL-05).
+        return RedirectResponse(f"/{loc}/login", status_code=303)
+
+    response = RedirectResponse(f"/{loc}/{_area(out.role)}", status_code=303)
+    set_session_cookies(response, pair)
+    return response
+
+
+@router.post("/{locale}/logout")
+async def logout_submit(
+    request: Request, locale: str, session: SessionDep
+) -> Response:
+    await service.logout(session, request.cookies.get(settings.refresh_cookie_name))
+    response = RedirectResponse(
+        f"/{normalise_locale(locale)}/login", status_code=303
+    )
+    clear_session_cookies(response)
+    return response
+
+
+# ── Protected areas ──────────────────────────────────────────────────────
+def _area(role: str) -> str:
+    return {"patient": "patient", "doctor": "doctor", "clinic_admin": "admin"}[role]
+
+
+async def _guarded(
+    request: Request,
+    locale: str,
+    session: SessionDep,
+    actor: OptionalActorDep,
+    required_role: str,
+) -> Response:
+    loc = normalise_locale(locale)
+
+    if actor is None:
+        # Preserve the destination so the user returns after signing in.
+        return RedirectResponse(
+            f"/{loc}/login?next={request.url.path}", status_code=303
+        )
+
+    if actor.role != required_role:
+        # Cross-role deep link: send them to their own area rather than a raw
+        # 403 page (SPEC AC-16).
+        return RedirectResponse(f"/{loc}/{_area(actor.role)}", status_code=303)
+
+    user = await session.get(User, actor.user_id)
+    assert user is not None
+    me = await service.build_me(session, user)
+
+    pending_message = ""
+    show_banner = False
+    if actor.role == UserRole.DOCTOR.value and not actor.is_verified_doctor:
+        show_banner = True
+        clinic_name = ""
+        if me.clinic_ids:
+            clinic = await session.get(Clinic, me.clinic_ids[0])
+            clinic_name = clinic.name if clinic else ""
+        pending_message = translate("doctor.pending_body", loc, clinic=clinic_name)
+
+    title_key = {
+        "patient": "patient.dashboard.title",
+        "doctor": "doctor.dashboard.title",
+        "clinic_admin": "admin.dashboard.title",
+    }[actor.role]
+
+    return _render(
+        request,
+        "shell.html",
+        loc,
+        crumb=translate(ROLE_LABEL[actor.role], loc),
+        page_title=translate(title_key, loc),
+        full_name=me.full_name,
+        initials=_initials(me.full_name),
+        role_label=translate(ROLE_LABEL[actor.role], loc),
+        passport_no=me.passport_no,
+        show_unverified_banner=show_banner,
+        pending_message=pending_message,
+    )
+
+
+@router.get("/{locale}/patient", response_class=HTMLResponse)
+async def patient_area(
+    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    return await _guarded(request, locale, session, actor, "patient")
+
+
+@router.get("/{locale}/doctor", response_class=HTMLResponse)
+async def doctor_area(
+    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    return await _guarded(request, locale, session, actor, "doctor")
+
+
+@router.get("/{locale}/admin", response_class=HTMLResponse)
+async def admin_area(
+    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    return await _guarded(request, locale, session, actor, "clinic_admin")
