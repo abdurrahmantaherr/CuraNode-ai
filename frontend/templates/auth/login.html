@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% import "partials/form_field.html" as f %}
+{% block title %}{{ t('auth.login.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+<main class="auth-page">
+  <div class="auth-shell">
+    <div class="auth-head">
+      <div class="brandmark" aria-hidden="true">C</div>
+      <h1 class="auth-title">{{ t('auth.login.title') }}</h1>
+      {#- Copy follows the toggle. This is the ONLY thing the login toggle
+          does — it is never sent to the server (SPEC AC-23, BL-19). -#}
+      <p class="auth-sub" id="login-sub">
+        {{ t('auth.login.subtitle_patient') if role == 'patient' else t('auth.login.subtitle_doctor') }}
+      </p>
+    </div>
+
+    <form class="card" method="post" action="/{{ locale }}/login" novalidate>
+      {{ f.form_banner(form_error) }}
+
+      {#- Real radio inputs, not buttons: the browser submits `role` natively,
+          keyboard and screen-reader behaviour come free, and the toggle still
+          works with JavaScript disabled (SPEC AC-23). -#}
+      <fieldset class="role-fieldset">
+        <legend class="eyebrow">{{ t('auth.login.i_am_a') }}</legend>
+        <div class="role-group">
+          {% for r in ['patient', 'doctor'] %}
+            <label class="role-tile role-tile--compact">
+              <input class="role-tile__radio js-role" type="radio" name="role"
+                     value="{{ r }}" data-sub="{{ t('auth.login.subtitle_' ~ r) }}"
+                     {% if role == r %}checked{% endif %}>
+              <span class="role-tile__name">{{ t('auth.role.' ~ r) }}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </fieldset>
+
+      {{ f.field('email', t('field.email'), type='email', value=values.get('email', ''),
+                 errors=errors, required=True, autocomplete='email') }}
+      {{ f.field('password', t('field.password'), type='password',
+                 errors=errors, required=True, autocomplete='current-password') }}
+
+      <div class="rowline">
+        <label class="checkline">
+          <input type="checkbox" name="keep_signed_in" checked>
+          {{ t('auth.login.keep_signed_in') }}
+        </label>
+        <span class="linkish" aria-disabled="true" title="Not yet available">
+          {{ t('auth.login.forgot') }}
+        </span>
+      </div>
+
+      {{ f.submit(t('auth.login.submit')) }}
+
+      <div class="centre-note">
+        {{ t('auth.login.new_here') }}
+        <a href="/{{ locale }}/register">{{ t('auth.login.create_account') }}</a>
+      </div>
+    </form>
+
+    <p class="mono-note">{{ t('app.encrypted_note') }}</p>
+  </div>
+</main>
+
+<script src="/static/js/auth.js" defer></script>
+{% endblock %}

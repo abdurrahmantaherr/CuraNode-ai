@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% import "partials/form_field.html" as f %}
+{% block title %}{{ t('auth.register.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+<main class="auth-page">
+  <div class="auth-shell auth-shell--wide">
+    <div class="auth-head auth-head--start">
+      <h1 class="auth-title">{{ t('auth.register.title') }}</h1>
+      <p class="auth-sub">{{ t('auth.register.subtitle') }}</p>
+    </div>
+
+    <form class="card" method="post" action="/{{ locale }}/register" novalidate>
+      {{ f.form_banner(form_error) }}
+
+      {{ f.field('full_name', t('field.full_name'), value=values.get('full_name', ''),
+                 errors=errors, required=True, autocomplete='name') }}
+      {{ f.field('email', t('field.email'), type='email', value=values.get('email', ''),
+                 errors=errors, required=True, autocomplete='email') }}
+
+      <div class="grid-2">
+        {{ f.field('password', t('field.password'), type='password',
+                   errors=errors, required=True, autocomplete='new-password') }}
+        {{ f.field('password_confirm', t('field.confirm_password'), type='password',
+                   errors=errors, required=True, autocomplete='new-password') }}
+      </div>
+
+      {{ f.field('phone_e164', t('field.phone'), type='tel',
+                 value=values.get('phone_e164', ''), errors=errors,
+                 placeholder='+923001234567') }}
+
+      {#- Functional toggle: this one drives the branch in service.register.
+          Radio inputs so `role` submits natively without JavaScript. -#}
+      <fieldset class="role-fieldset">
+        <legend class="eyebrow">{{ t('auth.register.register_as') }}</legend>
+        <div class="role-group">
+          {% for r in ['patient', 'doctor'] %}
+            <label class="role-tile">
+              <input class="role-tile__radio js-role" type="radio" name="role"
+                     value="{{ r }}" aria-controls="doctor-fields"
+                     {% if role == r %}checked{% endif %}>
+              <span class="role-tile__name">{{ t('auth.role.' ~ r) }}</span>
+              <span class="role-tile__hint">{{ t('auth.role.' ~ r ~ '_hint') }}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </fieldset>
+
+      {#- Doctor-only fields. Rendered visible by default so a no-JS user can
+          still complete a doctor registration; auth.js collapses them when
+          Patient is selected, and clears them so they cannot be submitted
+          alongside a patient registration (SPEC 5.2). -#}
+      <div id="doctor-fields" data-hide-when="patient">
+        <div class="card" style="box-shadow:none;padding:var(--sp-6);gap:var(--sp-4)">
+          {{ f.field('pmdc_number', t('field.pmdc'), value=values.get('pmdc_number', ''),
+                     errors=errors, help=t('field.pmdc_help'), placeholder='41192') }}
+          {{ f.field('specialty', t('field.specialty'), value=values.get('specialty', ''),
+                     errors=errors, placeholder='Cardiology') }}
+          {{ f.select('primary_clinic_id', t('field.clinic'), clinics,
+                      value=values.get('primary_clinic_id', ''), errors=errors,
+                      placeholder=t('field.clinic_placeholder')) }}
+        </div>
+      </div>
+
+      <label class="checkline">
+        <input type="checkbox" name="consent" {% if values.get('consent') %}checked{% endif %}>
+        {{ t('auth.register.consent') }}
+      </label>
+      {% if errors.get('consent') %}
+        <span class="field-error" role="alert"><span aria-hidden="true">!</span>{{ errors.get('consent') }}</span>
+      {% endif %}
+
+      {{ f.submit(t('auth.register.submit')) }}
+
+      <div class="centre-note">
+        {{ t('auth.register.already') }}
+        <a href="/{{ locale }}/login">{{ t('auth.register.sign_in') }}</a>
+      </div>
+    </form>
+
+    <p class="mono-note">{{ t('app.encrypted_note') }}</p>
+  </div>
+</main>
+
+<script src="/static/js/auth.js" defer></script>
+{% endblock %}

@@ -1,7 +1,7 @@
 [project]
 name = "curanodeai"
 version = "0.1.0"
-description = "Add your description here"
+description = "CuraNode-AI — cross-hospital health management platform (FYP)"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -9,4 +9,45 @@ dependencies = [
     "itsdangerous>=2.2.0",
     "python-multipart>=0.0.32",
     "uvicorn>=0.52.1",
+    # Persistence — SQLAlchemy 2.0 typed style only (TDD 2.1)
+    "sqlalchemy>=2.0.40,<2.1",
+    "aiosqlite>=0.20",
+    "alembic>=1.16,<2.0",
+    # Validation & settings
+    "pydantic[email]>=2.11,<3.0",
+    "pydantic-settings>=2.6",
+    # Security (TDD 7.1)
+    "argon2-cffi>=25.1",
+    "pyjwt>=2.10,<3.0",
+    # Presentation
+    "jinja2>=3.1",
+    # Observability (TDD 7.8)
+    "structlog>=25.1",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "pytest-asyncio>=1.0",
+    "httpx>=0.28",
+    "ruff>=0.12",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+# `backend` on the path so tests import the package as `app`, matching how
+# `uv run backend/app/main.py` resolves it.
+pythonpath = ["backend", "."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"

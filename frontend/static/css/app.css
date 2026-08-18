@@ -1,0 +1,373 @@
+/* CuraNode application styles.
+
+   Two rules govern everything here:
+   1. Logical properties only — margin-inline, padding-inline, inset-inline.
+      Never margin-left / padding-right. This is what makes Urdu RTL work
+      without a second stylesheet (TDD §2.3 rule 1).
+   2. Colour comes only from tokens.css. No raw hex below this line. */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Urdu needs a Nastaliq face; the Latin stack has no Urdu coverage
+   (app-foundation.md §12 item 6). */
+html[lang="ur"] body {
+  font-family: 'Noto Nastaliq Urdu', var(--font-sans);
+  line-height: 2;
+}
+
+a { color: var(--brand); text-decoration: none; }
+a:hover { color: var(--brand-2); }
+
+/* ── Focus ─────────────────────────────────────────────────────────────
+   DESIGN.md sets outline:none with no replacement, which fails NFR14.
+   This is the replacement; never remove an outline without one. */
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── Auth layout ───────────────────────────────────────────────────── */
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 28px 20px 60px;
+  gap: var(--sp-5);
+}
+
+.auth-shell { width: 100%; max-width: 430px; }
+.auth-shell--wide { max-width: 470px; }
+
+.auth-head { text-align: center; margin-block-end: var(--sp-7); }
+.auth-head--start { text-align: start; }
+
+.brandmark {
+  width: 44px; height: 44px;
+  margin-inline: auto;
+  margin-block-end: var(--sp-5);
+  border-radius: 13px;
+  background: var(--brand);
+  display: grid; place-items: center;
+  font: 600 20px/1 var(--font-serif);
+  color: #fff;
+}
+
+h1.auth-title {
+  margin: 0;
+  font: 400 30px/1.15 var(--font-serif);
+  color: var(--ink);
+}
+
+.auth-sub {
+  margin: var(--sp-2) 0 0;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  padding: 24px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.mono-note {
+  margin-block-start: var(--sp-5);
+  text-align: center;
+  font: 400 10.5px/1.5 var(--font-mono);
+  color: var(--faint);
+}
+
+/* ── Forms ─────────────────────────────────────────────────────────── */
+.field { display: block; }
+
+.field-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-block-end: 6px;
+}
+
+.input, .select {
+  width: 100%;
+  padding: 11px 13px;
+  border-radius: var(--r-control);
+  border: 1px solid var(--line-2);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 13.5px;
+  font-family: inherit;
+}
+
+/* Email and phone are never mirrored, even in RTL (SPEC §5.6 item 4). */
+.input[type="email"], .input[type="tel"] { direction: ltr; text-align: start; }
+
+.input[aria-invalid="true"], .select[aria-invalid="true"] {
+  border-color: var(--err);
+}
+
+.field-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-block-start: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--err);
+}
+
+.field-help {
+  margin-block-start: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--sp-4);
+}
+
+.checkline {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.checkline input { accent-color: var(--brand); margin-block-start: 2px; }
+
+/* ── Role toggle (DESIGN.md — kept exactly) ─────────────────────────
+   Built on native radios so the selection submits without JavaScript and
+   the selected state is driven by :checked, not a scripted attribute. */
+.role-fieldset { border: 0; padding: 0; margin: 0; min-inline-size: 0; }
+.role-group { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); }
+
+.eyebrow {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-block-end: var(--sp-2);
+  padding: 0;
+}
+
+.role-tile {
+  padding: 12px;
+  border-radius: var(--r-control);
+  cursor: pointer;
+  border: 1px solid var(--line-2);
+  background: var(--surface-2);
+  color: var(--ink);
+  text-align: start;
+  font-family: inherit;
+  display: block;
+  width: 100%;
+  position: relative;
+}
+.role-tile--compact { padding: 11px; text-align: center; }
+.role-tile__name { font-size: 13px; font-weight: 600; }
+.role-tile__hint {
+  display: block;
+  margin-block-start: 3px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* The radio stays in the accessibility tree and remains focusable; it is the
+   tile that is painted, so it must not be display:none. */
+.role-tile__radio {
+  position: absolute;
+  opacity: 0;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+
+.role-tile:has(.role-tile__radio:checked) {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+.role-tile:has(.role-tile__radio:checked) .role-tile__name { color: var(--brand); }
+
+/* Focus must be visible on the tile, since the input itself is transparent. */
+.role-tile:has(.role-tile__radio:focus-visible) {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* ── Buttons ───────────────────────────────────────────────────────── */
+.btn {
+  padding: 13px 18px;
+  border-radius: var(--r-control);
+  font-size: 13.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+}
+.btn--primary { background: var(--brand); color: #fff; }
+.btn--primary:hover { background: var(--brand-2); }
+.btn--secondary { background: var(--surface); border-color: var(--line-2); color: var(--ink); }
+.btn--block { width: 100%; }
+.btn[disabled], .btn[aria-busy="true"] { opacity: .7; cursor: not-allowed; }
+
+.linkish {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--brand);
+  cursor: pointer;
+}
+
+.rowline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.centre-note { text-align: center; font-size: 12.5px; color: var(--muted); }
+
+/* ── Banners ───────────────────────────────────────────────────────── */
+.banner {
+  display: flex;
+  gap: 11px;
+  padding: var(--sp-5);
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.banner--error { background: var(--err-soft); border: 1px solid var(--err); color: var(--err); }
+.banner--warn  { background: var(--warn-soft); border: 1px solid var(--warn); color: var(--warn); }
+.banner--ok    { background: var(--ok-soft); border: 1px solid var(--ok); color: var(--ok); }
+.banner__title { font-weight: 600; }
+.banner__body { margin-block-start: 3px; color: var(--muted); }
+
+/* ── Spinner (cnSpin from DESIGN.md §2 motion) ─────────────────────── */
+@keyframes cnSpin { to { transform: rotate(360deg); } }
+.spinner {
+  width: 14px; height: 14px;
+  border: 2px solid rgba(255, 255, 255, .45);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: cnSpin .7s linear infinite;
+}
+
+/* ── App shell ─────────────────────────────────────────────────────── */
+.shell { display: flex; flex-direction: column; min-height: 100vh; }
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6);
+  padding: var(--sp-5) 30px;
+  background: var(--surface);
+  border-block-end: 1px solid var(--line);
+}
+.topbar__crumb {
+  font: 400 9.5px/1 var(--font-mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.topbar__title { margin-block-start: 5px; font: 500 19px/1.1 var(--font-serif); }
+.topbar__spacer { flex: 1; }
+.topbar__actions { display: flex; align-items: center; gap: var(--sp-2); }
+
+.content {
+  flex: 1;
+  width: 100%;
+  max-width: var(--stage-max);
+  margin-inline: auto;
+  padding: 26px 30px 60px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-7);
+}
+
+.avatar {
+  width: 46px; height: 46px;
+  border-radius: var(--r-card-sm);
+  background: var(--brand-soft);
+  color: var(--brand);
+  display: grid; place-items: center;
+  font: 500 16px/1 var(--font-serif);
+  flex: none;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  padding: 20px;
+  box-shadow: var(--shadow);
+}
+.panel__label {
+  font: 600 10.5px/1 var(--font-sans);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-block-end: var(--sp-5);
+}
+.mono { font-family: var(--font-mono); font-size: 11.5px; color: var(--faint); }
+
+.chip {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  font-size: 11.5px;
+  font-weight: 600;
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+/* ── Responsive (DESIGN.md is intrinsic; 1024px is the shell threshold) ── */
+@media (max-width: 1024px) {
+  .topbar { padding: var(--sp-4) var(--sp-6); }
+  .content { padding: var(--sp-6) var(--sp-6) 48px; }
+}
+
+@media (max-width: 520px) {
+  .auth-page { padding: var(--sp-6) var(--sp-5) 40px; }
+  .card { padding: var(--sp-7); }
+  .role-group { grid-template-columns: 1fr; }
+  h1.auth-title { font-size: 26px; }
+}
+
+/* Touch targets stay >= 44px for older patients (NFR14). */
+@media (pointer: coarse) {
+  .btn, .role-tile, .input, .select { min-height: 44px; }
+}

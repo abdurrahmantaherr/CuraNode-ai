@@ -1,0 +1,57 @@
+{#- Reusable field. Every form in the product copies this contract:
+    label -> input -> error, with aria-invalid and aria-describedby wired so
+    the message is announced, not just coloured (SPEC 5.5, 5.7). -#}
+{% macro field(name, label, type='text', value='', errors={}, required=False,
+               autocomplete=None, help=None, placeholder='') %}
+  {% set err = errors.get(name) %}
+  <label class="field" for="f-{{ name }}">
+    <span class="field-label">{{ label }}</span>
+    <input class="input"
+           id="f-{{ name }}"
+           name="{{ name }}"
+           type="{{ type }}"
+           value="{{ value }}"
+           {% if placeholder %}placeholder="{{ placeholder }}"{% endif %}
+           {% if required %}required{% endif %}
+           {% if autocomplete %}autocomplete="{{ autocomplete }}"{% endif %}
+           {% if err %}aria-invalid="true" aria-describedby="e-{{ name }}"{% endif %}>
+    {% if help %}<span class="field-help">{{ help }}</span>{% endif %}
+    {% if err %}
+      <span class="field-error" id="e-{{ name }}" role="alert">
+        <span aria-hidden="true">!</span>{{ err }}
+      </span>
+    {% endif %}
+  </label>
+{% endmacro %}
+
+{% macro select(name, label, options, value='', errors={}, placeholder='') %}
+  {% set err = errors.get(name) %}
+  <label class="field" for="f-{{ name }}">
+    <span class="field-label">{{ label }}</span>
+    <select class="select" id="f-{{ name }}" name="{{ name }}"
+            {% if err %}aria-invalid="true" aria-describedby="e-{{ name }}"{% endif %}>
+      {% if placeholder %}<option value="">{{ placeholder }}</option>{% endif %}
+      {% for opt in options %}
+        <option value="{{ opt.value }}" {% if opt.value == value %}selected{% endif %}>{{ opt.label }}</option>
+      {% endfor %}
+    </select>
+    {% if err %}
+      <span class="field-error" id="e-{{ name }}" role="alert">
+        <span aria-hidden="true">!</span>{{ err }}
+      </span>
+    {% endif %}
+  </label>
+{% endmacro %}
+
+{% macro form_banner(message) %}
+  {% if message %}
+    <div class="banner banner--error" role="alert">
+      <span aria-hidden="true">!</span><span>{{ message }}</span>
+    </div>
+  {% endif %}
+{% endmacro %}
+
+{% macro submit(label, id='submit-btn') %}
+  <button class="btn btn--primary btn--block" type="submit" id="{{ id }}"
+          data-label="{{ label }}">{{ label }}</button>
+{% endmacro %}
