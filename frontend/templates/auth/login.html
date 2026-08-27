@@ -58,6 +58,15 @@
       </div>
     </form>
 
+    {% if oauth_enabled %}
+      <div class="oauth-divider">{{ t('auth.oauth.divider') }}</div>
+      <form method="post" action="/{{ locale }}/auth/oauth/google">
+        <button class="btn btn--secondary btn--block" type="submit">
+          {{ t('auth.oauth.google') }}
+        </button>
+      </form>
+    {% endif %}
+
     <p class="mono-note">{{ t('app.encrypted_note') }}</p>
   </div>
 </main>

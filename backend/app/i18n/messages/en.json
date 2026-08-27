@@ -56,5 +56,15 @@
   "errors.consent_required": "You must accept the policy to continue.",
   "errors.doctor_fields_required": "PMDC number, specialty and clinic are all required.",
   "errors.clinic_unknown": "Select a clinic from the list.",
-  "errors.role_mismatch": "This account is not registered as a {selected}. Change the selection above and try again."
+  "errors.role_mismatch": "This account is not registered as a {selected}. Change the selection above and try again.",
+  "auth.oauth.divider": "or",
+  "auth.oauth.google": "Continue with Google",
+  "auth.oauth.completing": "Signing you in",
+  "auth.oauth.continue_link": "Continue",
+  "auth.onboarding.title": "One more step",
+  "auth.onboarding.subtitle": "Tell us a little about yourself to finish setting up your account.",
+  "auth.onboarding.submit": "Finish setting up",
+  "errors.oauth_failed": "We couldn't complete sign-in with Google. Please try again.",
+  "errors.oauth_unavailable": "Sign-in with Google isn't available right now.",
+  "errors.oauth_email_conflict": "An account with this email already exists. Sign in with your password instead."
 }

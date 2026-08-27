@@ -134,3 +134,4 @@ Thumbs.db
 dist/
 build/
 *.egg-info/
+docs/prompts/

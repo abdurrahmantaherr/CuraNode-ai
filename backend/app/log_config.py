@@ -32,6 +32,11 @@ REDACTED_KEYS: frozenset[str] = frozenset(
         "phone",
         "full_name",
         "password_hash",
+        # OAuth (PKCE): a leaked code/verifier is a replayable credential, and
+        # state is the CSRF-binding secret for the flow.
+        "code",
+        "state",
+        "code_verifier",
     }
 )
 

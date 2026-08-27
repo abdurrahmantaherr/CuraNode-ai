@@ -26,6 +26,7 @@ from .db.models import (
     ClinicStaff,
     Doctor,
     DoctorAffiliation,
+    Patient,
     Profile,
     UserRole,
     VerificationStatus,
@@ -53,6 +54,7 @@ class Actor:
     locale: str = "en"
     request_id: str = "-"
     ip_address: str | None = None
+    onboarding_complete: bool = True
 
 
 async def _load_actor(request: Request, session: AsyncSession) -> Actor | None:
@@ -70,11 +72,20 @@ async def _load_actor(request: Request, session: AsyncSession) -> Actor | None:
 
     clinic_ids: set[uuid.UUID] = set()
     is_verified_doctor = False
+    # Default True (password-registered users always have a role record the
+    # instant `register()` commits); only OAuth can leave this False.
+    onboarding_complete = True
 
-    if user.role == UserRole.DOCTOR:
+    if user.role == UserRole.PATIENT:
+        patient = (
+            await session.execute(select(Patient.id).where(Patient.user_id == user.id))
+        ).scalar_one_or_none()
+        onboarding_complete = patient is not None
+    elif user.role == UserRole.DOCTOR:
         doctor = (
             await session.execute(select(Doctor).where(Doctor.user_id == user.id))
         ).scalar_one_or_none()
+        onboarding_complete = doctor is not None
         if doctor is not None:
             # Live read — never from the token.
             is_verified_doctor = doctor.verification_status == VerificationStatus.VERIFIED
@@ -90,6 +101,7 @@ async def _load_actor(request: Request, session: AsyncSession) -> Actor | None:
             select(ClinicStaff.clinic_id).where(ClinicStaff.user_id == user.id)
         )
         clinic_ids.update(rows.scalars().all())
+        onboarding_complete = bool(clinic_ids)
 
     return Actor(
         user_id=user.id,
@@ -99,6 +111,7 @@ async def _load_actor(request: Request, session: AsyncSession) -> Actor | None:
         locale=user.preferred_locale.value,
         request_id=getattr(request.state, "request_id", "-"),
         ip_address=request.client.host if request.client else None,
+        onboarding_complete=onboarding_complete,
     )
 
 

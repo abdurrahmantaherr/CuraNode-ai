@@ -97,3 +97,7 @@ def ratelimit_key(scope: str, identifier: str) -> str:
 
 def lockout_key(user_id: str) -> str:
     return f"lockout:{user_id}"
+
+
+def oauth_state_key(state: str) -> str:
+    return f"oauth_state:{state}"
