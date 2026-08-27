@@ -1,13 +1,23 @@
 """Registration, login, and session lifecycle (SPEC 4.1, 4.3, 4.4).
 
-The invariants this module exists to hold:
+Password verification and refresh-token rotation are delegated to Supabase
+Auth — admin operations via `security.get_supabase_client()`, sign-in/refresh
+via a fresh `security.new_auth_client()` per call (see that module for why
+the two must not share a client instance). The invariants that remain the
+app's responsibility:
 
 * Self-registration may create a doctor *account*, never doctor *access*.
   `is_verified` is written as False here and is never read from the request.
-* Registration must not become an email-enumeration oracle: a duplicate returns
-  the same shape as a success, creates nothing, and issues no cookies.
-* Every authentication failure is externally identical, in body and in timing.
-* Refresh tokens are single-use; reuse revokes the whole family.
+* Registration must not become an email-enumeration oracle: a duplicate
+  returns the same shape as a success, creates nothing in Supabase or the
+  local DB, and issues no cookies.
+* Login lockout (10 failures / 15 minutes) is tracked locally against
+  `profiles.failed_logins`/`locked_until` — a locked account is refused
+  before Supabase is ever called, and a lock is never extended by further
+  attempts (SPEC BL-10). NOTE: because password verification now crosses the
+  network to Supabase, the exact timing-indistinguishability Supabase's own
+  GoTrue service provides is outside this app's control; only the response
+  *shape* (identical `Unauthenticated`) is guaranteed here.
 """
 
 from __future__ import annotations
@@ -18,18 +28,21 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from supabase_auth.errors import AuthApiError
 
 from ..audit import writer as audit
-from ..cache import cache, lockout_key, refresh_family_key, refresh_key
+from ..cache import cache, lockout_key
 from ..db.models import (
     AccountStatus,
     Clinic,
     ClinicStaff,
     Doctor,
+    DoctorAffiliation,
     LocaleCode,
     Patient,
-    User,
+    Profile,
     UserRole,
+    VerificationStatus,
 )
 from ..db.types import uuid7
 from ..errors import Unauthenticated, ValidationFailed
@@ -48,8 +61,8 @@ PASSPORT_MAX_ATTEMPTS = 5
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
-async def _user_by_email(session: AsyncSession, email: str) -> User | None:
-    result = await session.execute(select(User).where(User.email == email))
+async def _user_by_email(session: AsyncSession, email: str) -> Profile | None:
+    result = await session.execute(select(Profile).where(Profile.email == email))
     return result.scalar_one_or_none()
 
 
@@ -66,36 +79,37 @@ async def _unique_passport_no(session: AsyncSession) -> str:
     raise RuntimeError("Could not allocate a unique passport number")
 
 
-async def _issue_tokens(user: User) -> tuple[SessionOut, security.TokenPair]:
+def _session_out(user: Profile, gotrue_session: Any) -> tuple[SessionOut, security.TokenPair]:
     role = user.role.value
     locale = user.preferred_locale.value
-    access, expires = security.issue_access_token(user.id, role, locale)
-    raw, digest, family = security.new_refresh_token()
-
-    ttl = settings.refresh_cookie_max_age
-    await cache.set(
-        refresh_key(digest),
-        {"user_id": str(user.id), "family_id": family, "consumed": False},
-        ttl,
+    expires_at_ts = gotrue_session.expires_at or (
+        int(datetime.now(UTC).timestamp()) + gotrue_session.expires_in
     )
-    await cache.add_to_set(refresh_family_key(family), digest, ttl)
-
+    expires_at = datetime.fromtimestamp(expires_at_ts, tz=UTC)
     out = SessionOut(
         user_id=user.id,
         role=role,  # type: ignore[arg-type]
         full_name=user.full_name,
         locale=locale,  # type: ignore[arg-type]
         landing_route=landing_route_for(role, locale),
-        access_expires_at=expires,
+        access_expires_at=expires_at,
     )
     pair = security.TokenPair(
-        access_token=access,
-        access_expires_at=expires,
-        refresh_token=raw,
-        refresh_hash=digest,
-        family_id=family,
+        access_token=gotrue_session.access_token,
+        refresh_token=gotrue_session.refresh_token,
     )
     return out, pair
+
+
+async def _sign_out(access_token: str | None) -> None:
+    """Best-effort session revocation. Never raises — logout must stay idempotent."""
+    if not access_token:
+        return
+    client = await security.get_supabase_client()
+    try:
+        await client.auth.admin.sign_out(access_token, scope="global")
+    except AuthApiError:
+        pass
 
 
 # ── Registration (SPEC 4.1) ──────────────────────────────────────────────
@@ -120,7 +134,8 @@ async def register(
 
     existing = await _user_by_email(session, body.email)
     if existing is not None:
-        # Enumeration guard. Shape matches success exactly; no row, no cookies.
+        # Enumeration guard. Shape matches success exactly; no row, no cookies,
+        # and Supabase is never called.
         return (
             SessionOut(
                 user_id=uuid7(),
@@ -134,38 +149,71 @@ async def register(
             None,
         )
 
-    user = User(
-        id=uuid7(),
-        email=body.email,
-        phone_e164=body.phone_e164,
-        password_hash=security.hash_password(body.password),
-        role=UserRole.DOCTOR if is_doctor else UserRole.PATIENT,
-        # No verification channel exists, so the account is usable immediately.
-        status=AccountStatus.ACTIVE,
-        preferred_locale=LocaleCode(body.preferred_locale),
-        full_name=body.full_name,
-        is_synthetic=settings.environment != "pilot",
+    client = await security.get_supabase_client()
+    created = await client.auth.admin.create_user(
+        {
+            "email": body.email,
+            "password": body.password,
+            # No verification channel exists, so the account is usable
+            # immediately — matches AccountStatus.ACTIVE below.
+            "email_confirm": True,
+        }
     )
-    session.add(user)
+    user_id = uuid.UUID(created.user.id)
+
+    # A DB trigger (`on_auth_user_created`) already inserted a default
+    # `user_profile` row (role='patient', locale='en', status='active') the
+    # instant the Supabase auth user was created — by the time this admin
+    # call returns, that trigger has already committed. Update it rather
+    # than inserting again, or role/verification-relevant fields silently
+    # revert to the trigger's defaults.
+    user = await session.get(Profile, user_id)
+    if user is None:
+        # Defensive fallback only — should be unreachable while the trigger
+        # exists, but this must not become an account created ex nihilo.
+        user = Profile(id=user_id)
+        session.add(user)
+
+    user.email = body.email
+    user.phone_e164 = body.phone_e164
+    user.role = UserRole.DOCTOR if is_doctor else UserRole.PATIENT
+    user.status = AccountStatus.ACTIVE
+    user.preferred_locale = LocaleCode(body.preferred_locale)
+    user.full_name = body.full_name
+    user.is_synthetic = settings.environment != "pilot"
     await session.flush()
 
     if is_doctor:
+        doctor = Doctor(
+            id=uuid7(),
+            user_id=user.id,
+            full_name=body.full_name,
+            specialty=body.specialty,
+            pmdc_number=body.pmdc_number,
+            # Never sourced from the request. This is the line that keeps
+            # self-registration from becoming self-authorisation.
+            verification_status=VerificationStatus.PENDING,
+            verified_by=None,
+            verified_at=None,
+        )
+        session.add(doctor)
         session.add(
-            Doctor(
-                user_id=user.id,
-                primary_clinic_id=body.primary_clinic_id,
-                specialty=body.specialty,
-                pmdc_number=body.pmdc_number,
-                # Never sourced from the request. This is the line that keeps
-                # self-registration from becoming self-authorisation.
-                is_verified=False,
-                verified_by=None,
-                verified_at=None,
+            DoctorAffiliation(
+                id=uuid7(),
+                doctor_id=doctor.id,
+                clinic_id=body.primary_clinic_id,
+                start_date=datetime.now(UTC).date(),
+                status="active",
             )
         )
     else:
         session.add(
-            Patient(user_id=user.id, passport_no=await _unique_passport_no(session))
+            Patient(
+                id=uuid7(),
+                user_id=user.id,
+                full_name=body.full_name,
+                passport_no=await _unique_passport_no(session),
+            )
         )
 
     await audit.write(
@@ -178,7 +226,11 @@ async def register(
         detail={"role": user.role.value},
     )
 
-    out, pair = await _issue_tokens(user)
+    auth_client = await security.new_auth_client()
+    signed_in = await auth_client.auth.sign_in_with_password(
+        {"email": body.email, "password": body.password}
+    )
+    out, pair = _session_out(user, signed_in.session)
     await session.commit()
     return out, pair
 
@@ -192,10 +244,7 @@ async def login(
     user_agent: str | None = None,
 ) -> tuple[SessionOut, security.TokenPair]:
     user = await _user_by_email(session, body.email)
-
     if user is None:
-        # Burn equivalent time so an unknown email is indistinguishable.
-        security.dummy_verify()
         raise Unauthenticated()
 
     now = datetime.now(UTC)
@@ -205,17 +254,20 @@ async def login(
 
     if locked_until is not None and locked_until > now:
         # Do NOT extend the lock — otherwise an attacker could keep a real user
-        # locked out indefinitely (SPEC BL-10).
-        security.dummy_verify()
+        # locked out indefinitely (SPEC BL-10). Supabase is never called while
+        # locked.
         raise Unauthenticated()
 
-    if not security.verify_password(body.password, user.password_hash):
+    auth_client = await security.new_auth_client()
+    try:
+        signed_in = await auth_client.auth.sign_in_with_password(
+            {"email": body.email, "password": body.password}
+        )
+    except AuthApiError:
         user.failed_logins += 1
         if user.failed_logins >= settings.max_failed_logins:
             user.locked_until = now + timedelta(minutes=settings.lockout_minutes)
-            await cache.set(
-                lockout_key(str(user.id)), True, settings.lockout_minutes * 60
-            )
+            await cache.set(lockout_key(str(user.id)), True, settings.lockout_minutes * 60)
             await audit.write(
                 session,
                 action=audit.AUTH_LOCKOUT,
@@ -228,8 +280,10 @@ async def login(
         raise Unauthenticated()
 
     if user.status != AccountStatus.ACTIVE:
-        # Suspended is the only reachable non-active state now that OTP is
-        # gone, and it must stay indistinguishable from a wrong password.
+        # Suspended must stay indistinguishable from a wrong password. The
+        # session Supabase just issued is valid, so it must be revoked rather
+        # than handed to the caller.
+        await _sign_out(signed_in.session.access_token)
         raise Unauthenticated()
 
     user.failed_logins = 0
@@ -246,7 +300,7 @@ async def login(
         user_agent=user_agent,
     )
 
-    out, pair = await _issue_tokens(user)
+    out, pair = _session_out(user, signed_in.session)
     await session.commit()
     return out, pair
 
@@ -258,116 +312,72 @@ async def rotate_refresh(
     if not presented:
         raise Unauthenticated()
 
-    digest = security.hash_refresh_token(presented)
-    record = await cache.get(refresh_key(digest))
-    if record is None:
+    auth_client = await security.new_auth_client()
+    try:
+        refreshed = await auth_client.auth.refresh_session(presented)
+    except AuthApiError:
+        # Supabase already revokes the whole session on reuse of a spent
+        # refresh token, so family-wide revocation is implicit here.
         raise Unauthenticated()
 
-    if record.get("consumed"):
-        # Replay of a spent token is treated as theft: revoke the family.
-        await _revoke_family(session, record.get("family_id"), reason="reuse_detected")
-        await session.commit()
-        raise Unauthenticated()
-
-    user = await session.get(User, uuid.UUID(record["user_id"]))
+    user = await session.get(Profile, uuid.UUID(refreshed.user.id))
     if user is None or user.status != AccountStatus.ACTIVE:
+        await _sign_out(refreshed.session.access_token)
         raise Unauthenticated()
 
-    record["consumed"] = True
-    await cache.set(refresh_key(digest), record, settings.refresh_cookie_max_age)
-
-    role = user.role.value
-    locale = user.preferred_locale.value
-    access, expires = security.issue_access_token(user.id, role, locale)
-    raw, new_digest, _ = security.new_refresh_token(record["family_id"])
-
-    ttl = settings.refresh_cookie_max_age
-    await cache.set(
-        refresh_key(new_digest),
-        {"user_id": str(user.id), "family_id": record["family_id"], "consumed": False},
-        ttl,
-    )
-    await cache.add_to_set(refresh_family_key(record["family_id"]), new_digest, ttl)
-
-    out = SessionOut(
-        user_id=user.id,
-        role=role,  # type: ignore[arg-type]
-        full_name=user.full_name,
-        locale=locale,  # type: ignore[arg-type]
-        landing_route=landing_route_for(role, locale),
-        access_expires_at=expires,
-    )
-    pair = security.TokenPair(
-        access_token=access,
-        access_expires_at=expires,
-        refresh_token=raw,
-        refresh_hash=new_digest,
-        family_id=record["family_id"],
-    )
+    out, pair = _session_out(user, refreshed.session)
     return out, pair
 
 
-async def _revoke_family(
-    session: AsyncSession, family_id: str | None, *, reason: str
-) -> None:
-    if not family_id:
-        return
-    members = await cache.members(refresh_family_key(family_id))
-    if members:
-        await cache.delete(*[refresh_key(m) for m in members])
-    await cache.delete(refresh_family_key(family_id))
-    if reason == "reuse_detected":
-        await audit.write(
-            session, action=audit.AUTH_REFRESH_REUSE, detail={"family_id": family_id}
-        )
-
-
-async def discard_session(
-    session: AsyncSession, pair: security.TokenPair | None
-) -> None:
+async def discard_session(session: AsyncSession, pair: security.TokenPair | None) -> None:
     """Throw away a session that was issued but must not be handed to the user.
 
     Used when authentication succeeded but a post-authentication check failed,
-    so the freshly-minted refresh token does not sit in the cache for 14 days
-    as a usable credential nobody holds.
+    so the freshly-minted session is not left usable by nobody.
     """
     if pair is None:
         return
-    await cache.delete(refresh_key(pair.refresh_hash))
-    await _revoke_family(session, pair.family_id, reason="discarded")
+    await _sign_out(pair.access_token)
 
 
-async def logout(session: AsyncSession, presented: str | None) -> None:
+async def logout(session: AsyncSession, access_token: str | None) -> None:
     """Idempotent — a second call is not an error (SPEC AC-11)."""
-    if not presented:
+    if not access_token:
         return
-    digest = security.hash_refresh_token(presented)
-    record = await cache.get(refresh_key(digest))
-    if record is None:
+    try:
+        claims = await security.decode_supabase_access_token(access_token)
+    except security.InvalidToken:
         return
-    await _revoke_family(session, record.get("family_id"), reason="logout")
-    await audit.write(
-        session,
-        action=audit.AUTH_LOGOUT,
-        actor_user_id=uuid.UUID(record["user_id"]),
-    )
+
+    await _sign_out(access_token)
+    await audit.write(session, action=audit.AUTH_LOGOUT, actor_user_id=claims.user_id)
     await session.commit()
 
 
 # ── Identity projection ──────────────────────────────────────────────────
-async def build_me(session: AsyncSession, user: User) -> MeOut:
+async def build_me(session: AsyncSession, user: Profile) -> MeOut:
     passport_no: str | None = None
     is_verified_doctor = False
     clinic_ids: list[uuid.UUID] = []
 
     if user.role == UserRole.PATIENT:
-        patient = await session.get(Patient, user.id)
+        patient = (
+            await session.execute(select(Patient).where(Patient.user_id == user.id))
+        ).scalar_one_or_none()
         passport_no = patient.passport_no if patient else None
     elif user.role == UserRole.DOCTOR:
-        doctor = await session.get(Doctor, user.id)
+        doctor = (
+            await session.execute(select(Doctor).where(Doctor.user_id == user.id))
+        ).scalar_one_or_none()
         if doctor is not None:
-            is_verified_doctor = doctor.is_verified
-            clinic_ids = [doctor.primary_clinic_id]
+            is_verified_doctor = doctor.verification_status == VerificationStatus.VERIFIED
+            aff_rows = await session.execute(
+                select(DoctorAffiliation.clinic_id).where(
+                    DoctorAffiliation.doctor_id == doctor.id,
+                    DoctorAffiliation.status == "active",
+                )
+            )
+            clinic_ids = list(aff_rows.scalars().all())
     else:
         rows = await session.execute(
             select(ClinicStaff.clinic_id).where(ClinicStaff.user_id == user.id)
