@@ -24,6 +24,9 @@ AUTH_LOGIN = "auth.login"
 AUTH_LOGOUT = "auth.logout"
 AUTH_LOCKOUT = "auth.lockout"
 AUTH_REFRESH_REUSE = "auth.refresh_reuse_detected"
+AUTH_OAUTH_START = "auth.oauth_start"
+AUTH_OAUTH_LOGIN = "auth.oauth_login"
+AUTH_OAUTH_ONBOARDED = "auth.oauth_onboarded"
 
 
 async def write(

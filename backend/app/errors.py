@@ -57,6 +57,17 @@ class Forbidden(AppError):
     retryable = False
 
 
+class OAuthFailed(AppError):
+    """Any OAuth failure — a bad/replayed state, a rejected code exchange, an
+    email collision, or a provider-side cancellation. Deliberately as generic
+    as `Unauthenticated`: the caller never learns which of these happened."""
+
+    code = "OAUTH_FAILED"
+    http_status = status.HTTP_400_BAD_REQUEST
+    message_key = "errors.oauth_failed"
+    retryable = False
+
+
 class RateLimited(AppError):
     code = "RATE_LIMITED"
     http_status = status.HTTP_429_TOO_MANY_REQUESTS
