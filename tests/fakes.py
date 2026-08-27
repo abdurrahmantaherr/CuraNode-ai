@@ -19,6 +19,8 @@ replayed one.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import secrets
 import time
 import uuid
@@ -81,6 +83,25 @@ class FakeAuthClient:
         session = self._backend.issue_session(record["id"])
         return _Obj(user=_Obj(id=record["id"]), session=session)
 
+    async def exchange_code_for_session(self, params: dict[str, Any]) -> _Obj:
+        """Mirrors the real SDK's PKCE exchange: validates the verifier
+        against the challenge the code was minted with, single-use."""
+        backend = self._backend
+        code = params.get("auth_code")
+        verifier = params.get("code_verifier") or ""
+        entry = backend.oauth_codes.pop(code, None)
+        if entry is None:
+            raise AuthApiError("Invalid Auth Code", 400, "bad_oauth_code")
+        challenge, user_id, email, user_metadata = entry
+        digest = hashlib.sha256(verifier.encode("ascii")).digest()
+        computed = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+        if computed != challenge:
+            raise AuthApiError("Invalid Verifier", 400, "bad_code_verifier")
+        session = backend.issue_session(user_id)
+        return _Obj(
+            user=_Obj(id=user_id, email=email, user_metadata=user_metadata), session=session
+        )
+
     async def refresh_session(self, refresh_token: str | None = None) -> _Obj:
         backend = self._backend
         if not refresh_token:
@@ -112,12 +133,43 @@ class FakeSupabaseAuth:
         self.spent_tokens: dict[str, str] = {}
         self.revoked_families: set[str] = set()
         self.revoked_access_tokens: set[str] = set()
+        # code -> (challenge, user_id, email, user_metadata)
+        self.oauth_codes: dict[str, tuple[str, str, str, dict[str, Any]]] = {}
+        # email -> user_id, for OAuth identities `authorize()` has minted
+        # before — a *returning* OAuth user must get the same identity back.
+        self.oauth_identities: dict[str, str] = {}
         self.auth = FakeAuthClient(self)
 
     def register(self, user_id: str, email: str, password: str) -> None:
         """Back-door for fixtures that create a `Profile` row directly,
         bypassing the register endpoint."""
         self.users[email] = {"id": user_id, "password": password}
+
+    def authorize(
+        self,
+        provider: str,
+        email: str,
+        *,
+        challenge: str,
+        user_metadata: dict[str, Any] | None = None,
+        user_id: str | None = None,
+    ) -> str:
+        """Test-side stand-in for the browser's round trip through Google:
+        mints an auth code bound to the PKCE challenge the start route sent.
+
+        Repeat calls for the same email (no explicit `user_id`) return the
+        same identity, matching a returning OAuth user. `user_id` lets a test
+        force a *different* Supabase auth identity for an email that already
+        has one — the real-world shape of the email-collision case
+        (docs/oauth.md §8b step 2): Supabase does not always auto-link a new
+        OAuth identity to an existing account with the same email.
+        """
+        if user_id is None:
+            user_id = self.oauth_identities.get(email) or str(uuid.uuid4())
+        self.oauth_identities.setdefault(email, user_id)
+        code = secrets.token_urlsafe(24)
+        self.oauth_codes[code] = (challenge, user_id, email, user_metadata or {})
+        return code
 
     def revoke_family(self, family_id: str) -> None:
         self.revoked_families.add(family_id)
