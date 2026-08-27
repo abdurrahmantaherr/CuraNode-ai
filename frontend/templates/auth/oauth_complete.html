@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ t('auth.oauth.completing') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+{#- Same-site interstitial (docs/oauth.md §3a). The request that lands here
+    is a cross-site navigation back from Google via Supabase, so a
+    SameSite=Strict session cookie set on THIS response can be dropped on the
+    very next request. Bouncing through this page first makes that next
+    request same-site-initiated, so the cookie survives.
+
+    <meta refresh> works with JavaScript disabled; the visible link is the
+    fallback if a browser or extension blocks even that. -#}
+<meta http-equiv="refresh" content="0; url={{ next_path }}">
+<main class="auth-page">
+  <div class="auth-shell">
+    <div class="auth-head">
+      <div class="brandmark" aria-hidden="true">C</div>
+      <h1 class="auth-title">{{ t('auth.oauth.completing') }}</h1>
+      <p class="auth-sub">
+        <a href="{{ next_path }}">{{ t('auth.oauth.continue_link') }}</a>
+      </p>
+    </div>
+  </div>
+</main>
+{% endblock %}
