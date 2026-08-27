@@ -51,9 +51,7 @@ def _redact(value: Any, depth: int = 0) -> Any:
     return value
 
 
-def redaction_processor(
-    _logger: Any, _name: str, event_dict: dict[str, Any]
-) -> dict[str, Any]:
+def redaction_processor(_logger: Any, _name: str, event_dict: dict[str, Any]) -> dict[str, Any]:
     return _redact(event_dict)  # type: ignore[return-value]
 
 
