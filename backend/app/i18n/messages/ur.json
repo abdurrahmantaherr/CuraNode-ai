@@ -56,5 +56,15 @@
   "errors.consent_required": "جاری رکھنے کے لیے پالیسی قبول کرنا ضروری ہے۔",
   "errors.doctor_fields_required": "پی ایم ڈی سی نمبر، تخصص اور کلینک تینوں ضروری ہیں۔",
   "errors.clinic_unknown": "فہرست سے کلینک منتخب کریں۔",
-  "errors.role_mismatch": "یہ اکاؤنٹ بطور {selected} رجسٹرڈ نہیں ہے۔ اوپر سے درست انتخاب کریں اور دوبارہ کوشش کریں۔"
+  "errors.role_mismatch": "یہ اکاؤنٹ بطور {selected} رجسٹرڈ نہیں ہے۔ اوپر سے درست انتخاب کریں اور دوبارہ کوشش کریں۔",
+  "auth.oauth.divider": "یا",
+  "auth.oauth.google": "گوگل کے ساتھ جاری رکھیں",
+  "auth.oauth.completing": "آپ کو سائن ان کیا جا رہا ہے",
+  "auth.oauth.continue_link": "جاری رکھیں",
+  "auth.onboarding.title": "ایک اور مرحلہ",
+  "auth.onboarding.subtitle": "اپنا اکاؤنٹ مکمل کرنے کے لیے اپنے بارے میں کچھ معلومات فراہم کریں۔",
+  "auth.onboarding.submit": "سیٹ اپ مکمل کریں",
+  "errors.oauth_failed": "ہم گوگل کے ساتھ سائن ان مکمل نہیں کر سکے۔ براہ کرم دوبارہ کوشش کریں۔",
+  "errors.oauth_unavailable": "گوگل کے ساتھ سائن ان فی الحال دستیاب نہیں ہے۔",
+  "errors.oauth_email_conflict": "اس ای میل کے ساتھ پہلے سے ایک اکاؤنٹ موجود ہے۔ اس کے بجائے اپنے پاس ورڈ سے سائن ان کریں۔"
 }
