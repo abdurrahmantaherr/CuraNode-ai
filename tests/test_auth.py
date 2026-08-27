@@ -1,16 +1,16 @@
 """Authentication test suite.
 
 Test ids map 1:1 to SPEC_authentication.md §11. T2/T3/T4 are void — their
-acceptance criteria were removed with OTP.
+acceptance criteria were removed with OTP. T15's Argon2-parameter and T23's
+raw-token-decoding assertions are void too — password hashing and access-
+token issuance now belong to Supabase Auth, exercised here only through the
+fake double in tests/fakes.py.
 """
 
 from __future__ import annotations
 
-import statistics
-import time
-
 import pytest
-from app.db.models import AccountStatus, Doctor, Patient, User, UserRole
+from app.db.models import AccountStatus, Doctor, Patient, Profile, UserRole, VerificationStatus
 from app.db.types import utcnow
 
 # These MUST be imported at module scope. `from __future__ import annotations`
@@ -18,15 +18,11 @@ from app.db.types import utcnow
 # module's globals — a function-local import is invisible to it, and the
 # dependency silently degrades into a query parameter (422).
 from app.deps import ClinicAdminDep, PatientDep, VerifiedDoctorDep
-from app.identity.security import (
-    decode_access_token,
-    hash_password,
-    verify_password,
-)
 from app.settings import settings
 from sqlalchemy import select
 
 from tests.conftest import TEST_PASSWORD, make_user
+from tests.fakes import fake_decode_token as decode_supabase_access_token
 
 
 def _register_payload(email: str, **extra):
@@ -52,12 +48,13 @@ async def test_t1_patient_registration(client, db):
     assert settings.access_cookie_name in r.cookies
     assert settings.refresh_cookie_name in r.cookies
 
-    user = (await db.execute(select(User).where(User.email == "a@b.com"))).scalar_one()
+    user = (await db.execute(select(Profile).where(Profile.email == "a@b.com"))).scalar_one()
     assert user.role == UserRole.PATIENT
     assert user.status == AccountStatus.ACTIVE
-    assert user.password_hash.startswith("$argon2id$")
 
-    patient = await db.get(Patient, user.id)
+    patient = (
+        await db.execute(select(Patient).where(Patient.user_id == user.id))
+    ).scalar_one_or_none()
     assert patient is not None
     assert patient.passport_no.startswith("CN-")
     assert len(patient.passport_no) == 12
@@ -78,7 +75,7 @@ async def test_t5_login_sets_cookies_and_resets_counters(client, db, clinic):
     assert "Secure" in cookie_header
     assert "SameSite=strict" in cookie_header.replace("SameSite=Strict", "SameSite=strict")
 
-    user = (await db.execute(select(User).where(User.email == "p@x.com"))).scalar_one()
+    user = (await db.execute(select(Profile).where(Profile.email == "p@x.com"))).scalar_one()
     await db.refresh(user)
     assert user.failed_logins == 0
     assert user.last_login_at is not None
@@ -109,30 +106,13 @@ async def test_t6_auth_failures_are_identical(client, db):
     assert strip(wrong.json()) == strip(unknown.json()) == strip(suspended.json())
 
 
-async def test_t6_timing_does_not_leak_existence(client, db, monkeypatch):
-    """The dummy-verify guard: an unknown email must cost the same as a real one."""
-    monkeypatch.setattr(settings, "auth_rate_limit_per_minute", 1000)
-    await make_user(db, email="timed@x.com", role=UserRole.PATIENT)
-
-    async def sample(email: str) -> float:
-        start = time.perf_counter()
-        await client.post(
-            "/api/v1/auth/login", json={"email": email, "password": "Wrong123456"}
-        )
-        return time.perf_counter() - start
-
-    # Warm up: the first request pays import and connection costs that would
-    # otherwise dominate the comparison.
-    await sample("timed@x.com")
-    await sample("ghost@x.com")
-
-    known = statistics.median([await sample("timed@x.com") for _ in range(5)])
-    unknown = statistics.median([await sample("ghost@x.com") for _ in range(5)])
-
-    # Argon2 dominates both paths; without dummy_verify the unknown path would
-    # be an order of magnitude faster.
-    ratio = max(known, unknown) / max(min(known, unknown), 1e-6)
-    assert ratio < 3.0, f"timing leak: known={known:.4f}s unknown={unknown:.4f}s"
+# NOTE (post-Supabase-migration): a `test_t6_timing_does_not_leak_existence`
+# test previously asserted response-timing parity between unknown-email and
+# wrong-password logins, guarded by a local `dummy_verify()` burning the same
+# Argon2 cost either way. Password verification is now a network call to
+# Supabase's GoTrue service, so this app no longer controls that timing —
+# only the response *shape* (asserted above) remains a guarantee this layer
+# can make.
 
 
 # ── T7 / AC-07 — lockout ─────────────────────────────────────────────────
@@ -147,7 +127,7 @@ async def test_t7_lockout_after_ten_failures_and_not_extended(client, db, monkey
             "/api/v1/auth/login", json={"email": "lock@x.com", "password": "Nope1234567"}
         )
 
-    user = (await db.execute(select(User).where(User.email == "lock@x.com"))).scalar_one()
+    user = (await db.execute(select(Profile).where(Profile.email == "lock@x.com"))).scalar_one()
     await db.refresh(user)
     assert user.failed_logins >= settings.max_failed_logins
     locked_at = user.locked_until
@@ -163,27 +143,21 @@ async def test_t7_lockout_after_ten_failures_and_not_extended(client, db, monkey
 
 
 # ── T8 / AC-08 — verification is read live, not from the token ───────────
-async def test_t8_unverified_doctor_blocked_then_allowed_without_relogin(
-    client, db, clinic, app
-):
+async def test_t8_unverified_doctor_blocked_then_allowed_without_relogin(client, db, clinic, app):
     @app.get("/api/v1/_test/clinical")
     async def _clinical(actor: VerifiedDoctorDep):  # type: ignore[no-untyped-def]
         return {"ok": True}
 
-    doctor = await make_user(
-        db, email="doc@x.com", role=UserRole.DOCTOR, clinic_id=clinic.id
-    )
-    await client.post(
-        "/api/v1/auth/login", json={"email": "doc@x.com", "password": TEST_PASSWORD}
-    )
+    doctor = await make_user(db, email="doc@x.com", role=UserRole.DOCTOR, clinic_id=clinic.id)
+    await client.post("/api/v1/auth/login", json={"email": "doc@x.com", "password": TEST_PASSWORD})
 
     blocked = await client.get("/api/v1/_test/clinical")
     assert blocked.status_code == 403
     assert blocked.json()["error"]["code"] == "FORBIDDEN"
 
     # Flip verification in the database — no new login.
-    row = await db.get(Doctor, doctor.id)
-    row.is_verified = True
+    row = (await db.execute(select(Doctor).where(Doctor.user_id == doctor.id))).scalar_one()
+    row.verification_status = VerificationStatus.VERIFIED
     row.verified_by = doctor.id
     row.verified_at = utcnow()
     await db.commit()
@@ -195,9 +169,7 @@ async def test_t8_unverified_doctor_blocked_then_allowed_without_relogin(
 # ── T9 / T10 / AC-09, AC-10 — rotation and reuse detection ──────────────
 async def test_t9_refresh_rotates(client, db):
     await make_user(db, email="rot@x.com", role=UserRole.PATIENT)
-    await client.post(
-        "/api/v1/auth/login", json={"email": "rot@x.com", "password": TEST_PASSWORD}
-    )
+    await client.post("/api/v1/auth/login", json={"email": "rot@x.com", "password": TEST_PASSWORD})
     first = client.cookies.get(settings.refresh_cookie_name)
 
     r = await client.post("/api/v1/auth/refresh")
@@ -228,9 +200,7 @@ async def test_t10_refresh_reuse_revokes_family(client, db):
 # ── T11 / AC-11 — logout is idempotent ───────────────────────────────────
 async def test_t11_logout_idempotent(client, db):
     await make_user(db, email="out@x.com", role=UserRole.PATIENT)
-    await client.post(
-        "/api/v1/auth/login", json={"email": "out@x.com", "password": TEST_PASSWORD}
-    )
+    await client.post("/api/v1/auth/login", json={"email": "out@x.com", "password": TEST_PASSWORD})
     assert (await client.post("/api/v1/auth/logout")).status_code == 204
     assert (await client.post("/api/v1/auth/logout")).status_code == 204
     assert (await client.get("/api/v1/me")).status_code == 401
@@ -241,9 +211,7 @@ async def test_t12_me_projection(client, db, clinic):
     assert (await client.get("/api/v1/me")).status_code == 401
 
     await make_user(db, email="me@x.com", role=UserRole.PATIENT)
-    await client.post(
-        "/api/v1/auth/login", json={"email": "me@x.com", "password": TEST_PASSWORD}
-    )
+    await client.post("/api/v1/auth/login", json={"email": "me@x.com", "password": TEST_PASSWORD})
     body = (await client.get("/api/v1/me")).json()
     assert body["role"] == "patient"
     assert body["passport_no"] is not None
@@ -295,19 +263,9 @@ async def test_t14_auth_rate_limit(client, db):
     assert len(limited) >= 1
 
 
-# ── T15 / AC-15 — hashing and log hygiene ────────────────────────────────
-def test_t15_argon2_parameters():
-    from app.identity.security import _hasher
-
-    assert _hasher.time_cost == 3
-    assert _hasher.memory_cost == 65536
-    assert _hasher.parallelism == 4
-    h = hash_password("SomePassword123")
-    assert h.startswith("$argon2id$")
-    assert verify_password("SomePassword123", h)
-    assert not verify_password("wrong", h)
-
-
+# ── T15 / AC-15 — log hygiene ─────────────────────────────────────────────
+# The Argon2-parameter assertion this test used to make is void: password
+# hashing now happens inside Supabase Auth, outside this codebase entirely.
 def test_t15_redaction_covers_credentials():
     from app.log_config import redaction_processor
 
@@ -358,12 +316,14 @@ async def test_t21_doctor_registration_is_unverified(client, db, clinic):
     assert r.status_code == 201
     assert r.json()["role"] == "doctor"
 
-    user = (await db.execute(select(User).where(User.email == "doc1@x.com"))).scalar_one()
-    doctor = await db.get(Doctor, user.id)
-    assert doctor.is_verified is False
+    user = (await db.execute(select(Profile).where(Profile.email == "doc1@x.com"))).scalar_one()
+    doctor = (await db.execute(select(Doctor).where(Doctor.user_id == user.id))).scalar_one()
+    assert doctor.verification_status == VerificationStatus.PENDING
     assert doctor.verified_by is None and doctor.verified_at is None
     assert doctor.pmdc_number == "41192"
-    assert await db.get(Patient, user.id) is None
+    assert (
+        await db.execute(select(Patient).where(Patient.user_id == user.id))
+    ).scalar_one_or_none() is None
 
 
 async def test_t21_injected_is_verified_is_ignored(client, db, clinic):
@@ -382,9 +342,11 @@ async def test_t21_injected_is_verified_is_ignored(client, db, clinic):
         ),
     )
     assert r.status_code == 201
-    user = (await db.execute(select(User).where(User.email == "doc2@x.com"))).scalar_one()
-    doctor = await db.get(Doctor, user.id)
-    assert doctor.is_verified is False, "client injected is_verified into the row"
+    user = (await db.execute(select(Profile).where(Profile.email == "doc2@x.com"))).scalar_one()
+    doctor = (await db.execute(select(Doctor).where(Doctor.user_id == user.id))).scalar_one()
+    assert doctor.verification_status == VerificationStatus.PENDING, (
+        "client injected is_verified into the row"
+    )
 
 
 async def test_t21_doctor_missing_fields_and_bad_clinic(client, db, clinic):
@@ -408,7 +370,7 @@ async def test_t21_doctor_missing_fields_and_bad_clinic(client, db, clinic):
     )
     assert unknown.status_code == 422
     assert (
-        await db.execute(select(User).where(User.email == "doc4@x.com"))
+        await db.execute(select(Profile).where(Profile.email == "doc4@x.com"))
     ).scalar_one_or_none() is None
 
 
@@ -424,21 +386,21 @@ async def test_t23_login_request_rejects_role_field(client, db):
     assert r.json()["role"] == "patient"
     assert r.json()["landing_route"] == "/en/patient"
 
-    claims = decode_access_token(client.cookies.get(settings.access_cookie_name))
-    assert claims.role == "patient"
+    claims = await decode_supabase_access_token(client.cookies.get(settings.access_cookie_name))
+    user = (await db.execute(select(Profile).where(Profile.email == "tog@x.com"))).scalar_one()
+    assert claims.user_id == user.id
 
 
-def test_t23_access_token_omits_is_verified():
-    """AC-08 depends on this: verification must not be cacheable in a token."""
-    from app.db.types import uuid7
-    from app.identity.security import issue_access_token
+def test_t23_access_token_claims_carry_no_role_or_verification():
+    """AC-08 depends on this: verification/role must not be cacheable in a
+    token — `AccessClaims` structurally cannot carry either, so `deps.py` has
+    no choice but to re-read them from the database on every request (see
+    T8, which proves that live-read behavior end to end)."""
+    from dataclasses import fields
 
-    token, _ = issue_access_token(uuid7(), "doctor", "en")
-    import jwt
+    from app.identity.security import AccessClaims
 
-    payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-    assert "is_verified" not in payload
-    assert "is_verified_doctor" not in payload
+    assert {f.name for f in fields(AccessClaims)} == {"user_id"}
 
 
 # ── T24 / AC-24 — duplicate email is not an oracle ──────────────────────
@@ -447,15 +409,13 @@ async def test_t24_duplicate_email_no_oracle(client, db):
     assert first.status_code == 201
 
     for variant in ("dup@x.com", "DUP@x.com", "  Dup@X.com  "):
-        again = await client.post(
-            "/api/v1/auth/register", json=_register_payload(variant)
-        )
+        again = await client.post("/api/v1/auth/register", json=_register_payload(variant))
         assert again.status_code == 201, variant
         # Shape matches success, but no session is issued.
         assert set(again.json()) == set(first.json())
         assert settings.access_cookie_name not in again.cookies
 
     count = len(
-        (await db.execute(select(User).where(User.email == "dup@x.com"))).scalars().all()
+        (await db.execute(select(Profile).where(Profile.email == "dup@x.com"))).scalars().all()
     )
     assert count == 1

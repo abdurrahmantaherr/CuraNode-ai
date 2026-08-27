@@ -7,6 +7,7 @@ counters and rate limits from one test cannot leak into the next.
 from __future__ import annotations
 
 import os
+import secrets
 from collections.abc import AsyncIterator
 
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -22,17 +23,22 @@ from app.db.models import (
     Clinic,
     ClinicStaff,
     Doctor,
+    DoctorAffiliation,
     LocaleCode,
     Patient,
-    User,
+    Profile,
     UserRole,
+    VerificationStatus,
 )
 from app.db.session import get_session
 from app.db.types import utcnow, uuid7
-from app.identity.security import generate_passport_no, hash_password
+from app.identity import security as identity_security
+from app.identity.security import generate_passport_no
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
+
+from tests.fakes import FakeSupabaseAuth, fake_decode_token
 
 TEST_PASSWORD = "CorrectHorseBattery1"
 
@@ -65,6 +71,26 @@ def fresh_cache(monkeypatch):
     return c
 
 
+@pytest.fixture(autouse=True)
+def fake_supabase(monkeypatch):
+    """Every test gets its own isolated Supabase Auth double — no network,
+    no shared state between tests, and no real JWKS fetch."""
+    backend = FakeSupabaseAuth()
+
+    async def _get_client():
+        return backend
+
+    monkeypatch.setattr(identity_security, "get_supabase_client", _get_client)
+    # Production splits admin vs. auth-flow clients to avoid the real SDK's
+    # stateful-session hazard; the fake has no such hazard, so both resolve
+    # to the same in-memory backend.
+    monkeypatch.setattr(identity_security, "new_auth_client", _get_client)
+    monkeypatch.setattr(identity_security, "decode_supabase_access_token", fake_decode_token)
+    # deps.py imports the name directly, so it needs its own patch target.
+    monkeypatch.setattr("app.deps.decode_supabase_access_token", fake_decode_token)
+    return backend
+
+
 @pytest.fixture
 async def db(sessionmaker_) -> AsyncIterator:
     async with sessionmaker_() as s:
@@ -91,15 +117,19 @@ async def app(sessionmaker_, engine, monkeypatch):
 async def client(app) -> AsyncIterator[AsyncClient]:
     # https:// is required, not cosmetic: cookies are issued with `Secure`, and
     # a client will refuse to store or resend them over plain http.
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="https://test"
-    ) as c:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as c:
         yield c
 
 
 @pytest.fixture
 async def clinic(db) -> Clinic:
-    c = Clinic(id=uuid7(), name="Shifa International", city="Islamabad", address="F-8")
+    c = Clinic(
+        id=uuid7(),
+        name="Shifa International",
+        city="Islamabad",
+        address="F-8",
+        type="hospital",
+    )
     db.add(c)
     await db.commit()
     return c
@@ -115,11 +145,18 @@ async def make_user(
     clinic_id=None,
     is_verified: bool = False,
     verifier_id=None,
-) -> User:
-    user = User(
-        id=uuid7(),
-        email=email.strip().lower(),
-        password_hash=hash_password(password),
+) -> Profile:
+    """Creates a `Profile` row directly and registers matching credentials
+    with the fake Supabase backend the active test is using, so the account
+    can log in through the real `/api/v1/auth/login` flow."""
+    user_id = uuid7()
+    normalised_email = email.strip().lower()
+    client = await identity_security.get_supabase_client()
+    client.register(str(user_id), normalised_email, password)
+
+    user = Profile(
+        id=user_id,
+        email=normalised_email,
         role=role,
         status=status,
         preferred_locale=LocaleCode.EN,
@@ -130,21 +167,40 @@ async def make_user(
     await db.flush()
 
     if role == UserRole.PATIENT:
-        db.add(Patient(user_id=user.id, passport_no=generate_passport_no()))
-    elif role == UserRole.DOCTOR:
         db.add(
-            Doctor(
+            Patient(
+                id=uuid7(),
                 user_id=user.id,
-                primary_clinic_id=clinic_id,
-                specialty="Cardiology",
-                pmdc_number="41192",
-                is_verified=is_verified,
-                verified_by=verifier_id if is_verified else None,
-                verified_at=utcnow() if is_verified else None,
+                full_name=user.full_name,
+                passport_no=generate_passport_no(),
             )
         )
+    elif role == UserRole.DOCTOR:
+        doctor = Doctor(
+            id=uuid7(),
+            user_id=user.id,
+            full_name=user.full_name,
+            specialty="Cardiology",
+            pmdc_number=secrets.token_hex(6),
+            verification_status=(
+                VerificationStatus.VERIFIED if is_verified else VerificationStatus.PENDING
+            ),
+            verified_by=verifier_id if is_verified else None,
+            verified_at=utcnow() if is_verified else None,
+        )
+        db.add(doctor)
+        if clinic_id is not None:
+            db.add(
+                DoctorAffiliation(
+                    id=uuid7(),
+                    doctor_id=doctor.id,
+                    clinic_id=clinic_id,
+                    start_date=utcnow().date(),
+                    status="active",
+                )
+            )
     elif role == UserRole.CLINIC_ADMIN and clinic_id is not None:
-        db.add(ClinicStaff(user_id=user.id, clinic_id=clinic_id))
+        db.add(ClinicStaff(id=uuid7(), user_id=user.id, clinic_id=clinic_id, role="admin"))
 
     await db.commit()
     return user

@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
-from app.db.models import Base, User
+from app.db.models import Profile
 from app.db.session import SessionFactory, engine
 from app.errors import (
     AppError,
@@ -55,7 +55,7 @@ async def _startup_checks() -> None:
     if settings.environment != "pilot":
         async with SessionFactory() as session:
             rows = await session.execute(
-                select(User.id).where(User.is_synthetic.is_(False)).limit(1)
+                select(Profile.id).where(Profile.is_synthetic.is_(False)).limit(1)
             )
             if rows.scalar_one_or_none() is not None:
                 raise RuntimeError(
@@ -67,10 +67,6 @@ async def _startup_checks() -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
-    # SQLite dev convenience. Postgres uses Alembic migrations instead.
-    if settings.database_url.startswith("sqlite"):
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
     await _startup_checks()
     log.info("startup", environment=settings.environment)
     yield
@@ -88,9 +84,7 @@ app = FastAPI(
 @app.middleware("http")
 async def request_context(request: Request, call_next):  # type: ignore[no-untyped-def]
     """Attach a correlation id and the active locale to every request."""
-    request.state.request_id = request.headers.get(
-        "X-Request-Id", secrets.token_urlsafe(12)
-    )
+    request.state.request_id = request.headers.get("X-Request-Id", secrets.token_urlsafe(12))
 
     # Locale comes from the URL prefix, falling back to a cookie then default.
     parts = request.url.path.strip("/").split("/")

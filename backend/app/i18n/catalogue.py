@@ -56,6 +56,4 @@ def missing_keys() -> dict[str, list[str]]:
     Asserted by the test suite so an untranslated screen cannot ship (FR28).
     """
     base = set(_catalogue("en"))
-    return {
-        loc: sorted(base - set(_catalogue(loc))) for loc in SUPPORTED if loc != "en"
-    }
+    return {loc: sorted(base - set(_catalogue(loc))) for loc in SUPPORTED if loc != "en"}

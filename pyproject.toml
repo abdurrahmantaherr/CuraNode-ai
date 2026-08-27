@@ -11,13 +11,13 @@ dependencies = [
     "uvicorn>=0.52.1",
     # Persistence — SQLAlchemy 2.0 typed style only (TDD 2.1)
     "sqlalchemy>=2.0.40,<2.1",
-    "aiosqlite>=0.20",
+    "asyncpg>=0.30",
     "alembic>=1.16,<2.0",
     # Validation & settings
     "pydantic[email]>=2.11,<3.0",
     "pydantic-settings>=2.6",
-    # Security (TDD 7.1)
-    "argon2-cffi>=25.1",
+    # Security — identity/session verification (Supabase Auth owns hashing)
+    "supabase>=2.10",
     "pyjwt>=2.10,<3.0",
     # Presentation
     "jinja2>=3.1",
@@ -31,6 +31,8 @@ dev = [
     "pytest-asyncio>=1.0",
     "httpx>=0.28",
     "ruff>=0.12",
+    # Test-only: SQLite backs the in-memory test engine (prod uses Supabase Postgres).
+    "aiosqlite>=0.20",
 ]
 
 [build-system]

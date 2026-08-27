@@ -17,7 +17,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-Role = Literal["patient", "doctor", "clinic_admin"]
+Role = Literal["patient", "doctor", "admin"]
 Locale = Literal["en", "ur"]
 
 PASSWORD_MIN = 10
@@ -126,5 +126,5 @@ def landing_route_for(role: str, locale: str = "en") -> str:
     return {
         "patient": f"/{locale}/patient",
         "doctor": f"/{locale}/doctor",
-        "clinic_admin": f"/{locale}/admin",
+        "admin": f"/{locale}/admin",
     }[role]

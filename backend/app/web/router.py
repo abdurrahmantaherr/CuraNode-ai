@@ -20,7 +20,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from ..db.models import Clinic, User, UserRole
+from ..db.models import Clinic, Profile, UserRole
 from ..deps import OptionalActorDep, SessionDep, enforce_auth_rate_limit
 from ..errors import AppError, RateLimited, Unauthenticated, ValidationFailed
 from ..i18n.catalogue import direction, normalise_locale, translate
@@ -41,7 +41,7 @@ router = APIRouter(tags=["web"])
 ROLE_LABEL = {
     "patient": "auth.role.patient",
     "doctor": "auth.role.doctor",
-    "clinic_admin": "admin.dashboard.title",
+    "admin": "admin.dashboard.title",
 }
 
 
@@ -68,9 +68,7 @@ def _render(
 
 async def _clinic_options(session: SessionDep) -> list[dict[str, str]]:
     rows = await session.execute(select(Clinic).order_by(Clinic.city, Clinic.name))
-    return [
-        {"value": str(c.id), "label": f"{c.name} — {c.city}"} for c in rows.scalars().all()
-    ]
+    return [{"value": str(c.id), "label": f"{c.name} — {c.city}"} for c in rows.scalars().all()]
 
 
 def _initials(name: str) -> str:
@@ -80,16 +78,10 @@ def _initials(name: str) -> str:
 
 # ── Login ────────────────────────────────────────────────────────────────
 @router.get("/{locale}/login", response_class=HTMLResponse)
-async def login_page(
-    request: Request, locale: str, actor: OptionalActorDep
-) -> Response:
+async def login_page(request: Request, locale: str, actor: OptionalActorDep) -> Response:
     if actor is not None:
-        return RedirectResponse(
-            f"/{normalise_locale(locale)}/{_area(actor.role)}", status_code=303
-        )
-    return _render(
-        request, "auth/login.html", locale, role="patient", values={}, errors={}
-    )
+        return RedirectResponse(f"/{normalise_locale(locale)}/{_area(actor.role)}", status_code=303)
+    return _render(request, "auth/login.html", locale, role="patient", values={}, errors={})
 
 
 @router.post("/{locale}/login")
@@ -160,9 +152,7 @@ async def register_page(
     request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
 ) -> Response:
     if actor is not None:
-        return RedirectResponse(
-            f"/{normalise_locale(locale)}/{_area(actor.role)}", status_code=303
-        )
+        return RedirectResponse(f"/{normalise_locale(locale)}/{_area(actor.role)}", status_code=303)
     return _render(
         request,
         "auth/register.html",
@@ -246,9 +236,7 @@ async def register_submit(
     try:
         if role == "doctor":
             if not (pmdc_number.strip() and specialty.strip() and primary_clinic_id):
-                return await rerender(
-                    {}, translate("errors.doctor_fields_required", loc)
-                )
+                return await rerender({}, translate("errors.doctor_fields_required", loc))
             body: Any = DoctorRegisterRequest(
                 role="doctor",
                 pmdc_number=pmdc_number.strip(),
@@ -284,20 +272,16 @@ async def register_submit(
 
 
 @router.post("/{locale}/logout")
-async def logout_submit(
-    request: Request, locale: str, session: SessionDep
-) -> Response:
-    await service.logout(session, request.cookies.get(settings.refresh_cookie_name))
-    response = RedirectResponse(
-        f"/{normalise_locale(locale)}/login", status_code=303
-    )
+async def logout_submit(request: Request, locale: str, session: SessionDep) -> Response:
+    await service.logout(session, request.cookies.get(settings.access_cookie_name))
+    response = RedirectResponse(f"/{normalise_locale(locale)}/login", status_code=303)
     clear_session_cookies(response)
     return response
 
 
 # ── Protected areas ──────────────────────────────────────────────────────
 def _area(role: str) -> str:
-    return {"patient": "patient", "doctor": "doctor", "clinic_admin": "admin"}[role]
+    return {"patient": "patient", "doctor": "doctor", "admin": "admin"}[role]
 
 
 async def _guarded(
@@ -311,16 +295,14 @@ async def _guarded(
 
     if actor is None:
         # Preserve the destination so the user returns after signing in.
-        return RedirectResponse(
-            f"/{loc}/login?next={request.url.path}", status_code=303
-        )
+        return RedirectResponse(f"/{loc}/login?next={request.url.path}", status_code=303)
 
     if actor.role != required_role:
         # Cross-role deep link: send them to their own area rather than a raw
         # 403 page (SPEC AC-16).
         return RedirectResponse(f"/{loc}/{_area(actor.role)}", status_code=303)
 
-    user = await session.get(User, actor.user_id)
+    user = await session.get(Profile, actor.user_id)
     assert user is not None
     me = await service.build_me(session, user)
 
@@ -337,7 +319,7 @@ async def _guarded(
     title_key = {
         "patient": "patient.dashboard.title",
         "doctor": "doctor.dashboard.title",
-        "clinic_admin": "admin.dashboard.title",
+        "admin": "admin.dashboard.title",
     }[actor.role]
 
     return _render(
@@ -373,4 +355,4 @@ async def doctor_area(
 async def admin_area(
     request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
 ) -> Response:
-    return await _guarded(request, locale, session, actor, "clinic_admin")
+    return await _guarded(request, locale, session, actor, "admin")

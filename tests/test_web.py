@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from app.db.models import Doctor, User, UserRole
+from app.db.models import Doctor, Profile, UserRole, VerificationStatus
 from app.i18n.catalogue import missing_keys, translate
 from app.settings import settings
 from sqlalchemy import select
@@ -32,9 +32,7 @@ def _form(**kw):
 # ── T16 / AC-16 — role landing and cross-role redirect ──────────────────
 async def test_t16_role_based_landing(client, db, clinic):
     await make_user(db, email="pat@x.com", role=UserRole.PATIENT)
-    r = await client.post(
-        "/en/login", data={"email": "pat@x.com", "password": TEST_PASSWORD}
-    )
+    r = await client.post("/en/login", data={"email": "pat@x.com", "password": TEST_PASSWORD})
     assert r.status_code == 303
     assert r.headers["location"] == "/en/patient"
 
@@ -48,12 +46,8 @@ async def test_t16_role_based_landing(client, db, clinic):
 
 
 async def test_t16_doctor_lands_on_doctor_area(client, db, clinic):
-    await make_user(
-        db, email="dr@x.com", role=UserRole.DOCTOR, clinic_id=clinic.id
-    )
-    r = await client.post(
-        "/en/login", data={"email": "dr@x.com", "password": TEST_PASSWORD}
-    )
+    await make_user(db, email="dr@x.com", role=UserRole.DOCTOR, clinic_id=clinic.id)
+    r = await client.post("/en/login", data={"email": "dr@x.com", "password": TEST_PASSWORD})
     assert r.headers["location"] == "/en/doctor"
 
 
@@ -66,9 +60,7 @@ async def test_t17_protected_route_redirects_with_next(client):
 
 async def test_t17_signed_in_user_skips_login_page(client, db):
     await make_user(db, email="skip@x.com", role=UserRole.PATIENT)
-    await client.post(
-        "/en/login", data={"email": "skip@x.com", "password": TEST_PASSWORD}
-    )
+    await client.post("/en/login", data={"email": "skip@x.com", "password": TEST_PASSWORD})
     r = await client.get("/en/login")
     assert r.status_code == 303
     assert r.headers["location"] == "/en/patient"
@@ -101,17 +93,18 @@ async def test_t18_no_physical_direction_css():
     """TDD 2.3 rule 1 — logical properties only, so RTL needs no second sheet."""
     from pathlib import Path
 
-    css = (
-        Path("frontend/static/css/app.css").read_text(encoding="utf-8")
-    )
+    css = Path("frontend/static/css/app.css").read_text(encoding="utf-8")
     # Strip comments before scanning so prose about the rule is not a hit.
     css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
 
     banned = [
-        r"margin-left\s*:", r"margin-right\s*:",
-        r"padding-left\s*:", r"padding-right\s*:",
+        r"margin-left\s*:",
+        r"margin-right\s*:",
+        r"padding-left\s*:",
+        r"padding-right\s*:",
         r"text-align\s*:\s*(left|right)",
-        r"\bleft\s*:", r"\bright\s*:",
+        r"\bleft\s*:",
+        r"\bright\s*:",
     ]
     for pattern in banned:
         hits = re.findall(pattern, css)
@@ -129,9 +122,7 @@ async def test_t19_focus_ring_defined():
 
 
 async def test_t19_validation_errors_render_accessibly(client, db):
-    r = await client.post(
-        "/en/register", data=_form(password="short", password_confirm="short")
-    )
+    r = await client.post("/en/register", data=_form(password="short", password_confirm="short"))
     assert r.status_code == 422
     assert 'aria-invalid="true"' in r.text
     assert 'role="alert"' in r.text
@@ -139,14 +130,12 @@ async def test_t19_validation_errors_render_accessibly(client, db):
 
     # Nothing was created.
     assert (
-        await db.execute(select(User).where(User.email == "web@x.com"))
+        await db.execute(select(Profile).where(Profile.email == "web@x.com"))
     ).scalar_one_or_none() is None
 
 
 async def test_t19_password_mismatch_and_consent(client, db):
-    mismatch = await client.post(
-        "/en/register", data=_form(password_confirm="DifferentPass123")
-    )
+    mismatch = await client.post("/en/register", data=_form(password_confirm="DifferentPass123"))
     assert translate("errors.password_mismatch", "en") in mismatch.text
 
     no_consent = _form()
@@ -161,7 +150,7 @@ async def test_t19_submitting_state_present():
 
     js = Path("frontend/static/js/auth.js").read_text(encoding="utf-8")
     assert "btn.disabled = true" in js
-    assert 'aria-busy' in js
+    assert "aria-busy" in js
 
 
 # ── Registration through the browser form ───────────────────────────────
@@ -196,16 +185,13 @@ async def test_web_doctor_registration_shows_pending_banner(client, db, clinic):
     assert translate("doctor.pending_title", "en") in page.text
     assert clinic.name in page.text
 
-    user = (
-        await db.execute(select(User).where(User.email == "webdoc@x.com"))
-    ).scalar_one()
-    assert (await db.get(Doctor, user.id)).is_verified is False
+    user = (await db.execute(select(Profile).where(Profile.email == "webdoc@x.com"))).scalar_one()
+    doctor = (await db.execute(select(Doctor).where(Doctor.user_id == user.id))).scalar_one()
+    assert doctor.verification_status == VerificationStatus.PENDING
 
 
 async def test_web_doctor_missing_fields_rerenders(client, db, clinic):
-    r = await client.post(
-        "/en/register", data=_form(email="d9@x.com", role="doctor")
-    )
+    r = await client.post("/en/register", data=_form(email="d9@x.com", role="doctor"))
     assert r.status_code == 422
     assert translate("errors.doctor_fields_required", "en") in r.text
 
@@ -311,9 +297,7 @@ async def test_web_login_role_mismatch_is_rejected(client, db, clinic):
 
 
 async def test_web_login_role_mismatch_both_directions(client, db, clinic):
-    await make_user(
-        db, email="realdoc@x.com", role=UserRole.DOCTOR, clinic_id=clinic.id
-    )
+    await make_user(db, email="realdoc@x.com", role=UserRole.DOCTOR, clinic_id=clinic.id)
     r = await client.post(
         "/en/login",
         data={"email": "realdoc@x.com", "password": TEST_PASSWORD, "role": "patient"},
@@ -359,9 +343,7 @@ async def test_web_logout_clears_session(client, db):
 
 async def test_web_invalid_credentials_show_banner(client, db):
     await make_user(db, email="bad@x.com", role=UserRole.PATIENT)
-    r = await client.post(
-        "/en/login", data={"email": "bad@x.com", "password": "WrongPassword1"}
-    )
+    r = await client.post("/en/login", data={"email": "bad@x.com", "password": "WrongPassword1"})
     assert r.status_code == 401
     assert translate("errors.unauthenticated", "en") in r.text
     assert "banner--error" in r.text

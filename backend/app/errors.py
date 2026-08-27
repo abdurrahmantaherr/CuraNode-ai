@@ -104,18 +104,12 @@ async def validation_handler(request: Request, exc: Exception) -> JSONResponse:
     """Map FastAPI's validation errors into the single house envelope."""
     assert isinstance(exc, RequestValidationError)
     request_id, locale = _context(request)
-    fields = {
-        ".".join(str(p) for p in err["loc"][1:]): err["msg"] for err in exc.errors()
-    }
+    fields = {".".join(str(p) for p in err["loc"][1:]): err["msg"] for err in exc.errors()}
     err = ValidationFailed({"fields": fields})
-    return JSONResponse(
-        status_code=err.http_status, content=envelope(err, request_id, locale)
-    )
+    return JSONResponse(status_code=err.http_status, content=envelope(err, request_id, locale))
 
 
 async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
     """Generic message to the caller; the detail is logged, never returned."""
     request_id, locale = _context(request)
-    return JSONResponse(
-        status_code=500, content=envelope(AppError(), request_id, locale)
-    )
+    return JSONResponse(status_code=500, content=envelope(AppError(), request_id, locale))

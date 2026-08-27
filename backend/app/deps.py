@@ -17,13 +17,22 @@ from dataclasses import dataclass, field
 from typing import Annotated
 
 from fastapi import Depends, Request
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .cache import cache, ratelimit_key
-from .db.models import AccountStatus, ClinicStaff, Doctor, User, UserRole
+from .db.models import (
+    AccountStatus,
+    ClinicStaff,
+    Doctor,
+    DoctorAffiliation,
+    Profile,
+    UserRole,
+    VerificationStatus,
+)
 from .db.session import get_session
 from .errors import Forbidden, RateLimited, Unauthenticated
-from .identity.security import InvalidToken, decode_access_token
+from .identity.security import InvalidToken, decode_supabase_access_token
 from .settings import settings
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -51,11 +60,11 @@ async def _load_actor(request: Request, session: AsyncSession) -> Actor | None:
     if not token:
         return None
     try:
-        claims = decode_access_token(token)
+        claims = await decode_supabase_access_token(token)
     except InvalidToken:
         return None
 
-    user = await session.get(User, claims.user_id)
+    user = await session.get(Profile, claims.user_id)
     if user is None or user.status != AccountStatus.ACTIVE:
         return None
 
@@ -63,14 +72,20 @@ async def _load_actor(request: Request, session: AsyncSession) -> Actor | None:
     is_verified_doctor = False
 
     if user.role == UserRole.DOCTOR:
-        doctor = await session.get(Doctor, user.id)
+        doctor = (
+            await session.execute(select(Doctor).where(Doctor.user_id == user.id))
+        ).scalar_one_or_none()
         if doctor is not None:
             # Live read — never from the token.
-            is_verified_doctor = doctor.is_verified
-            clinic_ids.add(doctor.primary_clinic_id)
+            is_verified_doctor = doctor.verification_status == VerificationStatus.VERIFIED
+            aff_rows = await session.execute(
+                select(DoctorAffiliation.clinic_id).where(
+                    DoctorAffiliation.doctor_id == doctor.id,
+                    DoctorAffiliation.status == "active",
+                )
+            )
+            clinic_ids.update(aff_rows.scalars().all())
     elif user.role == UserRole.CLINIC_ADMIN:
-        from sqlalchemy import select
-
         rows = await session.execute(
             select(ClinicStaff.clinic_id).where(ClinicStaff.user_id == user.id)
         )
@@ -129,7 +144,7 @@ ActorDep = Annotated[Actor, Depends(current_actor)]
 OptionalActorDep = Annotated[Actor | None, Depends(optional_actor)]
 PatientDep = Annotated[Actor, Depends(require_role("patient"))]
 VerifiedDoctorDep = Annotated[Actor, Depends(require_verified_doctor)]
-ClinicAdminDep = Annotated[Actor, Depends(require_role("clinic_admin"))]
+ClinicAdminDep = Annotated[Actor, Depends(require_role("admin"))]
 
 
 # ── Rate limiting (TDD 7.7 — 5/min on auth endpoints) ────────────────────

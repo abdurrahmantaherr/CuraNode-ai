@@ -112,16 +112,16 @@ async def refresh(request: Request, response: Response, session: SessionDep) -> 
 
 @router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(request: Request, response: Response, session: SessionDep) -> Response:
-    await service.logout(session, request.cookies.get(settings.refresh_cookie_name))
+    await service.logout(session, request.cookies.get(settings.access_cookie_name))
     clear_session_cookies(response)
     return Response(status_code=status.HTTP_204_NO_CONTENT, headers=response.headers)
 
 
 @router.get("/me", response_model=MeOut)
 async def me(actor: ActorDep, session: SessionDep) -> MeOut:
-    from ..db.models import User
+    from ..db.models import Profile
 
-    user = await session.get(User, actor.user_id)
+    user = await session.get(Profile, actor.user_id)
     assert user is not None  # current_actor already proved the row exists
     return await service.build_me(session, user)
 
@@ -130,6 +130,4 @@ async def me(actor: ActorDep, session: SessionDep) -> MeOut:
 async def list_clinics(session: SessionDep) -> list[ClinicOut]:
     """Public — feeds the doctor-registration clinic selector (SPEC BL-21)."""
     rows = await session.execute(select(Clinic).order_by(Clinic.city, Clinic.name))
-    return [
-        ClinicOut(id=c.id, name=c.name, city=c.city) for c in rows.scalars().all()
-    ]
+    return [ClinicOut(id=c.id, name=c.name, city=c.city) for c in rows.scalars().all()]
