@@ -47,8 +47,10 @@ from ..db.models import (
 from ..db.types import uuid7
 from ..errors import Unauthenticated, ValidationFailed
 from ..settings import settings
+from . import oauth as oauth_mod
 from . import security
 from .schemas import (
+    DoctorOnboardingRequest,
     DoctorRegisterRequest,
     LoginRequest,
     MeOut,
@@ -77,6 +79,54 @@ async def _unique_passport_no(session: AsyncSession) -> str:
     # Five collisions against a 30^8 space means something is badly wrong;
     # surface it rather than looping forever.
     raise RuntimeError("Could not allocate a unique passport number")
+
+
+async def provision_role_records(
+    session: AsyncSession,
+    user: Profile,
+    *,
+    role: UserRole,
+    full_name: str,
+    pmdc_number: str | None = None,
+    specialty: str | None = None,
+    primary_clinic_id: uuid.UUID | None = None,
+) -> None:
+    """Creates the `Patient` or `Doctor` (+ `DoctorAffiliation`) row for a
+    user who has none yet. Shared by password registration and OAuth
+    onboarding — the two ways a `user_profile` row can end up choosing a role.
+    """
+    if role == UserRole.DOCTOR:
+        doctor = Doctor(
+            id=uuid7(),
+            user_id=user.id,
+            full_name=full_name,
+            specialty=specialty,
+            pmdc_number=pmdc_number,
+            # Never sourced from the request. This is the line that keeps
+            # self-registration from becoming self-authorisation.
+            verification_status=VerificationStatus.PENDING,
+            verified_by=None,
+            verified_at=None,
+        )
+        session.add(doctor)
+        session.add(
+            DoctorAffiliation(
+                id=uuid7(),
+                doctor_id=doctor.id,
+                clinic_id=primary_clinic_id,
+                start_date=datetime.now(UTC).date(),
+                status="active",
+            )
+        )
+    else:
+        session.add(
+            Patient(
+                id=uuid7(),
+                user_id=user.id,
+                full_name=full_name,
+                passport_no=await _unique_passport_no(session),
+            )
+        )
 
 
 def _session_out(user: Profile, gotrue_session: Any) -> tuple[SessionOut, security.TokenPair]:
@@ -183,38 +233,15 @@ async def register(
     user.is_synthetic = settings.environment != "pilot"
     await session.flush()
 
-    if is_doctor:
-        doctor = Doctor(
-            id=uuid7(),
-            user_id=user.id,
-            full_name=body.full_name,
-            specialty=body.specialty,
-            pmdc_number=body.pmdc_number,
-            # Never sourced from the request. This is the line that keeps
-            # self-registration from becoming self-authorisation.
-            verification_status=VerificationStatus.PENDING,
-            verified_by=None,
-            verified_at=None,
-        )
-        session.add(doctor)
-        session.add(
-            DoctorAffiliation(
-                id=uuid7(),
-                doctor_id=doctor.id,
-                clinic_id=body.primary_clinic_id,
-                start_date=datetime.now(UTC).date(),
-                status="active",
-            )
-        )
-    else:
-        session.add(
-            Patient(
-                id=uuid7(),
-                user_id=user.id,
-                full_name=body.full_name,
-                passport_no=await _unique_passport_no(session),
-            )
-        )
+    await provision_role_records(
+        session,
+        user,
+        role=user.role,
+        full_name=body.full_name,
+        pmdc_number=body.pmdc_number if is_doctor else None,
+        specialty=body.specialty if is_doctor else None,
+        primary_clinic_id=body.primary_clinic_id if is_doctor else None,
+    )
 
     await audit.write(
         session,
@@ -303,6 +330,167 @@ async def login(
     out, pair = _session_out(user, signed_in.session)
     await session.commit()
     return out, pair
+
+
+# ── OAuth login (docs/oauth.md §8b) ──────────────────────────────────────
+async def login_with_oauth(
+    session: AsyncSession,
+    exchanged: Any,
+    *,
+    provider: str,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> tuple[SessionOut, security.TokenPair, bool]:
+    """Signs in (or first-signs-in) a user Supabase just authenticated via
+    OAuth. Returns `(SessionOut, TokenPair, onboarding_required)`.
+
+    `exchanged` is the SDK response from `oauth.exchange_code` — same shape as
+    `sign_in_with_password`'s: `.user.id`, `.user.email`, `.user.user_metadata`,
+    `.session`.
+    """
+    user_id = uuid.UUID(exchanged.user.id)
+    fields = oauth_mod.profile_fields(exchanged.user)
+
+    # The `on_auth_user_created` trigger has already inserted a default
+    # `user_profile` row by the time this returns — same assumption as
+    # `register()`. The `if user is None` branch further down is defensive
+    # only.
+    user = await session.get(Profile, user_id)
+
+    # An unverified provider email must never be able to take over an
+    # existing password account — refuse and revoke the session Supabase just
+    # issued rather than silently merging the two identities. This MUST run
+    # before the fallback `Profile` below is created: staging that row first
+    # would autoflush it into this very SELECT and make an account collide
+    # with itself.
+    existing = await _user_by_email(session, fields["email"])
+    if existing is not None and existing.id != user_id:
+        await _sign_out(exchanged.session.access_token)
+        raise Unauthenticated()
+
+    if user is None:
+        # Defensive fallback only (should be unreachable while the trigger
+        # exists) — `email` is NOT NULL, so it must be set before this is
+        # ever flushed. Same ordering constraint `register()` has.
+        user = Profile(
+            id=user_id,
+            role=UserRole.PATIENT,
+            email=fields["email"],
+            status=AccountStatus.ACTIVE,
+        )
+        session.add(user)
+
+    if user.status != AccountStatus.ACTIVE:
+        await _sign_out(exchanged.session.access_token)
+        raise Unauthenticated()
+
+    now = datetime.now(UTC)
+    locked_until = user.locked_until
+    if locked_until is not None and locked_until.tzinfo is None:
+        locked_until = locked_until.replace(tzinfo=UTC)
+    if locked_until is not None and locked_until > now:
+        # Honour an existing lock, but OAuth never contributes to
+        # `failed_logins` — there is no password here to brute-force, so
+        # incrementing it would only hand an attacker a way to lock a victim
+        # out.
+        await _sign_out(exchanged.session.access_token)
+        raise Unauthenticated()
+
+    user.email = fields["email"]
+    if not user.full_name:
+        user.full_name = fields["full_name"]
+    user.is_synthetic = settings.environment != "pilot"
+
+    user.failed_logins = 0
+    user.locked_until = None
+    user.last_login_at = now
+    await cache.delete(lockout_key(str(user.id)))
+    await session.flush()
+
+    onboarding_required = await _onboarding_required(session, user)
+
+    await audit.write(
+        session,
+        action=audit.AUTH_OAUTH_LOGIN,
+        actor_user_id=user.id,
+        actor_role=user.role.value,
+        ip_address=ip,
+        user_agent=user_agent,
+        detail={"provider": provider},
+    )
+
+    out, pair = _session_out(user, exchanged.session)
+    await session.commit()
+    return out, pair, onboarding_required
+
+
+async def _onboarding_required(session: AsyncSession, user: Profile) -> bool:
+    if user.role == UserRole.PATIENT:
+        row = await session.execute(select(Patient.id).where(Patient.user_id == user.id))
+    elif user.role == UserRole.DOCTOR:
+        row = await session.execute(select(Doctor.id).where(Doctor.user_id == user.id))
+    else:
+        row = await session.execute(select(ClinicStaff.id).where(ClinicStaff.user_id == user.id))
+    return row.scalar_one_or_none() is None
+
+
+async def complete_onboarding(
+    session: AsyncSession,
+    user: Profile,
+    body: Any,
+    *,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> Profile:
+    """Finishes provisioning a user who signed in via OAuth with no role yet.
+
+    Returns the updated `Profile` — the caller already holds a valid session
+    (cookies were set at OAuth login time), so this has nothing to re-issue;
+    it only needs to hand back the chosen role for the post-onboarding
+    redirect.
+
+    Idempotent against a double-submit: if a role record already exists this
+    is a no-op rather than provisioning a second one.
+    """
+    is_doctor = isinstance(body, DoctorOnboardingRequest)
+
+    if is_doctor:
+        clinic = await session.get(Clinic, body.primary_clinic_id)
+        if clinic is None:
+            raise ValidationFailed({"fields": {"primary_clinic_id": "errors.clinic_unknown"}})
+
+    if not await _onboarding_required(session, user):
+        return user
+
+    role = UserRole.DOCTOR if is_doctor else UserRole.PATIENT
+    user.role = role
+    user.full_name = body.full_name
+    user.phone_e164 = body.phone_e164
+    user.preferred_locale = LocaleCode(body.preferred_locale)
+    await session.flush()
+
+    await provision_role_records(
+        session,
+        user,
+        role=role,
+        full_name=body.full_name,
+        pmdc_number=body.pmdc_number if is_doctor else None,
+        specialty=body.specialty if is_doctor else None,
+        primary_clinic_id=body.primary_clinic_id if is_doctor else None,
+    )
+
+    await audit.write(
+        session,
+        action=audit.AUTH_OAUTH_ONBOARDED,
+        actor_user_id=user.id,
+        actor_role=user.role.value,
+        ip_address=ip,
+        user_agent=user_agent,
+        detail={"role": role.value},
+    )
+
+    await session.commit()
+    return user
 
 
 # ── Refresh rotation (SPEC 4.3) ──────────────────────────────────────────

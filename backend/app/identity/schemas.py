@@ -69,6 +69,37 @@ RegisterRequest = Annotated[
 ]
 
 
+class _OnboardingBase(BaseModel):
+    """Completes a `user_profile` row created by OAuth sign-in — no email or
+    password field, since Supabase already owns both for this user."""
+
+    full_name: str = Field(min_length=2, max_length=120)
+    phone_e164: str | None = Field(default=None, pattern=r"^\+92[0-9]{10}$")
+    preferred_locale: Locale = "en"
+
+    @field_validator("full_name", mode="after")
+    @classmethod
+    def _trim(cls, v: str) -> str:
+        return v.strip()
+
+
+class PatientOnboardingRequest(_OnboardingBase):
+    role: Literal["patient"] = "patient"
+
+
+class DoctorOnboardingRequest(_OnboardingBase):
+    role: Literal["doctor"]
+    pmdc_number: str = Field(min_length=3, max_length=32)
+    specialty: str = Field(min_length=2, max_length=80)
+    primary_clinic_id: uuid.UUID
+
+
+OnboardingRequest = Annotated[
+    PatientOnboardingRequest | DoctorOnboardingRequest,
+    Field(discriminator="role"),
+]
+
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=PASSWORD_MAX)
