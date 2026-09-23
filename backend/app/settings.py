@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     oauth_providers: str = "google"
     oauth_state_ttl_s: int = 600
 
+    # ── Patient profile (FR2) ────────────────────────────────────────────
+    profile_write_rate_limit_per_minute: int = 30
+    profile_max_entries_per_list: int = 50
+
     def model_post_init(self, _context: object) -> None:
         # BL-16 — failing loudly at boot beats running insecurely or against
         # a misconfigured Supabase project.
