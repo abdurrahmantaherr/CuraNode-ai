@@ -153,9 +153,14 @@ async def require_verified_doctor(
     return actor
 
 
+# Hoisted to one module-level callable so FastAPI's per-request dependency
+# cache resolves it once even when a route and its rate-limit dependency both
+# ask for a patient.
+_require_patient = require_role("patient")
+
 ActorDep = Annotated[Actor, Depends(current_actor)]
 OptionalActorDep = Annotated[Actor | None, Depends(optional_actor)]
-PatientDep = Annotated[Actor, Depends(require_role("patient"))]
+PatientDep = Annotated[Actor, Depends(_require_patient)]
 VerifiedDoctorDep = Annotated[Actor, Depends(require_verified_doctor)]
 ClinicAdminDep = Annotated[Actor, Depends(require_role("admin"))]
 
@@ -169,3 +174,20 @@ async def enforce_auth_rate_limit(request: Request) -> None:
 
 
 AuthRateLimit = Depends(enforce_auth_rate_limit)
+
+
+# ── Patient-profile write budget (FR2, profile AC-20) ────────────────────
+async def check_profile_write_rate(actor: Actor) -> None:
+    """Counts one write attempt. Shared by the API dependency below and the
+    web handlers, so both doors draw from the same per-patient window."""
+    count = await cache.incr(ratelimit_key("profile_write", str(actor.user_id)), 60)
+    if count > settings.profile_write_rate_limit_per_minute:
+        raise RateLimited(retry_after_s=60)
+
+
+async def enforce_profile_write_rate_limit(actor: PatientDep) -> None:
+    """Depends on PatientDep so 401/403 surface before 429."""
+    await check_profile_write_rate(actor)
+
+
+ProfileWriteRateLimit = Depends(enforce_profile_write_rate_limit)
