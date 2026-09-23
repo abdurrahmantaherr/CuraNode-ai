@@ -9,7 +9,12 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
+
+# Pakistan Standard Time. A fixed offset rather than `ZoneInfo("Asia/Karachi")`:
+# Karachi has observed no DST since 2009, and Windows dev machines ship no IANA
+# database without the extra `tzdata` package.
+PKT = timezone(timedelta(hours=5), "PKT")
 
 
 def uuid7() -> uuid.UUID:
@@ -32,3 +37,10 @@ def uuid7() -> uuid.UUID:
 def utcnow() -> datetime:
     """Timezone-aware UTC now. All timestamps are stored in UTC (TDD 3.1)."""
     return datetime.now(UTC)
+
+
+def today_pk() -> date:
+    """Today's calendar date in Pakistan — the reference for age and for
+    "not in the future" date checks. Call it as `types.today_pk()` (module
+    attribute access) so tests can freeze it in one place."""
+    return datetime.now(PKT).date()
