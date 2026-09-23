@@ -44,6 +44,7 @@ from app.i18n.catalogue import normalise_locale
 from app.identity.router import router as identity_router
 from app.log_config import configure_logging, get_logger
 from app.paths import STATIC_DIR, TEMPLATES_DIR
+from app.profile.router import router as profile_router
 from app.settings import settings
 from app.web.router import router as web_router
 
@@ -111,6 +112,7 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 app.include_router(identity_router)
+app.include_router(profile_router)
 app.include_router(web_router)
 
 

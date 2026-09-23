@@ -37,6 +37,22 @@ REDACTED_KEYS: frozenset[str] = frozenset(
         "code",
         "state",
         "code_verifier",
+        # Patient profile (FR2) — health data and identity PII. Defence in
+        # depth: the profile code never passes field values to the logger.
+        "date_of_birth",
+        "emergency_contact",
+        "blood_group",
+        "gender",
+        "substance",
+        "reaction",
+        "severity",
+        "strength",
+        "frequency",
+        "started_on",
+        "onset_date",
+        "notes",
+        "before",
+        "after",
     }
 )
 

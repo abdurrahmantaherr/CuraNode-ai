@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+{#- Patient profile (FR2). Every control works without JavaScript: forms post
+    and redirect (PRG), Edit is a link, and Remove is a two-step <details>
+    confirmation. profile.js only adds the submitting-state guard.
+
+    Context (built in web/router.py::_render_profile):
+      profile        PatientProfileOut
+      form_state     the one form that failed, or None:
+                     {form, section, values, errors, banner}
+      saved          {section, message} success banner, or None
+      edit           {kind, id} row in edit mode, or None
+      page_error     page-level error banner text, or None
+      today          ISO date for date inputs' `max`
+      *_options      select options (legacy stored values appended) -#}
+{% import "partials/form_field.html" as f %}
+
+{% block title %}{{ t('profile.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+{%- macro section_banners(section) -%}
+  {% if saved and saved.section == section %}
+    <div class="banner banner--ok" role="status"><span>{{ saved.message }}</span></div>
+  {% endif %}
+  {% if form_state and form_state.section == section and form_state.banner %}
+    <div class="banner banner--error" role="alert">
+      <span aria-hidden="true">!</span><span>{{ form_state.banner }}</span>
+    </div>
+  {% endif %}
+{%- endmacro -%}
+
+{#- The add/edit fields for one entry kind. -#}
+{%- macro entry_fields(kind, values, errors, prefix) -%}
+  {% if kind == 'allergy' %}
+    {{ f.field('substance', t('field.substance'), value=values.get('substance', ''), errors=errors,
+               required=True, maxlength=120, placeholder=t('field.substance_placeholder'),
+               id_prefix=prefix) }}
+    {{ f.field('reaction', t('field.reaction'), value=values.get('reaction', ''), errors=errors,
+               maxlength=255, placeholder=t('field.reaction_placeholder'), id_prefix=prefix) }}
+    {{ f.select('severity', t('field.severity'), severity_options_for(values.get('severity', '')),
+                value=values.get('severity', ''), errors=errors, placeholder=t('option.not_set'),
+                id_prefix=prefix) }}
+  {% elif kind == 'condition' %}
+    {{ f.field('name', t('field.condition_name'), value=values.get('name', ''), errors=errors,
+               required=True, maxlength=120, placeholder=t('field.condition_placeholder'),
+               id_prefix=prefix) }}
+    {{ f.field('onset_date', t('field.onset_date'), type='date', value=values.get('onset_date', ''),
+               errors=errors, min='1900-01-01', max=today, dir='ltr', id_prefix=prefix) }}
+  {% else %}
+    {{ f.field('name', t('field.medication_name'), value=values.get('name', ''), errors=errors,
+               required=True, maxlength=120, placeholder=t('field.medication_placeholder'),
+               id_prefix=prefix) }}
+    {{ f.field('strength', t('field.strength'), value=values.get('strength', ''), errors=errors,
+               maxlength=50, placeholder=t('field.strength_placeholder'), id_prefix=prefix) }}
+    {{ f.field('frequency', t('field.frequency'), value=values.get('frequency', ''), errors=errors,
+               maxlength=50, placeholder=t('field.frequency_placeholder'), id_prefix=prefix) }}
+    {{ f.field('started_on', t('field.started_on'), type='date', value=values.get('started_on', ''),
+               errors=errors, min='1900-01-01', max=today, dir='ltr', id_prefix=prefix) }}
+    {{ f.textarea('notes', t('field.notes'), value=values.get('notes', ''), errors=errors,
+                  maxlength=500, id_prefix=prefix) }}
+  {% endif %}
+{%- endmacro -%}
+
+{%- macro entry_section(kind, section, entries, add_label) -%}
+  {% set base = '/' ~ locale ~ '/patient/profile/' ~ section %}
+  <section id="{{ section }}" class="panel stack" aria-labelledby="{{ section }}-h">
+    <h2 id="{{ section }}-h" class="panel__label">{{ t('profile.section.' ~ section) }}</h2>
+    {{ section_banners(section) }}
+
+    {% if entries %}
+      <ul class="entry-list">
+        {% for e in entries %}
+          {% set form_key = kind ~ '-' ~ e.id %}
+          {% set editing = e.editable and edit and edit.kind == kind and edit.id == (e.id|string) %}
+          {% set failed = form_failed(form_key) %}
+          {% if e.editable and (editing or failed) %}
+            {% set vals = form_state['values'] if failed else entry_values(kind, e) %}
+            {% set errs = form_state['errors'] if failed else {} %}
+            <li class="entry-row">
+              <form class="entry-form stack" method="post" action="{{ base }}/{{ e.id }}" novalidate>
+                <div class="grid-2">{{ entry_fields(kind, vals, errs, kind ~ '-' ~ e.id ~ '-') }}</div>
+                <div class="entry-row__actions">
+                  <button class="btn btn--primary btn--sm" type="submit"
+                          data-label="{{ t('profile.action.save_entry') }}">{{ t('profile.action.save_entry') }}</button>
+                  <a class="btn btn--secondary btn--sm"
+                     href="/{{ locale }}/patient/profile#{{ section }}">{{ t('profile.action.cancel') }}</a>
+                </div>
+              </form>
+            </li>
+          {% else %}
+            <li class="entry-row{% if kind == 'allergy' and e.severity == 'severe' %} entry-row--severe{% endif %}">
+              <div class="entry-row__main">
+                <div class="entry-row__title">{% if kind == 'allergy' %}{{ e.substance }}{% else %}{{ e.name }}{% endif %}</div>
+                {% set parts = entry_parts(kind, e) %}
+                {% if parts %}<div class="mono">{{ parts|join(' · ') }}</div>{% endif %}
+              </div>
+              {% if kind == 'allergy' and e.severity %}
+                <span class="badge {{ severity_badge(e.severity) }}">{{ severity_label(e.severity) }}</span>
+              {% endif %}
+              {% if kind == 'condition' and e.status != 'active' %}
+                <span class="badge badge--neutral">{{ e.status }}</span>
+              {% endif %}
+              {% if e.editable %}
+                <div class="entry-row__actions">
+                  <a class="btn btn--secondary btn--sm"
+                     href="/{{ locale }}/patient/profile?edit={{ kind }}&amp;id={{ e.id }}#{{ section }}">{{ t('profile.action.edit') }}</a>
+                  <details class="confirm">
+                    <summary class="btn btn--secondary btn--sm">{{ t('profile.action.remove') }}</summary>
+                    <form method="post" action="{{ base }}/{{ e.id }}/remove">
+                      <p class="field-help">{{ t('profile.remove_hint') }}</p>
+                      <button class="btn btn--danger btn--sm" type="submit"
+                              data-label="{{ t('profile.action.confirm_remove') }}">{{ t('profile.action.confirm_remove') }}</button>
+                    </form>
+                  </details>
+                </div>
+              {% else %}
+                <span class="chip">{{ t('profile.recorded_by_clinician') }}</span>
+              {% endif %}
+            </li>
+          {% endif %}
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty-state">{{ t('profile.empty.' ~ section) }}</p>
+    {% endif %}
+
+    {% set add_failed = form_failed(kind ~ '-new') %}
+    <form class="stack" method="post" action="{{ base }}" novalidate>
+      <div class="grid-2">
+        {{ entry_fields(kind, form_state['values'] if add_failed else {},
+                        form_state['errors'] if add_failed else {}, kind ~ '-new-') }}
+      </div>
+      <div>
+        <button class="btn btn--primary btn--sm" type="submit"
+                data-label="{{ add_label }}">{{ add_label }}</button>
+      </div>
+    </form>
+  </section>
+{%- endmacro -%}
+
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    {% if page_error %}
+      <div class="banner banner--error" role="alert">
+        <span aria-hidden="true">!</span><span>{{ page_error }}</span>
+      </div>
+    {% endif %}
+
+    {#- Identity (read-only) -#}
+    <div class="panel stack">
+      <div class="identity">
+        <div class="avatar" aria-hidden="true">{{ initials }}</div>
+        <div class="identity__main">
+          <div class="entry-row__title">{{ profile.full_name }}</div>
+          <div class="mono">{{ profile.passport_no }}</div>
+        </div>
+        <span class="chip">{{ t('patient.dashboard.passport') }}</span>
+      </div>
+      <dl class="readonly-list">
+        <dt>{{ t('field.email') }}</dt>
+        <dd>
+          <span dir="ltr">{{ profile.email or t('option.not_set') }}</span>
+          <span class="field-help">{{ t('field.email_readonly_help') }}</span>
+        </dd>
+        <dt>{{ t('field.age') }}</dt>
+        <dd>{% if profile.age_years is not none %}{{ t('profile.age_years', years=profile.age_years) }}{% else %}{{ t('option.not_set') }}{% endif %}</dd>
+      </dl>
+      <p class="lead">{{ t('profile.subtitle') }}</p>
+    </div>
+
+    {#- Basic details -#}
+    {% set basics_failed = form_failed('basics') %}
+    {% set bv = form_state['values'] if basics_failed else basics_values %}
+    {% set be = form_state['errors'] if basics_failed else {} %}
+    <section id="basics" class="panel stack" aria-labelledby="basics-h">
+      <h2 id="basics-h" class="panel__label">{{ t('profile.section.basics') }}</h2>
+      {{ section_banners('basics') }}
+      <form class="stack" method="post" action="/{{ locale }}/patient/profile" novalidate>
+        <div class="grid-2">
+          {{ f.field('full_name', t('field.full_name'), value=bv.get('full_name', ''), errors=be,
+                     required=True, autocomplete='name', maxlength=120, id_prefix='basics-') }}
+          {{ f.field('date_of_birth', t('field.date_of_birth'), type='date',
+                     value=bv.get('date_of_birth', ''), errors=be, min='1900-01-01', max=today,
+                     dir='ltr', id_prefix='basics-') }}
+          {{ f.select('gender', t('field.gender'), gender_options, value=bv.get('gender', ''),
+                      errors=be, placeholder=t('option.not_set'), id_prefix='basics-') }}
+          {{ f.select('blood_group', t('field.blood_group'), blood_group_options,
+                      value=bv.get('blood_group', ''), errors=be, placeholder=t('option.not_set'),
+                      id_prefix='basics-') }}
+          {{ f.field('phone_e164', t('field.phone'), type='tel', value=bv.get('phone_e164', ''),
+                     errors=be, autocomplete='tel', placeholder='+923001234567',
+                     id_prefix='basics-') }}
+          {{ f.field('emergency_contact', t('field.emergency_contact'),
+                     value=bv.get('emergency_contact', ''), errors=be, maxlength=255,
+                     help=t('field.emergency_contact_help'), id_prefix='basics-') }}
+        </div>
+        <div>
+          <button class="btn btn--primary" type="submit"
+                  data-label="{{ t('profile.action.save') }}">{{ t('profile.action.save') }}</button>
+        </div>
+      </form>
+    </section>
+
+    {{ entry_section('allergy', 'allergies', profile.allergies, t('profile.action.add_allergy')) }}
+    {{ entry_section('condition', 'conditions', profile.conditions, t('profile.action.add_condition')) }}
+    {{ entry_section('medication', 'medications', profile.medications, t('profile.action.add_medication')) }}
+
+    <div class="footnotes">
+      <p>{{ t('profile.self_reported_note') }}</p>
+      <p>{{ t('profile.no_advice_note') }}</p>
+    </div>
+  </main>
+</div>
+<script src="/static/js/profile.js" defer></script>
+{% endblock %}

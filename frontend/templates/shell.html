@@ -5,20 +5,7 @@
 
 {% block body %}
 <div class="shell">
-  <header class="topbar">
-    <div>
-      <div class="topbar__crumb">{{ crumb }}</div>
-      <div class="topbar__title">{{ page_title }}</div>
-    </div>
-    <div class="topbar__spacer"></div>
-    <div class="topbar__actions">
-      <a class="btn btn--secondary" href="/{{ other_locale }}{{ path_suffix }}"
-         hreflang="{{ other_locale }}">{{ t('nav.language') }}</a>
-      <form method="post" action="/{{ locale }}/logout">
-        <button class="btn btn--secondary" type="submit">{{ t('nav.sign_out') }}</button>
-      </form>
-    </div>
-  </header>
+  {% include "partials/topbar.html" %}
 
   <main class="content">
     {% if show_unverified_banner %}
@@ -48,6 +35,11 @@
       <p style="margin:var(--sp-6) 0 0;font-size:13.5px;color:var(--muted);max-width:64ch">
         {{ t('dashboard.placeholder') }}
       </p>
+      {% if profile_href %}
+        <p style="margin:var(--sp-5) 0 0">
+          <a class="btn btn--secondary" href="{{ profile_href }}">{{ t('profile.open_link') }}</a>
+        </p>
+      {% endif %}
     </div>
   </main>
 </div>

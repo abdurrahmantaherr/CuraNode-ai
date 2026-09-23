@@ -79,12 +79,57 @@ class RateLimited(AppError):
         super().__init__({"retry_after_s": retry_after_s})
 
 
+class NotFound(AppError):
+    """Nonexistent, foreign, or no-longer-active resource. Deliberately one
+    shape for all three so ids cannot be probed (patient profile AC-17)."""
+
+    code = "NOT_FOUND"
+    http_status = status.HTTP_404_NOT_FOUND
+    message_key = "errors.not_found"
+    retryable = False
+
+
+class NotEditable(AppError):
+    """The caller owns the patient record but not this entry — it was recorded
+    by someone else (a clinician, or a legacy row). Kept separate from
+    `Forbidden`, whose contract is role mismatch / unverified doctor only."""
+
+    code = "NOT_EDITABLE"
+    http_status = status.HTTP_403_FORBIDDEN
+    message_key = "errors.not_editable"
+    retryable = False
+
+
+class DuplicateEntry(AppError):
+    code = "DUPLICATE_ENTRY"
+    http_status = status.HTTP_409_CONFLICT
+    message_key = "errors.duplicate_entry"
+    retryable = False
+
+
+class ListFull(AppError):
+    code = "LIST_FULL"
+    http_status = status.HTTP_422_UNPROCESSABLE_CONTENT
+    message_key = "errors.list_full"
+    retryable = False
+
+    def __init__(self, max_entries: int) -> None:
+        super().__init__({"max": max_entries})
+
+
+def message_params(exc: AppError) -> dict[str, Any]:
+    """Scalar details double as message placeholders (e.g. `{max}`).
+    `translate` only substitutes placeholders the template actually contains,
+    so envelopes without one render exactly as before."""
+    return {k: v for k, v in exc.details.items() if isinstance(v, (int, str))}
+
+
 def envelope(exc: AppError, request_id: str, locale: str) -> dict[str, Any]:
     return {
         "error": {
             "code": exc.code,
             "message_key": exc.message_key,
-            "message": translate(exc.message_key, locale),
+            "message": translate(exc.message_key, locale, **message_params(exc)),
             "details": exc.details,
             "request_id": request_id,
             "retryable": exc.retryable,

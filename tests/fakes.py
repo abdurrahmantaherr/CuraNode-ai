@@ -54,6 +54,7 @@ class FakeAdminAPI:
         self._backend = backend
 
     async def create_user(self, attrs: dict[str, Any]) -> _Obj:
+        self._backend.calls.append("admin.create_user")
         email = attrs["email"]
         if email in self._backend.users:
             raise AuthApiError(
@@ -68,7 +69,16 @@ class FakeAdminAPI:
         return _Obj(user=_Obj(id=user_id))
 
     async def sign_out(self, jwt_token: str, scope: str = "global") -> None:
+        self._backend.calls.append("admin.sign_out")
         self._backend.revoked_access_tokens.add(jwt_token)
+
+    def __getattr__(self, name: str) -> Any:
+        # Any admin method the fake does not model (e.g. `update_user_by_id`)
+        # is still recorded, so a test can assert it was never reached.
+        async def _unmodelled(*_a: Any, **_kw: Any) -> None:
+            self._backend.calls.append(f"admin.{name}")
+
+        return _unmodelled
 
 
 class FakeAuthClient:
@@ -76,7 +86,15 @@ class FakeAuthClient:
         self._backend = backend
         self.admin = FakeAdminAPI(backend)
 
+    def __getattr__(self, name: str) -> Any:
+        # Unmodelled user-level calls (e.g. `update_user`) are recorded too.
+        async def _unmodelled(*_a: Any, **_kw: Any) -> None:
+            self._backend.calls.append(name)
+
+        return _unmodelled
+
     async def sign_in_with_password(self, creds: dict[str, Any]) -> _Obj:
+        self._backend.calls.append("sign_in_with_password")
         record = self._backend.users.get(creds["email"])
         if record is None or record["password"] != creds["password"]:
             raise AuthApiError("Invalid login credentials", 400, "invalid_credentials")
@@ -104,6 +122,7 @@ class FakeAuthClient:
 
     async def refresh_session(self, refresh_token: str | None = None) -> _Obj:
         backend = self._backend
+        backend.calls.append("refresh_session")
         if not refresh_token:
             raise AuthApiError("Invalid Refresh Token", 400, "refresh_token_not_found")
 
@@ -138,6 +157,9 @@ class FakeSupabaseAuth:
         # email -> user_id, for OAuth identities `authorize()` has minted
         # before — a *returning* OAuth user must get the same identity back.
         self.oauth_identities: dict[str, str] = {}
+        # Every Auth API call the app makes, in order — lets a test assert a
+        # feature never touches Supabase Auth at all (patient profile AC-07).
+        self.calls: list[str] = []
         self.auth = FakeAuthClient(self)
 
     def register(self, user_id: str, email: str, password: str) -> None:

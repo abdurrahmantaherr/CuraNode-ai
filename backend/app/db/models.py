@@ -9,10 +9,11 @@ logic) needed minimal churn.
 
 `user_profile`/`clinic`/`patient`/`doctor`/`clinic_staff`/`doctor_affiliation`
 are pre-existing tables owned by the shared schema — this module never
-creates or drops them. Only `audit_log` is owned outright by this codebase,
-plus a handful of additive columns on `user_profile`/`doctor` that this
-feature needs and the shared schema didn't have yet (see the Alembic
-migration for exactly what was added).
+creates or drops them; nor does it own the shared `allergy`/
+`chronic_condition` tables. Only `audit_log` and `patient_medication` are
+owned outright by this codebase, plus a handful of additive columns on
+`user_profile`/`doctor`/`allergy`/`chronic_condition` that the shared schema
+didn't have yet (see the Alembic migrations for exactly what was added).
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-from .types import utcnow
+from .types import utcnow, uuid7
 
 
 class Base(DeclarativeBase):
@@ -166,6 +167,7 @@ class Patient(Base):
     date_of_birth: Mapped[date | None] = mapped_column(nullable=True)
     gender: Mapped[str | None] = mapped_column(String(20), nullable=True)
     blood_group: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    emergency_contact: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
 
     user: Mapped[Profile] = relationship(back_populates="patient")
@@ -247,6 +249,90 @@ class ClinicStaff(Base):
     joined_at: Mapped[datetime] = mapped_column(
         "joined_at", DateTime(timezone=True), nullable=False, default=utcnow
     )
+
+
+# ── Patient profile (FR2) ────────────────────────────────────────────────
+class Allergy(Base):
+    """A patient's known allergy.
+
+    Shared, pre-existing table. This repo added `recorded_by`, `updated_at`
+    and `removed_at` (patient-profile migration). `severity` is a plain string,
+    not `_enum(...)`: the column has no CHECK and holds legacy values that
+    `validate_strings=True` would refuse to load. `removed_at` is the
+    soft-remove marker — rows are never deleted by this app.
+    """
+
+    __tablename__ = "allergy"
+
+    id: Mapped[uuid.UUID] = mapped_column("allergy_id", Uuid, primary_key=True, default=uuid7)
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient.patient_id", ondelete="CASCADE"), nullable=False
+    )
+    substance: Mapped[str] = mapped_column(String(255), nullable=False)
+    reaction: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    severity: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    recorded_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
+    recorded_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("user_profile.user_id", ondelete="SET NULL"), nullable=True
+    )
+    updated_at: Mapped[datetime | None] = _ts(nullable=True)
+    removed_at: Mapped[datetime | None] = _ts(nullable=True)
+
+
+class ChronicCondition(Base):
+    """A long-term condition.
+
+    Shared, pre-existing table. This repo added `recorded_by`, `recorded_at`
+    and `updated_at`. There is no `removed_at`: a condition is taken off the
+    list by setting `status='resolved'`. `icd10_code` and `risk_level` belong
+    to the wider product and are never written here.
+    """
+
+    __tablename__ = "chronic_condition"
+
+    id: Mapped[uuid.UUID] = mapped_column("condition_id", Uuid, primary_key=True, default=uuid7)
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient.patient_id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    icd10_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    onset_date: Mapped[date | None] = mapped_column(nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    risk_level: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    recorded_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("user_profile.user_id", ondelete="SET NULL"), nullable=True
+    )
+    recorded_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
+    updated_at: Mapped[datetime | None] = _ts(nullable=True)
+
+
+class PatientMedication(Base):
+    """A medicine the patient says they currently take.
+
+    Owned outright by this repo (created by the patient-profile migration).
+    Named to avoid confusion with the shared `medicine` catalogue and the
+    doctor-owned `prescription_item`. Soft-removed via `removed_at`.
+    """
+
+    __tablename__ = "patient_medication"
+
+    id: Mapped[uuid.UUID] = mapped_column("medication_id", Uuid, primary_key=True, default=uuid7)
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient.patient_id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    strength: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    frequency: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    started_on: Mapped[date | None] = mapped_column(nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recorded_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("user_profile.user_id", ondelete="SET NULL"), nullable=True
+    )
+    recorded_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
+    updated_at: Mapped[datetime | None] = _ts(nullable=True)
+    removed_at: Mapped[datetime | None] = _ts(nullable=True)
+
+    __table_args__ = (Index("idx_patient_medication_patient_id", "patient_id"),)
 
 
 class AuditLog(Base):

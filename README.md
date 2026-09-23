@@ -4,10 +4,10 @@ A cross-hospital health management platform for Pakistan's private healthcare se
 
 Patients in Pakistan carry their medical history on paper, and when the paper is lost the history is gone. CuraNode gives every patient one portable **Medical Passport** that they own and that any clinician they authorise can read instantly, from any participating facility.
 
-> **Project status — authentication core, Google OAuth, and Medical Passport implemented.**
-> This repository currently implements **three** features: *Authentication & Role-Based Access* (password + Google OAuth), *OAuth Onboarding*, and *Medical Passport (FR1)*. Registration, sign-in (password and Google), sessions, role gates, first-time-OAuth-user onboarding, and passport number generation/display are complete and tested. Appointments, document OCR, and the AI orchestrator described in `docs/PRD.md` are **not built yet**.
+> **Project status — authentication core, Google OAuth, Medical Passport, and the patient profile implemented.**
+> This repository currently implements **four** features: *Authentication & Role-Based Access* (password + Google OAuth), *OAuth Onboarding*, *Medical Passport (FR1)*, and the *Patient Profile (FR2)*. Registration, sign-in (password and Google), sessions, role gates, first-time-OAuth-user onboarding, passport number generation/display, and a patient's own basic details / allergies / chronic conditions / current medications (view, add, edit, soft-remove) are complete and tested. Appointments, document OCR, and the AI orchestrator described in `docs/PRD.md` are **not built yet**.
 >
-> Identity is delegated to **Supabase Auth**, and the database is **Supabase Postgres** — shared with the wider CuraNode-AI product, so this repo's tables (`user_profile`, `clinic`, `patient`, `doctor`, `clinic_staff`, `doctor_affiliation`) match that shared schema rather than inventing parallel ones. See [How authentication works](#how-authentication-works) below.
+> Identity is delegated to **Supabase Auth**, and the database is **Supabase Postgres** — shared with the wider CuraNode-AI product, so this repo's tables (`user_profile`, `clinic`, `patient`, `doctor`, `clinic_staff`, `doctor_affiliation`, `allergy`, `chronic_condition`) match that shared schema rather than inventing parallel ones. See [How authentication works](#how-authentication-works) and [How the patient profile works](#how-the-patient-profile-works) below.
 
 ---
 
@@ -30,6 +30,7 @@ Open **http://127.0.0.1:8000** — it redirects to the sign-in page.
 | `/en/login` · `/ur/login` | Sign in, English or Urdu |
 | `/en/register` | Create a patient or doctor account |
 | `/en/onboarding` | First-time Google sign-in users choose a role here |
+| `/en/patient/profile` · `/ur/patient/profile` | A signed-in patient's own basic details, allergies, chronic conditions, and current medications |
 | `/docs` | OpenAPI reference for the JSON API |
 | `/healthz` | Health check |
 
@@ -41,7 +42,7 @@ Seeded by the script above — created as real Supabase Auth users, visible in y
 
 | Email | Role | Notes |
 |---|---|---|
-| `ayesha.raza@example.com` | Patient | Has a Medical Passport number |
+| `ayesha.raza@example.com` | Patient | Has a Medical Passport number; sign in and open **My profile** to see it |
 | `adnan.haleem@example.com` | Doctor | Verified — full doctor access |
 | `nadia.iqbal@example.com` | Doctor | **Unverified** — blocked from all clinical routes; defaults to Urdu |
 | `front.desk@example.com` | Clinic admin (`role = "admin"`) | Lands on a placeholder |
@@ -74,16 +75,18 @@ backend/
     db/                models (mapped onto the shared Supabase schema), async session
     identity/          router · service · schemas · security · oauth (Supabase Auth + Google sign-in)
     audit/              append-only audit writer
+    profile/            patient profile (FR2): schemas · service · router — basics, allergies, conditions, medications
     i18n/               en/ur message catalogues
-    web/                server-rendered page routes and form handling (incl. OAuth + onboarding routes)
+    web/                server-rendered page routes and form handling (incl. OAuth + onboarding + patient-profile routes)
   ops/scripts/          synthetic seed data (creates Supabase Auth users + app rows)
 alembic/                 database migrations (additive-only — see Known deviations)
 frontend/
-  templates/            Jinja2 — base, auth/{login,register,onboarding,oauth_complete}, shell, partials
+  templates/            Jinja2 — base, auth/{login,register,onboarding,oauth_complete}, patient/profile, shell, partials
   static/css/            tokens.css (design tokens) + app.css
-  static/js/             progressive enhancement only
-tests/                   78 tests, run against in-memory SQLite + a fake Supabase client
+  static/js/             progressive enhancement only (auth.js, profile.js)
+tests/                   155 tests, run against in-memory SQLite + a fake Supabase client
 docs/                    PRD · TDD · DESIGN · app-foundation · prompts/oauth.md (OAuth plan)
+.claude/specs/           patient_profile_spec.md — the source of truth for the patient profile feature
 ```
 
 ## Stack
@@ -133,11 +136,26 @@ Off by default (`OAUTH_ENABLED=false`) — see [Configuration](#configuration) t
 
 ### Endpoints
 
-**JSON API** (`/api/v1`) — `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /me`, `GET /clinics`. (OAuth is web-only; there's no JSON equivalent.)
+**JSON API** (`/api/v1`) — `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /me`, `GET /clinics`. (OAuth is web-only; there's no JSON equivalent.) Patient profile: `GET|PATCH /me/profile`, `POST|PATCH|DELETE /me/allergies[/{id}]`, `POST|PATCH|DELETE /me/conditions[/{id}]`, `POST|PATCH|DELETE /me/medications[/{id}]` — all behind `PatientDep` and a per-patient write rate limit.
 
-**Pages** — `GET|POST /{locale}/login`, `GET|POST /{locale}/register`, `POST /{locale}/logout`, `POST /{locale}/auth/oauth/google`, `GET /auth/callback` (not locale-prefixed — it's the fixed redirect URI registered with Supabase), `GET|POST /{locale}/onboarding`, and the role-gated areas `GET /{locale}/patient`, `/{locale}/doctor`, `/{locale}/admin`
+**Pages** — `GET|POST /{locale}/login`, `GET|POST /{locale}/register`, `POST /{locale}/logout`, `POST /{locale}/auth/oauth/google`, `GET /auth/callback` (not locale-prefixed — it's the fixed redirect URI registered with Supabase), `GET|POST /{locale}/onboarding`, the role-gated areas `GET /{locale}/patient`, `/{locale}/doctor`, `/{locale}/admin`, and `GET|POST /{locale}/patient/profile[/allergies|conditions|medications[/{id}[/remove]]]` for the patient profile.
 
 Locale is a path prefix, so switching language is a route change that keeps you on the same page.
+
+---
+
+## How the patient profile works
+
+A signed-in patient's **My profile** page (`/{locale}/patient/profile`) and its matching JSON API (`/api/v1/me/...`) let them view and maintain their own basic details, allergies, chronic conditions, and current medications. The passport number, sign-in email, and role are always read-only here.
+
+- **One service layer, two front doors.** `backend/app/profile/service.py` holds every business rule; both the JSON API (`profile/router.py`) and the server-rendered page (handlers in `web/router.py`) call the same functions, so a rule is never implemented twice.
+- **Nothing is ever hard-deleted.** Removing an allergy or medication sets `removed_at`; removing a chronic condition sets `status = 'resolved'`. The row stays in the database — only soft-removed and never shown again. Editing an entry keeps its history: every successful add, edit, or removal writes one row to `audit_log` in the same transaction, with before/after values for clinical fields (never for `notes`, which may hold free-text PII).
+- **An entry is editable only by whoever recorded it.** `recorded_by == caller's user_id` is the whole rule — a `NULL` `recorded_by` (a legacy row) or another user's id (a clinician's entry) is shown as "Recorded by a clinician" with no Edit/Remove controls, and the API returns `403 NOT_EDITABLE` if you try anyway. A patient can never erase something a clinician wrote.
+- **Supabase RLS does not protect these queries.** This app connects to Postgres as `postgres` with `BYPASSRLS`, so every query in `profile/service.py` filters by the caller's own `patient_id` in application code. The new `patient_medication` table still gets RLS policies (mirroring the shared tables) so it isn't left open through Supabase's own Data API — that's a different door this app doesn't use, but others might.
+- **Ownership isolation is airtight.** A foreign entry id, a nonexistent one, and an id belonging to an already-removed entry all return the *identical* `404 NOT_FOUND` body — so an id can never be probed to learn whether it belongs to someone else.
+- **Every form works without JavaScript.** Add, edit, and remove are all plain HTML forms (POST + redirect); removing an entry is a two-step `<details>` confirmation, no confirm dialog required. `profile.js` only adds a submit-button spinner.
+
+See `.claude/specs/patient_profile_spec.md` for the full business-rule (`BL-01`…`BL-36`) and acceptance-criteria (`AC-01`…`AC-26`) numbering this feature was built against — it takes precedence over `docs/TDD.md` wherever the two disagree, since the TDD predates the reconciliation with the shared database schema.
 
 ---
 
@@ -159,6 +177,8 @@ Copy `.env.example` to `.env` and fill in your Supabase project's values (Projec
 | `PUBLIC_BASE_URL` | `http://127.0.0.1:8000` | This app's absolute base URL — builds the OAuth `redirect_to`. Must be `https://` in `pilot` |
 | `OAUTH_PROVIDERS` | `google` | Comma-separated allow-list; only `google` is implemented |
 | `OAUTH_STATE_TTL_S` | `600` | How long a pending Google sign-in stays valid |
+| `PROFILE_WRITE_RATE_LIMIT_PER_MINUTE` | `30` | Patient-profile write requests (API + web) one patient may make per 60-second window |
+| `PROFILE_MAX_ENTRIES_PER_LIST` | `50` | Maximum active allergies / conditions / medications per patient, per list |
 
 No JWT secret to configure — access tokens are verified against the project's public JWKS, fetched from `{SUPABASE_URL}/auth/v1/.well-known/jwks.json`.
 
@@ -174,7 +194,7 @@ To turn Google sign-in on, three things need to line up:
 ## Development
 
 ```bash
-uv run pytest -q                    # 78 tests — in-memory SQLite + a fake Supabase client, no network calls
+uv run pytest -q                    # 155 tests — in-memory SQLite + a fake Supabase client, no network calls
 uv run ruff check backend tests     # lint
 uv run ruff format backend tests    # format
 uv run alembic upgrade head         # apply migrations (additive only)
@@ -183,7 +203,7 @@ uv run alembic revision -m "..."    # new migration (hand-write it — see Known
 
 The dev server reloads on changes to `backend/`, `frontend/templates/`, and `frontend/static/`.
 
-Tests run against an in-memory SQLite database with `tests/fakes.py`'s `FakeSupabaseAuth` standing in for Supabase Auth (real JWTs, HS256-signed with a test-only secret — production verifies ES256 against Supabase's real JWKS instead). `tests/test_auth.py` covers the password API and security properties; `tests/test_web.py` covers the rendered pages, forms, role gating, and Urdu/RTL; `tests/test_oauth.py` covers the full Google sign-in flow (state binding, replay/CSRF rejection, onboarding, email collision, lockout/suspension) end-to-end against `FakeSupabaseAuth`'s PKCE code-exchange stand-in; `tests/test_oauth_primitives.py` and `tests/test_settings.py` cover the OAuth helper functions and config guards in isolation.
+Tests run against an in-memory SQLite database with `tests/fakes.py`'s `FakeSupabaseAuth` standing in for Supabase Auth (real JWTs, HS256-signed with a test-only secret — production verifies ES256 against Supabase's real JWKS instead). `tests/test_auth.py` covers the password API and security properties; `tests/test_web.py` covers the rendered pages, forms, role gating, and Urdu/RTL; `tests/test_oauth.py` covers the full Google sign-in flow (state binding, replay/CSRF rejection, onboarding, email collision, lockout/suspension) end-to-end against `FakeSupabaseAuth`'s PKCE code-exchange stand-in; `tests/test_oauth_primitives.py` and `tests/test_settings.py` cover the OAuth helper functions and config guards in isolation; `tests/test_profile.py` covers the patient profile end-to-end (one test per acceptance criterion, `AC-01`…`AC-25`) and `tests/test_profile_schemas.py` covers its validation helpers in isolation.
 
 **A note on `.env` and the test suite:** `Settings` reads `.env` regardless of `ENVIRONMENT`, and `conftest.py` doesn't override every OAuth variable — so a developer's local `OAUTH_ENABLED=true` in `.env` is visible to the test process too. Any test asserting OAuth-disabled behaviour must `monkeypatch` `oauth_enabled` explicitly rather than relying on it being off by default (see `tests/test_oauth.py::test_t2_disabled_oauth_is_refused`).
 
@@ -199,13 +219,17 @@ Tests run against an in-memory SQLite database with `tests/fakes.py`'s `FakeSupa
 | `docs/app-foundation.md` | Implementation baseline and known documentation gaps |
 | `docs/prompts/oauth.md` | Google OAuth feature plan — architecture, hazards, file-by-file design |
 | `docs/prompts/oauth-exec.md` | The phased execution prompt the OAuth implementation was built from |
+| `.claude/specs/patient_profile_spec.md` | Patient profile (FR2) feature spec — functional/business rules (`BL-01`…`BL-36`), API contract, and test plan (`AC-01`…`AC-26`). Wins over `docs/TDD.md` where they disagree |
+| `.claude/specs/SPEC_patient_profile_plan.md` | The execution plan the patient-profile implementation was built from |
 
 ## Known deviations
 
 Recorded rather than hidden.
 
-- **The database schema is shared, not owned.** `user_profile` / `clinic` / `patient` / `doctor` / `clinic_staff` / `doctor_affiliation` are pre-existing tables from the wider CuraNode-AI product's Supabase project — this repo's `db/models.py` maps onto them (different column and table names than the feature spec originally described) rather than creating its own. Only `audit_log` is owned outright here.
-- **Alembic migrations are additive-only and hand-written**, not autogenerated — the shared tables above are never created or dropped by this repo's migration, only extended with the columns this feature needs (`user_profile.failed_logins/locked_until/last_login_at/is_synthetic/full_name`, `doctor.verified_by`).
+- **The database schema is shared, not owned.** `user_profile` / `clinic` / `patient` / `doctor` / `clinic_staff` / `doctor_affiliation` / `allergy` / `chronic_condition` are pre-existing tables from the wider CuraNode-AI product's Supabase project — this repo's `db/models.py` maps onto them (different column and table names than the feature spec originally described) rather than creating its own. Only `audit_log` and `patient_medication` are owned outright here.
+- **Alembic migrations are additive-only and hand-written**, not autogenerated — the shared tables above are never created or dropped by this repo's migrations, only extended with the columns each feature needs (`user_profile.failed_logins/locked_until/last_login_at/is_synthetic/full_name`, `doctor.verified_by`; the patient profile's migration adds `allergy.recorded_by/updated_at/removed_at` and `chronic_condition.recorded_by/recorded_at/updated_at`, plus the new `patient_medication` table with RLS policies).
+- **Supabase RLS is not this app's authorization boundary.** The app connects to Postgres as `postgres` with `BYPASSRLS`, so row-level security policies (including the ones this repo's own migration adds to `patient_medication`) protect Supabase's own Data API, not this backend — every query here scopes itself explicitly by `patient_id` in application code.
+- **A patient-profile entry is never hard-deleted.** Allergies and medications get `removed_at` set; a chronic condition moves to `status='resolved'`. There's no "restore" or history view in this feature — see the patient-profile spec's "Out of scope" section.
 - **The clinic-admin role's value is `"admin"`**, not `"clinic_admin"` — the shared schema's `user_profile_role_check` CHECK constraint only allows `patient`/`doctor`/`staff`/`admin`. `UserRole.CLINIC_ADMIN` (the Python enum member name) is unchanged; only its `.value` differs from the original feature spec.
 - **Timing-indistinguishability between a wrong password and an unknown email is no longer guaranteed exactly** — password verification is now a network call to Supabase's GoTrue service, so this app controls response *shape* but not response *timing* the way a local constant-cost Argon2 check did.
 - **An in-process cache** stands in for the Redis the TDD specifies, used now only for rate limiting and lockout counters (refresh-token state moved to Supabase). Single-worker only.
@@ -216,4 +240,4 @@ Recorded rather than hidden.
 
 ## Not implemented
 
-Password reset (the link renders disabled), account linking (a Google identity cannot be attached to an existing password account, or vice versa), Apple/Microsoft/other OAuth providers, the clinic-administrator console, the doctor-verification queue, and email verification. Everything else in `docs/PRD.md` — appointments and queueing, document upload and OCR, the AI orchestrator and its four capabilities — is future work.
+Password reset (the link renders disabled), account linking (a Google identity cannot be attached to an existing password account, or vice versa), Apple/Microsoft/other OAuth providers, the clinic-administrator console, the doctor-verification queue, and email verification. A doctor or clinic-admin view of a patient's profile (FR21, gated by consent — `consent_grant`, `access_log`) is not built; a patient's profile page is visible only to that patient. There is no history/restore view for removed entries, no PDF export, and no linking of a current medication to the shared `medicine` catalogue or a prescription. Everything else in `docs/PRD.md` — appointments and queueing, document upload and OCR, the AI orchestrator and its four capabilities — is future work.

@@ -12,6 +12,7 @@ place" with no client state to juggle.
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from typing import Annotated, Any
 from urllib.parse import urlencode
 
@@ -24,9 +25,26 @@ from supabase_auth.errors import AuthApiError
 
 from ..audit import writer as audit
 from ..cache import cache, oauth_state_key
+from ..db import types as dbtypes
 from ..db.models import Clinic, Profile, UserRole
-from ..deps import OptionalActorDep, SessionDep, enforce_auth_rate_limit
-from ..errors import AppError, RateLimited, Unauthenticated, ValidationFailed
+from ..deps import (
+    Actor,
+    OptionalActorDep,
+    SessionDep,
+    check_profile_write_rate,
+    enforce_auth_rate_limit,
+)
+from ..errors import (
+    AppError,
+    DuplicateEntry,
+    ListFull,
+    NotEditable,
+    NotFound,
+    RateLimited,
+    Unauthenticated,
+    ValidationFailed,
+    message_params,
+)
 from ..i18n.catalogue import direction, normalise_locale, translate
 from ..identity import oauth, service
 from ..identity.router import clear_session_cookies, set_session_cookies
@@ -38,6 +56,8 @@ from ..identity.schemas import (
     PatientRegisterRequest,
 )
 from ..paths import TEMPLATES_DIR
+from ..profile import schemas as profile_schemas
+from ..profile import service as profile_service
 from ..settings import settings
 
 OAUTH_STATE_COOKIE = "cn_oauth_state"
@@ -622,10 +642,13 @@ async def _guarded(
         "admin": "admin.dashboard.title",
     }[actor.role]
 
+    is_patient = actor.role == UserRole.PATIENT.value
     return _render(
         request,
         "shell.html",
         loc,
+        nav_items=_patient_nav(loc, current="dashboard") if is_patient else [],
+        profile_href=f"/{loc}/patient/profile" if is_patient else None,
         crumb=translate(ROLE_LABEL[actor.role], loc),
         page_title=translate(title_key, loc),
         full_name=me.full_name,
@@ -656,3 +679,469 @@ async def admin_area(
     request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
 ) -> Response:
     return await _guarded(request, locale, session, actor, "admin")
+
+
+# ── Patient profile (FR2, profile SPEC §4.7–4.8) ────────────────────────
+def _patient_nav(loc: str, *, current: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "href": f"/{loc}/patient",
+            "label": translate("nav.dashboard", loc),
+            "current": current == "dashboard",
+        },
+        {
+            "href": f"/{loc}/patient/profile",
+            "label": translate("nav.profile", loc),
+            "current": current == "profile",
+        },
+    ]
+
+
+def _patient_page_guard(request: Request, locale: str, actor: Actor | None) -> Response | None:
+    """The profile's AC-03 redirects, mirroring `_guarded()`. Raises nothing;
+    returns the redirect, or None when the caller may proceed."""
+    loc = normalise_locale(locale)
+    if actor is None:
+        return RedirectResponse(f"/{loc}/login?next=/{loc}/patient/profile", status_code=303)
+    if actor.role != UserRole.PATIENT.value:
+        return RedirectResponse(f"/{loc}/{_area(actor.role)}", status_code=303)
+    if not actor.onboarding_complete:
+        return RedirectResponse(f"/{loc}/onboarding", status_code=303)
+    return None
+
+
+# URL section -> everything the generic entry handlers need for that kind.
+_ENTRY_KINDS: dict[str, dict[str, Any]] = {
+    "allergies": {
+        "kind": "allergy",
+        "fields": ("substance", "reaction", "severity"),
+        "create": profile_schemas.AllergyCreate,
+        "update": profile_schemas.AllergyUpdate,
+        "add_fn": profile_service.add_allergy,
+        "update_fn": profile_service.update_allergy,
+        "remove_fn": profile_service.remove_allergy,
+    },
+    "conditions": {
+        "kind": "condition",
+        "fields": ("name", "onset_date"),
+        "create": profile_schemas.ConditionCreate,
+        "update": profile_schemas.ConditionUpdate,
+        "add_fn": profile_service.add_condition,
+        "update_fn": profile_service.update_condition,
+        "remove_fn": profile_service.remove_condition,
+    },
+    "medications": {
+        "kind": "medication",
+        "fields": ("name", "strength", "frequency", "started_on", "notes"),
+        "create": profile_schemas.MedicationCreate,
+        "update": profile_schemas.MedicationUpdate,
+        "add_fn": profile_service.add_medication,
+        "update_fn": profile_service.update_medication,
+        "remove_fn": profile_service.remove_medication,
+    },
+}
+_KIND_TO_SECTION = {spec["kind"]: section for section, spec in _ENTRY_KINDS.items()}
+
+_BASIC_FIELDS = (
+    "full_name",
+    "date_of_birth",
+    "gender",
+    "blood_group",
+    "phone_e164",
+    "emergency_contact",
+)
+
+# BL-31 — the only `saved` values honoured; user input is never reflected.
+_SAVED: dict[str, tuple[str, str]] = {
+    "basics.updated": ("basics", "profile.saved.basics"),
+    **{
+        f"{spec['kind']}.{event}": (section, f"profile.saved.{event}")
+        for section, spec in _ENTRY_KINDS.items()
+        for event in ("added", "updated", "removed")
+    },
+}
+
+_SEVERITY_BADGE = {
+    "severe": "badge--err",
+    "moderate": "badge--warn",
+    "mild": "badge--ok",
+    "unknown": "badge--neutral",
+}
+
+
+def _as_form_value(value: Any) -> str:
+    """How a stored value appears in a form control (and in BL-14 compares)."""
+    if value is None:
+        return ""
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
+
+
+def _choice_options(
+    loc: str, values: tuple[str, ...], stored: str | None, *, label_prefix: str | None
+) -> list[dict[str, str]]:
+    options = [
+        {"value": v, "label": translate(f"{label_prefix}.{v}", loc) if label_prefix else v}
+        for v in values
+    ]
+    # A legacy stored value outside the allowed set is shown and kept selected,
+    # so saving the form unchanged sends it back untouched (BL-14).
+    if stored and stored not in values:
+        options.append({"value": stored, "label": stored})
+    return options
+
+
+def _entry_values(kind: str, entry: Any) -> dict[str, str]:
+    fields = _ENTRY_KINDS[_KIND_TO_SECTION[kind]]["fields"]
+    return {f: _as_form_value(getattr(entry, f)) for f in fields}
+
+
+def _entry_parts(loc: str) -> Any:
+    """The muted secondary line under an entry's name, empty parts omitted."""
+
+    def parts(kind: str, e: Any) -> list[str]:
+        if kind == "allergy":
+            out = [e.reaction]
+        elif kind == "condition":
+            onset = e.onset_date
+            out = [f"{translate('field.onset_date', loc)} {onset}" if onset else None]
+        else:
+            since = e.started_on
+            out = [
+                e.strength,
+                e.frequency,
+                f"{translate('field.started_on', loc)} {since}" if since else None,
+            ]
+        return [p for p in out if p]
+
+    return parts
+
+
+def _severity_label(loc: str) -> Any:
+    def label(severity: str) -> str:
+        if severity in profile_schemas.SEVERITIES:
+            return translate(f"severity.{severity}", loc)
+        return severity  # legacy value, shown raw
+
+    return label
+
+
+async def _render_profile(
+    request: Request,
+    loc: str,
+    session: SessionDep,
+    actor: Actor,
+    *,
+    status_code: int = 200,
+    form_state: dict[str, Any] | None = None,
+    saved: dict[str, str] | None = None,
+    edit: dict[str, str] | None = None,
+    page_error: str | None = None,
+) -> Response:
+    """Render the full page from the database, overlaying the one failed
+    form's submitted values and errors (BL-30)."""
+    try:
+        profile = await profile_service.get_profile(session, actor)
+    except NotFound:
+        return RedirectResponse(f"/{loc}/onboarding", status_code=303)
+
+    basics_values = {
+        "full_name": profile.full_name,
+        "date_of_birth": _as_form_value(profile.date_of_birth),
+        "gender": _as_form_value(profile.gender),
+        "blood_group": _as_form_value(profile.blood_group),
+        "phone_e164": _as_form_value(profile.phone_e164),
+        "emergency_contact": _as_form_value(profile.emergency_contact),
+    }
+
+    def form_failed(form_key: str) -> bool:
+        return bool(form_state) and form_state.get("form") == form_key
+
+    def severity_options_for(value: str | None) -> list[dict[str, str]]:
+        return _choice_options(loc, profile_schemas.SEVERITIES, value, label_prefix="severity")
+
+    return _render(
+        request,
+        "patient/profile.html",
+        loc,
+        status_code=status_code,
+        # The language switch always targets the page, never a POST-only path.
+        path_suffix="/patient/profile",
+        crumb=translate("auth.role.patient", loc),
+        page_title=translate("profile.title", loc),
+        nav_items=_patient_nav(loc, current="profile"),
+        profile=profile,
+        initials=_initials(profile.full_name),
+        today=dbtypes.today_pk().isoformat(),
+        basics_values=basics_values,
+        gender_options=_choice_options(
+            loc, profile_schemas.GENDERS, profile.gender, label_prefix="gender"
+        ),
+        blood_group_options=_choice_options(
+            loc, profile_schemas.BLOOD_GROUPS, profile.blood_group, label_prefix=None
+        ),
+        severity_options_for=severity_options_for,
+        entry_values=_entry_values,
+        entry_parts=_entry_parts(loc),
+        severity_badge=lambda s: _SEVERITY_BADGE.get(s, "badge--neutral"),
+        severity_label=_severity_label(loc),
+        form_failed=form_failed,
+        form_state=form_state,
+        saved=saved,
+        edit=edit,
+        page_error=page_error,
+    )
+
+
+def _field_errors(exc: ValidationError, loc: str) -> dict[str, str]:
+    errors: dict[str, str] = {}
+    for err in exc.errors():
+        field = str(err["loc"][0]) if err["loc"] else "__all__"
+        errors.setdefault(field, translate(err["msg"], loc, **(err.get("ctx") or {})))
+    return errors
+
+
+async def _profile_failure(
+    request: Request,
+    loc: str,
+    session: SessionDep,
+    actor: Actor,
+    exc: Exception,
+    *,
+    form: str,
+    section: str,
+    values: dict[str, Any],
+    name_field: str | None = None,
+) -> Response:
+    """Map a failed web mutation onto the re-rendered page (SPEC §4.8)."""
+    await session.rollback()
+
+    def state(errors: dict[str, str], banner: str | None = None) -> dict[str, Any]:
+        return {
+            "form": form,
+            "section": section,
+            "values": values,
+            "errors": errors,
+            "banner": banner,
+        }
+
+    async def page(code: int, **kw: Any) -> Response:
+        return await _render_profile(request, loc, session, actor, status_code=code, **kw)
+
+    if isinstance(exc, ValidationError):
+        return await page(422, form_state=state(_field_errors(exc, loc)))
+    if isinstance(exc, ValidationFailed):
+        fields = exc.details.get("fields", {})
+        return await page(422, form_state=state({k: translate(v, loc) for k, v in fields.items()}))
+    if isinstance(exc, DuplicateEntry):
+        field = exc.details.get("field", name_field or "name")
+        return await page(409, form_state=state({field: translate(exc.message_key, loc)}))
+    if isinstance(exc, ListFull):
+        banner = translate(exc.message_key, loc, **message_params(exc))
+        return await page(422, form_state=state({}, banner))
+    if isinstance(exc, NotEditable):
+        return await page(403, form_state=state({}, translate(exc.message_key, loc)))
+    if isinstance(exc, NotFound):
+        return await page(404, page_error=translate("errors.not_found", loc))
+    if isinstance(exc, RateLimited):
+        return await page(429, page_error=translate("errors.rate_limited", loc))
+    return await page(500, page_error=translate("errors.internal", loc))
+
+
+def _submitted(form: Any, fields: tuple[str, ...]) -> dict[str, str]:
+    """Only the named fields are read; anything else posted is ignored (BL-05)."""
+    return {f: str(form[f]) for f in fields if f in form}
+
+
+def _to_payload(submitted: dict[str, str], stored: dict[str, str] | None) -> dict[str, Any]:
+    """Empty -> None, and (BL-14) drop fields whose value equals what's stored,
+    so an untouched legacy value never blocks a save."""
+    payload: dict[str, Any] = {}
+    for field, raw in submitted.items():
+        if stored is not None and raw.strip() == stored.get(field, ""):
+            continue
+        payload[field] = raw if raw.strip() else None
+    return payload
+
+
+def _parse_entry_id(entry_id: str) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(entry_id)
+    except ValueError:
+        return None
+
+
+def _saved_redirect(loc: str, key: str, section: str) -> Response:
+    return RedirectResponse(f"/{loc}/patient/profile?saved={key}#{section}", status_code=303)
+
+
+@router.get("/{locale}/patient/profile", response_class=HTMLResponse)
+async def patient_profile_page(
+    request: Request,
+    locale: str,
+    session: SessionDep,
+    actor: OptionalActorDep,
+    saved: str | None = None,
+    edit: str | None = None,
+    id: str | None = None,
+) -> Response:
+    if (redirect := _patient_page_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+
+    saved_banner = None
+    if saved in _SAVED:
+        section, key = _SAVED[saved]
+        saved_banner = {"section": section, "message": translate(key, loc)}
+
+    # BL-32 — honoured only for an own, active, editable entry: the template
+    # matches the id against the rendered editable rows, so anything else is
+    # silently ignored (no error, no existence oracle).
+    edit_state = None
+    parsed_id = _parse_entry_id(id) if id else None
+    if edit in _KIND_TO_SECTION and parsed_id is not None:
+        edit_state = {"kind": edit, "id": str(parsed_id)}
+
+    return await _render_profile(request, loc, session, actor, saved=saved_banner, edit=edit_state)
+
+
+@router.post("/{locale}/patient/profile")
+async def patient_profile_basics_submit(
+    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _patient_page_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    submitted = _submitted(await request.form(), _BASIC_FIELDS)
+
+    try:
+        await check_profile_write_rate(actor)
+        current = await profile_service.get_profile(session, actor)
+        stored = {f: _as_form_value(getattr(current, f)) for f in _BASIC_FIELDS}
+        body = profile_schemas.ProfileUpdateRequest.model_validate(_to_payload(submitted, stored))
+        await profile_service.update_profile(
+            session, actor, body, user_agent=request.headers.get("user-agent")
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped per SPEC §4.8
+        return await _profile_failure(
+            request, loc, session, actor, exc, form="basics", section="basics", values=submitted
+        )
+    return _saved_redirect(loc, "basics.updated", "basics")
+
+
+@router.post("/{locale}/patient/profile/{section}")
+async def patient_entry_add_submit(
+    request: Request, locale: str, section: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _patient_page_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    spec = _ENTRY_KINDS.get(section)
+    if spec is None:
+        return await _profile_failure(
+            request, loc, session, actor, NotFound(), form="", section="", values={}
+        )
+    kind = spec["kind"]
+    submitted = _submitted(await request.form(), spec["fields"])
+
+    try:
+        await check_profile_write_rate(actor)
+        body = spec["create"].model_validate(_to_payload(submitted, None))
+        await spec["add_fn"](session, actor, body, user_agent=request.headers.get("user-agent"))
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped per SPEC §4.8
+        return await _profile_failure(
+            request,
+            loc,
+            session,
+            actor,
+            exc,
+            form=f"{kind}-new",
+            section=section,
+            values=submitted,
+            name_field=spec["fields"][0],
+        )
+    return _saved_redirect(loc, f"{kind}.added", section)
+
+
+@router.post("/{locale}/patient/profile/{section}/{entry_id}")
+async def patient_entry_edit_submit(
+    request: Request,
+    locale: str,
+    section: str,
+    entry_id: str,
+    session: SessionDep,
+    actor: OptionalActorDep,
+) -> Response:
+    if (redirect := _patient_page_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    spec = _ENTRY_KINDS.get(section)
+    parsed_id = _parse_entry_id(entry_id)
+    if spec is None or parsed_id is None:
+        # A malformed id is NotFound on the web, not a raw 422 (SPEC §4.7).
+        return await _profile_failure(
+            request, loc, session, actor, NotFound(), form="", section="", values={}
+        )
+    kind = spec["kind"]
+    submitted = _submitted(await request.form(), spec["fields"])
+
+    try:
+        await check_profile_write_rate(actor)
+        current = await profile_service.get_profile(session, actor)
+        own = next((e for e in getattr(current, section) if e.id == parsed_id and e.editable), None)
+        stored = _entry_values(kind, own) if own is not None else None
+        body = spec["update"].model_validate(_to_payload(submitted, stored))
+        await spec["update_fn"](
+            session, actor, parsed_id, body, user_agent=request.headers.get("user-agent")
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped per SPEC §4.8
+        return await _profile_failure(
+            request,
+            loc,
+            session,
+            actor,
+            exc,
+            form=f"{kind}-{parsed_id}",
+            section=section,
+            values=submitted,
+            name_field=spec["fields"][0],
+        )
+    return _saved_redirect(loc, f"{kind}.updated", section)
+
+
+@router.post("/{locale}/patient/profile/{section}/{entry_id}/remove")
+async def patient_entry_remove_submit(
+    request: Request,
+    locale: str,
+    section: str,
+    entry_id: str,
+    session: SessionDep,
+    actor: OptionalActorDep,
+) -> Response:
+    if (redirect := _patient_page_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    spec = _ENTRY_KINDS.get(section)
+    parsed_id = _parse_entry_id(entry_id)
+    if spec is None or parsed_id is None:
+        return await _profile_failure(
+            request, loc, session, actor, NotFound(), form="", section="", values={}
+        )
+    kind = spec["kind"]
+
+    try:
+        await check_profile_write_rate(actor)
+        await spec["remove_fn"](
+            session, actor, parsed_id, user_agent=request.headers.get("user-agent")
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped per SPEC §4.8
+        return await _profile_failure(
+            request, loc, session, actor, exc, form="", section=section, values={}
+        )
+    return _saved_redirect(loc, f"{kind}.removed", section)
