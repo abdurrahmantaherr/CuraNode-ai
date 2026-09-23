@@ -1,0 +1,26 @@
+{#- Signed-in topbar, shared by the dashboard shell and the patient profile.
+    Expects `crumb`, `page_title`, and optional `nav_items` — a list of
+    {href, label, current}. Doctors and admins pass none, so their topbar
+    renders exactly as before. -#}
+<header class="topbar">
+  <div>
+    <div class="topbar__crumb">{{ crumb }}</div>
+    <div class="topbar__title">{{ page_title }}</div>
+  </div>
+  <div class="topbar__spacer"></div>
+  <div class="topbar__actions">
+    {% if nav_items %}
+      <nav class="topnav" aria-label="{{ crumb }}">
+        {% for item in nav_items %}
+          <a class="topnav__link" href="{{ item.href }}"
+             {% if item.current %}aria-current="page"{% endif %}>{{ item.label }}</a>
+        {% endfor %}
+      </nav>
+    {% endif %}
+    <a class="btn btn--secondary" href="/{{ other_locale }}{{ path_suffix }}"
+       hreflang="{{ other_locale }}">{{ t('nav.language') }}</a>
+    <form method="post" action="/{{ locale }}/logout">
+      <button class="btn btn--secondary" type="submit">{{ t('nav.sign_out') }}</button>
+    </form>
+  </div>
+</header>
