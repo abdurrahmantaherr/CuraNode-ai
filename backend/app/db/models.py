@@ -335,6 +335,35 @@ class PatientMedication(Base):
     __table_args__ = (Index("idx_patient_medication_patient_id", "patient_id"),)
 
 
+# ── Medical Passport consent (FR4) ──────────────────────────────────────
+class ConsentGrant(Base):
+    """consent_grants — FR4/NFR16/D2.
+
+    Branch B: created by this repo's migration. If Branch A (table pre-exists
+    in shared schema), remove the migration and keep only this mapping.
+    """
+
+    __tablename__ = "consent_grants"
+
+    id: Mapped[uuid.UUID] = mapped_column("grant_id", Uuid, primary_key=True, default=uuid7)
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient.patient_id", ondelete="CASCADE"), nullable=False
+    )
+    grantee_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    doctor_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("doctor.doctor_id"), nullable=True
+    )
+    clinic_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("clinic.clinic_id"), nullable=True
+    )
+    granted_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
+    expires_at: Mapped[datetime | None] = _ts(nullable=True)
+    revoked_at: Mapped[datetime | None] = _ts(nullable=True)
+    revoked_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("user_profile.user_id", ondelete="SET NULL"), nullable=True
+    )
+
+
 class AuditLog(Base):
     """FR5, NFR17 — append-only. Never updated or deleted by the application.
 
