@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     profile_write_rate_limit_per_minute: int = 30
     profile_max_entries_per_list: int = 50
 
+    # ── Medical Passport consent (FR4) ───────────────────────────────────
+    consent_write_rate_limit_per_minute: int = 10
+
     def model_post_init(self, _context: object) -> None:
         # BL-16 — failing loudly at boot beats running insecurely or against
         # a misconfigured Supabase project.
