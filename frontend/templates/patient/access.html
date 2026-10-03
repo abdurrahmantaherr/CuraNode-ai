@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{#- Access management (FR4). Every control works without JavaScript: the
+    grant form posts and redirects (PRG), the Doctor/Clinic choice is native
+    radios, and Revoke is a two-step <details> confirmation, as on the
+    profile page. profile.js only adds the submitting-state guard.
+
+    Context (built in web/router.py::_render_access):
+      grants         list[ConsentGrantOut] — active grants, newest first
+      grantee_types  ("doctor", "clinic")
+      form_state     {values, errors} for the grant form
+      saved          success banner text, or None
+      page_error     page-level error banner text, or None -#}
+{% import "partials/form_field.html" as f %}
+
+{% block title %}{{ t('access.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    {% if page_error %}
+      <div class="banner banner--error" role="alert">
+        <span aria-hidden="true">!</span><span>{{ page_error }}</span>
+      </div>
+    {% endif %}
+    {% if saved %}
+      <div class="banner banner--ok" role="status"><span>{{ saved }}</span></div>
+    {% endif %}
+
+    <div class="panel stack">
+      <p class="lead">{{ t('access.subtitle') }}</p>
+    </div>
+
+    <section id="active" class="panel stack" aria-labelledby="active-h">
+      <h2 id="active-h" class="panel__label">{{ t('access.section.active') }}</h2>
+      {% if grants %}
+        <ul class="entry-list">
+          {% for g in grants %}
+            <li class="entry-row">
+              <div class="entry-row__main">
+                <div class="entry-row__title">{{ g.grantee_name or t('access.grantee_unknown') }}</div>
+                <div class="mono">{{ t('access.granted_on', date=g.granted_at.date().isoformat()) }}</div>
+              </div>
+              <span class="badge badge--neutral">{{ t('access.grantee.' ~ g.grantee_type) }}</span>
+              <div class="entry-row__actions">
+                <details class="confirm">
+                  <summary class="btn btn--secondary btn--sm">{{ t('access.action.revoke') }}</summary>
+                  <form method="post" action="/{{ locale }}/patient/access/{{ g.id }}/revoke">
+                    <p class="field-help">{{ t('access.revoke_hint') }}</p>
+                    <button class="btn btn--danger btn--sm" type="submit"
+                            data-label="{{ t('access.action.confirm_revoke') }}">{{ t('access.action.confirm_revoke') }}</button>
+                  </form>
+                </details>
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty-state">{{ t('access.empty') }}</p>
+      {% endif %}
+    </section>
+
+    {% set values = form_state['values'] %}
+    {% set errors = form_state['errors'] %}
+    <section id="grant" class="panel stack" aria-labelledby="grant-h">
+      <h2 id="grant-h" class="panel__label">{{ t('access.section.grant') }}</h2>
+      <form class="stack" method="post" action="/{{ locale }}/patient/access" novalidate>
+        <fieldset class="role-fieldset">
+          <legend class="eyebrow">{{ t('access.field.grantee_type') }}</legend>
+          <div class="role-group">
+            {% for gt in grantee_types %}
+              <label class="role-tile">
+                <input class="role-tile__radio" type="radio" name="grantee_type" value="{{ gt }}"
+                       {% if values.get('grantee_type') == gt %}checked{% endif %}>
+                <span class="role-tile__name">{{ t('access.grantee.' ~ gt) }}</span>
+                <span class="role-tile__hint">{{ t('access.grantee.' ~ gt ~ '_hint') }}</span>
+              </label>
+            {% endfor %}
+          </div>
+          {% if errors.get('grantee_type') %}
+            <span class="field-error" role="alert"><span aria-hidden="true">!</span>{{ errors['grantee_type'] }}</span>
+          {% endif %}
+        </fieldset>
+        {{ f.field('grantee', t('access.field.grantee'), value=values.get('grantee', ''), errors=errors,
+                   required=True, maxlength=160, help=t('access.field.grantee_help'),
+                   id_prefix='grant-') }}
+        <div>
+          <button class="btn btn--primary" type="submit"
+                  data-label="{{ t('access.action.grant') }}">{{ t('access.action.grant') }}</button>
+        </div>
+      </form>
+    </section>
+  </main>
+</div>
+<script src="/static/js/profile.js" defer></script>
+{% endblock %}

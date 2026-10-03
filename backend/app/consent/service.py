@@ -252,3 +252,47 @@ async def revoke_grant(
     )
     await session.commit()
     return await _to_out(session, grant)
+
+
+# ── Doctor side (D2, BL-07, BL-09, BL-10) ────────────────────────────────
+# Only a grant naming this doctor counts; what a clinic grant unlocks for that
+# clinic's doctors is not yet specified. Every failure — not a verified doctor,
+# no such patient, never granted, revoked, expired — is the same `NotFound`,
+# so a lookup reveals nothing about whether a patient exists.
+async def _granted_patient(
+    session: AsyncSession, actor: Actor, condition: ColumnElement[bool]
+) -> Patient:
+    doctor = (
+        await session.execute(select(Doctor).where(Doctor.user_id == actor.user_id))
+    ).scalar_one_or_none()
+    if doctor is None or doctor.verification_status != VerificationStatus.VERIFIED:
+        raise NotFound()
+    # Checked live against the database on every call — never cached (BL-07).
+    patient = (
+        await session.execute(
+            select(Patient)
+            .join(ConsentGrant, ConsentGrant.patient_id == Patient.id)
+            .where(
+                condition,
+                ConsentGrant.grantee_type == DOCTOR,
+                ConsentGrant.grantee_id == doctor.id,
+                _active(),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if patient is None:
+        raise NotFound()
+    return patient
+
+
+async def find_patient_for_doctor(session: AsyncSession, actor: Actor, passport_no: str) -> Patient:
+    """Look a patient up by passport number — only if they granted this doctor access."""
+    return await _granted_patient(
+        session, actor, Patient.passport_no == passport_no.strip().upper()
+    )
+
+
+async def patient_for_doctor(session: AsyncSession, actor: Actor, patient_id: uuid.UUID) -> Patient:
+    """Re-check access by patient id on every page view (BL-07)."""
+    return await _granted_patient(session, actor, Patient.id == patient_id)
