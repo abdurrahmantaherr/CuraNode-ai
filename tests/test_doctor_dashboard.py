@@ -360,3 +360,15 @@ async def test_urdu_page_renders_and_passport_stays_left_to_right(client, db, do
 
 def test_catalogue_has_the_new_keys_in_both_languages():
     assert missing_keys() == {"ur": []}
+
+
+async def test_verified_doctor_page_drops_the_coming_later_placeholder(client, db, doctor):
+    # The list is the dashboard's content now; "arrives with a later feature" would be false.
+    await login(client, "dr@x.com")
+    assert in_html("dashboard.placeholder") not in (await client.get(DASH_URL)).text
+
+
+async def test_patient_dashboard_keeps_its_placeholder(client, db):
+    await make_user(db, email="pat@x.com", role=UserRole.PATIENT)
+    await login(client, "pat@x.com")
+    assert in_html("dashboard.placeholder") in (await client.get("/en/patient")).text
