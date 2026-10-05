@@ -665,7 +665,7 @@ async def _guarded(
         ]
         # D4 — who is listed is decided in the consent service, live, on every load.
         granted = await consent_service.list_patients_for_doctor(session, actor)
-        patients = build_rows(granted, locale=loc, today=date.today())
+        patients = build_rows(granted, locale=loc, today=dbtypes.utcnow().date())
         await audit.write(
             session,
             action=audit.DOCTOR_DASHBOARD_VIEW,
