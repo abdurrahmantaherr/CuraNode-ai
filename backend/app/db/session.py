@@ -23,6 +23,11 @@ engine = create_async_engine(
     settings.database_url,
     echo=False,
     future=True,
+    # Supabase's pooler closes idle connections. Check each one before use
+    # (reconnecting if it is dead) and retire them before the pooler does,
+    # otherwise the first request after an idle spell fails mid-query.
+    pool_pre_ping=True,
+    pool_recycle=300,
     # pool_size/max_overflow are Postgres-side knobs (TDD 10.2); SQLite's
     # driver does not accept them.
     **({} if _is_sqlite else {"pool_size": 20, "max_overflow": 10}),
