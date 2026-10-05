@@ -183,5 +183,11 @@
   "doctor_patient.title": "Patient",
   "doctor_patient.access_confirmed": "This patient has given you access to their record.",
   "doctor_patient.record_pending": "The record view arrives with a later feature.",
-  "doctor_patient.back": "Find another patient"
+  "doctor_patient.back": "Find another patient",
+  "doctor_dashboard.patients.title": "My patients",
+  "doctor_dashboard.col.name": "Name",
+  "doctor_dashboard.col.age": "Age",
+  "doctor_dashboard.col.gender": "Gender",
+  "doctor_dashboard.col.passport": "Passport number",
+  "doctor_dashboard.empty": "No patients have shared their record with you yet."
 }

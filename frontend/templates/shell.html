@@ -43,6 +43,10 @@
         </p>
       {% endif %}
     </div>
+
+    {% if patients is defined %}
+      {% include "doctor/_patient_list.html" %}
+    {% endif %}
   </main>
 </div>
 {% endblock %}

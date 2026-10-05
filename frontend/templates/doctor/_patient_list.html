@@ -1,0 +1,31 @@
+{#- D4 v1 — the doctor's consented patients.
+    Context: patients  list[PatientRow] (name, age, gender, passport_no, href)
+    Names are autoescaped; never use |safe here. No clinical data belongs on
+    this list. The passport number is forced left-to-right on the Urdu page. -#}
+<div class="panel" style="margin-top:var(--sp-5)">
+  <div class="panel__label">{{ t('doctor_dashboard.patients.title') }}</div>
+  {% if patients %}
+    <table class="patient-table">
+      <thead>
+        <tr>
+          <th scope="col">{{ t('doctor_dashboard.col.name') }}</th>
+          <th scope="col">{{ t('doctor_dashboard.col.age') }}</th>
+          <th scope="col">{{ t('doctor_dashboard.col.gender') }}</th>
+          <th scope="col">{{ t('doctor_dashboard.col.passport') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in patients %}
+          <tr>
+            <td><a href="{{ row.href }}">{{ row.name }}</a></td>
+            <td>{{ row.age }}</td>
+            <td>{{ row.gender }}</td>
+            <td dir="ltr" class="mono">{{ row.passport_no }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p style="margin:0;font-size:13.5px;color:var(--muted)">{{ t('doctor_dashboard.empty') }}</p>
+  {% endif %}
+</div>
