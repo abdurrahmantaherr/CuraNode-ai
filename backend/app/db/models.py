@@ -23,6 +23,7 @@ import uuid
 from datetime import date, datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -36,6 +37,7 @@ from sqlalchemy import (
 from sqlalchemy import (
     Enum as SAEnum,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from .types import utcnow, uuid7
@@ -333,6 +335,54 @@ class PatientMedication(Base):
     removed_at: Mapped[datetime | None] = _ts(nullable=True)
 
     __table_args__ = (Index("idx_patient_medication_patient_id", "patient_id"),)
+
+
+# ── Medical Passport consent (FR4) ──────────────────────────────────────
+class ConsentGrant(Base):
+    """consent_grant — FR4/NFR16/D2.
+
+    Branch A: table pre-exists in shared Supabase schema.
+    Verified against live information_schema 2026-10-01.
+    No migration written — additive columns only if needed.
+
+    Table name is singular (`consent_grant`), unlike this model's old
+    `consent_grants` guess — confirmed against the live `information_schema`,
+    not assumed. `grantee_id` is polymorphic (holds a `doctor_id` or
+    `clinic_id` depending on `grantee_type`) and intentionally has no FK, same
+    as TDD §3.4 describes; `grantee_type` is DB-constrained to
+    `'doctor'`/`'clinic'` by a CHECK constraint. There is no `revoked_by`
+    column in the live schema.
+
+    `scope_sections` is a non-nullable `jsonb` column, default `[]` (an empty
+    list, not `{}` — verified from the live column default
+    `'[]'::jsonb`), holding which record sections a grant covers. The
+    business rule is still all-or-nothing (see
+    `.claude/specs/medical_passport_spec.md`); this column exists for a
+    possible future partial-scoping feature, the same way `expires_at`
+    exists ahead of a timed-expiry UI.
+
+    Note for whoever implements BL-04 ("at most one active grant per
+    patient/grantee"): the live schema's `idx_consent_grant_active_lookup`
+    is a plain (non-unique) partial index, not a unique constraint — unlike
+    what TDD §3.4's `uq_consent_one_active` assumed. That invariant must be
+    enforced in `profile`/consent service code, not relied on at the DB
+    level.
+    """
+
+    __tablename__ = "consent_grant"
+
+    id: Mapped[uuid.UUID] = mapped_column("consent_id", Uuid, primary_key=True, default=uuid7)
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient.patient_id", ondelete="CASCADE"), nullable=False
+    )
+    grantee_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    grantee_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    scope_sections: Mapped[list[str]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=list
+    )
+    granted_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
+    expires_at: Mapped[datetime | None] = _ts(nullable=True)
+    revoked_at: Mapped[datetime | None] = _ts(nullable=True)
 
 
 class AuditLog(Base):
