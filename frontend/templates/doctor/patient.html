@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{#- A consented patient, as a verified doctor sees them. Deliberately a stub:
+    what the record shows is FR21, out of this feature's scope — this page
+    only proves the lookup succeeded. The grant is re-checked on every view
+    (BL-07), so it 404s the moment the patient revokes.
+
+    Context (built in web/router.py::doctor_patient_page):
+      passport_no   the consenting patient's passport number -#}
+
+{% block title %}{{ t('doctor_patient.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    <section class="panel stack" aria-labelledby="patient-h">
+      <h2 id="patient-h" class="panel__label">{{ t('lookup.field.passport') }}</h2>
+      <div class="passport__number" dir="ltr">{{ passport_no }}</div>
+      <div class="banner banner--ok" role="status"><span>{{ t('doctor_patient.access_confirmed') }}</span></div>
+      <p class="lead">{{ t('doctor_patient.record_pending') }}</p>
+      <div>
+        <a class="btn btn--secondary" href="/{{ locale }}/doctor/passport-lookup">{{ t('doctor_patient.back') }}</a>
+      </div>
+    </section>
+  </main>
+</div>
+{% endblock %}

@@ -35,9 +35,11 @@
       <p style="margin:var(--sp-6) 0 0;font-size:13.5px;color:var(--muted);max-width:64ch">
         {{ t('dashboard.placeholder') }}
       </p>
-      {% if profile_href %}
-        <p style="margin:var(--sp-5) 0 0">
-          <a class="btn btn--secondary" href="{{ profile_href }}">{{ t('profile.open_link') }}</a>
+      {% if links %}
+        <p style="margin:var(--sp-5) 0 0;display:flex;flex-wrap:wrap;gap:var(--sp-2)">
+          {% for link in links %}
+            <a class="btn btn--secondary" href="{{ link.href }}">{{ link.label }}</a>
+          {% endfor %}
         </p>
       {% endif %}
     </div>

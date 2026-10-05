@@ -456,6 +456,27 @@ h1.auth-title {
 .footnotes { font: 400 11px/1.6 var(--font-mono); color: var(--faint); }
 .footnotes p { margin: 0 0 var(--sp-1); max-width: 80ch; }
 
+/* ── Medical Passport (FR1, FR4) ───────────────────────────────────── */
+.passport { display: flex; flex-wrap: wrap; gap: var(--sp-card); align-items: flex-start; }
+.passport__main { flex: 1 1 260px; min-width: 0; }
+.passport__number {
+  font: 600 26px/1.2 var(--font-mono);
+  letter-spacing: .04em;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+/* The SVG carries its own light background so the code stays dark-on-light
+   (and scannable) in the dark theme too. */
+.qr {
+  margin: 0;
+  inline-size: 220px;
+  max-inline-size: 100%;
+  border-radius: var(--r-card-sm);
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+}
+.qr__svg { display: block; inline-size: 100%; block-size: auto; }
+
 /* ── Responsive (DESIGN.md is intrinsic; 1024px is the shell threshold) ── */
 @media (max-width: 1024px) {
   .topbar { padding: var(--sp-4) var(--sp-6); }

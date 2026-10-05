@@ -50,6 +50,11 @@ PROFILE_MEDICATION_ADD = "profile.medication.add"
 PROFILE_MEDICATION_UPDATE = "profile.medication.update"
 PROFILE_MEDICATION_REMOVE = "profile.medication.remove"
 
+# Actions emitted by the Medical Passport consent gateway (FR4, NFR16, D2).
+CONSENT_GRANT = "consent.grant"
+CONSENT_REVOKE = "consent.revoke"
+RECORD_READ = "record.read"
+
 
 async def write(
     session: AsyncSession,
