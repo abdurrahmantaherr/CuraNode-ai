@@ -202,7 +202,8 @@ async def test_verified_doctor_sees_consented_patients_with_the_four_fields(clie
     assert r.status_code == 200
     assert "Ayesha Raza" in r.text
     assert p.passport_no in r.text
-    assert "female" in r.text
+    assert ">Female<" in r.text  # the label, never the stored code
+    assert "female" not in r.text
     assert in_html("doctor_dashboard.patients.title") in r.text
     assert f'href="/en/doctor/patient/{p.id}"' in r.text
     # No passport number in any URL (P4 AC-12).
@@ -347,12 +348,13 @@ async def test_one_audit_row_per_load_with_a_count_and_no_names(client, db, doct
 
 
 async def test_urdu_page_renders_and_passport_stays_left_to_right(client, db, doctor):
-    p = await make_patient(db, "p1@x.com", "اسد علی")
+    p = await make_patient(db, "p1@x.com", "اسد علی", gender="female")
     await grant(db, p, doctor)
     await login(client, "dr@x.com")
     html = (await client.get("/ur/doctor")).text
     assert in_html("doctor_dashboard.patients.title", "ur") in html
     assert "اسد علی" in html
+    assert ">خاتون<" in html
     assert re.search(rf'dir="ltr"[^>]*>\s*{re.escape(p.passport_no)}', html)
 
 

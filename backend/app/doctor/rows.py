@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import date
 
 from ..db.models import Patient
+from ..i18n.catalogue import translate
+from ..profile.schemas import GENDERS
 
 DASH = "—"
 
@@ -35,6 +37,18 @@ def age_in_years(born: date | None, today: date) -> int | None:
     return years
 
 
+def _gender_label(value: str | None, locale: str) -> str:
+    """The stored code as its translated label.
+
+    The column is shared with the wider product, so a legacy value outside
+    `GENDERS` is shown as stored rather than hidden.
+    """
+    code = (value or "").strip()
+    if not code:
+        return DASH
+    return translate(f"gender.{code}", locale) if code in GENDERS else code
+
+
 def build_rows(patients: Sequence[Patient], *, locale: str, today: date) -> list[PatientRow]:
     rows: list[PatientRow] = []
     for p in patients:
@@ -43,7 +57,7 @@ def build_rows(patients: Sequence[Patient], *, locale: str, today: date) -> list
             PatientRow(
                 name=p.full_name,
                 age=str(age) if age is not None else DASH,
-                gender=p.gender or DASH,
+                gender=_gender_label(p.gender, locale),
                 passport_no=p.passport_no,
                 # The id, not the passport number: paths reach the access log (P4 AC-12).
                 href=f"/{locale}/doctor/patient/{p.id}",

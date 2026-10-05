@@ -55,7 +55,7 @@ def test_build_rows_fills_every_field():
         PatientRow(
             name="Ayesha Raza",
             age="32",
-            gender="female",
+            gender="Female",
             passport_no="CN-AAAA-1111",
             href="/en/doctor/patient/00000000-0000-0000-0000-000000000001",
         )
@@ -77,6 +77,25 @@ def test_build_rows_blank_gender_is_a_dash():
     # Review focus 1 — an empty string is not a value.
     rows = build_rows([patient(gender="")], locale="en", today=TODAY)
     assert rows[0].gender == DASH
+
+
+def test_build_rows_translates_the_gender_code():
+    # A stored code like "prefer_not_to_say" must never reach the screen.
+    en = build_rows([patient(gender="prefer_not_to_say")], locale="en", today=TODAY)
+    ur = build_rows([patient(gender="female")], locale="ur", today=TODAY)
+    assert en[0].gender == "Prefer not to say"
+    assert ur[0].gender == "خاتون"
+
+
+def test_build_rows_whitespace_only_gender_is_a_dash():
+    rows = build_rows([patient(gender="   ")], locale="en", today=TODAY)
+    assert rows[0].gender == DASH
+
+
+def test_build_rows_keeps_an_unknown_legacy_gender_as_stored():
+    # The table is shared with the wider product and may hold legacy values.
+    rows = build_rows([patient(gender="M")], locale="en", today=TODAY)
+    assert rows[0].gender == "M"
 
 
 def test_build_rows_keeps_input_order():
