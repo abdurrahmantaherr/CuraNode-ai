@@ -19,6 +19,7 @@ Nothing in this module logs a PMDC number, clinic name, or passport number
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import ColumnElement, func, or_, select
@@ -109,22 +110,31 @@ async def _resolve_clinic(session: AsyncSession, clinic_name: str) -> Clinic:
 
 async def _check_no_active(
     session: AsyncSession, patient_id: uuid.UUID, grantee_type: str, grantee_id: uuid.UUID
-) -> None:
-    """BL-04 — enforced here; the database has no unique constraint for it."""
-    existing = (
-        await session.execute(
-            select(ConsentGrant.id)
-            .where(
-                ConsentGrant.patient_id == patient_id,
-                ConsentGrant.grantee_type == grantee_type,
-                ConsentGrant.grantee_id == grantee_id,
-                _active(),
-            )
-            .limit(1)
+) -> list[ConsentGrant]:
+    """BL-04 — one unrevoked grant per grantee (`uq_consent_grant_one_active`).
+
+    An active grant is a duplicate. A lapsed one (expired, never revoked) is
+    returned so the caller can close it before inserting, or the unique index
+    would refuse the new grant.
+    """
+    rows = await session.execute(
+        select(ConsentGrant).where(
+            ConsentGrant.patient_id == patient_id,
+            ConsentGrant.grantee_type == grantee_type,
+            ConsentGrant.grantee_id == grantee_id,
+            ConsentGrant.revoked_at.is_(None),
         )
-    ).scalar_one_or_none()
-    if existing is not None:
+    )
+    unrevoked = list(rows.scalars().all())
+    now = dbtypes.utcnow()
+    if any(g.expires_at is None or _aware(g.expires_at) > now for g in unrevoked):
         raise DuplicateEntry({"field": "grantee"})
+    return unrevoked
+
+
+def _aware(ts: datetime) -> datetime:
+    """SQLite hands back naive datetimes; every stored timestamp is UTC."""
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC)
 
 
 async def _audit(
@@ -172,7 +182,12 @@ async def grant_consent(
         clinic = await _resolve_clinic(session, clinic_name)
         grantee_type, grantee_id = CLINIC, clinic.id
 
-    await _check_no_active(session, patient.id, grantee_type, grantee_id)
+    lapsed = await _check_no_active(session, patient.id, grantee_type, grantee_id)
+    now = dbtypes.utcnow()
+    for old in lapsed:  # closed first, so the unique index never sees two
+        old.revoked_at = now
+    if lapsed:
+        await session.flush()
 
     grant = ConsentGrant(
         id=dbtypes.uuid7(),
@@ -185,6 +200,8 @@ async def grant_consent(
     )
     session.add(grant)
     await session.flush()
+    for old in lapsed:
+        old.replaced_by = grant.id
 
     # Ids only — never the PMDC number or clinic name the patient typed.
     await _audit(

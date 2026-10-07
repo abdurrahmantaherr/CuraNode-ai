@@ -33,11 +33,12 @@ from sqlalchemy import (
     String,
     Text,
     Uuid,
+    text,
 )
 from sqlalchemy import (
     Enum as SAEnum,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import INET, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from .types import utcnow, uuid7
@@ -339,34 +340,22 @@ class PatientMedication(Base):
 
 # ── Medical Passport consent (FR4) ──────────────────────────────────────
 class ConsentGrant(Base):
-    """consent_grant — FR4/NFR16/D2.
+    """consent_grant — FR4/NFR16/D2, per-section since P9.
 
-    Branch A: table pre-exists in shared Supabase schema.
-    Verified against live information_schema 2026-10-01.
-    No migration written — additive columns only if needed.
+    Pre-exists in the shared Supabase schema (verified against the live
+    `information_schema` 2026-10-01 and again 2026-10-07). `grantee_id` is
+    polymorphic (a `doctor_id` or a `clinic_id`, by `grantee_type`) and has no
+    FK, so the consent service checks the grantee exists. `grantee_type` is
+    DB-constrained to `'doctor'`/`'clinic'`.
 
-    Table name is singular (`consent_grant`), unlike this model's old
-    `consent_grants` guess — confirmed against the live `information_schema`,
-    not assumed. `grantee_id` is polymorphic (holds a `doctor_id` or
-    `clinic_id` depending on `grantee_type`) and intentionally has no FK, same
-    as TDD §3.4 describes; `grantee_type` is DB-constrained to
-    `'doctor'`/`'clinic'` by a CHECK constraint. There is no `revoked_by`
-    column in the live schema.
+    `scope_sections` lists the record sections the grant shares (P9, see
+    `.claude/specs/privacy_access_spec.md`); `[]` means nothing is shared.
+    Changing sections never edits a grant: the old one is revoked and points
+    at its replacement through `replaced_by`. Rows are never deleted.
 
-    `scope_sections` is a non-nullable `jsonb` column, default `[]` (an empty
-    list, not `{}` — verified from the live column default
-    `'[]'::jsonb`), holding which record sections a grant covers. The
-    business rule is still all-or-nothing (see
-    `.claude/specs/medical_passport_spec.md`); this column exists for a
-    possible future partial-scoping feature, the same way `expires_at`
-    exists ahead of a timed-expiry UI.
-
-    Note for whoever implements BL-04 ("at most one active grant per
-    patient/grantee"): the live schema's `idx_consent_grant_active_lookup`
-    is a plain (non-unique) partial index, not a unique constraint — unlike
-    what TDD §3.4's `uq_consent_one_active` assumed. That invariant must be
-    enforced in `profile`/consent service code, not relied on at the DB
-    level.
+    `revoked_by` and `replaced_by` were added by this repo's P9 migration, as
+    was `uq_consent_grant_one_active`: at most one unrevoked grant per
+    patient/grantee, now enforced by the database as well as the service.
     """
 
     __tablename__ = "consent_grant"
@@ -383,16 +372,74 @@ class ConsentGrant(Base):
     granted_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
     expires_at: Mapped[datetime | None] = _ts(nullable=True)
     revoked_at: Mapped[datetime | None] = _ts(nullable=True)
+    # NULL with `revoked_at` set means the system closed a lapsed grant.
+    revoked_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("user_profile.user_id", ondelete="SET NULL"), nullable=True
+    )
+    replaced_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("consent_grant.consent_id"), nullable=True
+    )
+
+    __table_args__ = (
+        Index(
+            "uq_consent_grant_one_active",
+            "patient_id",
+            "grantee_type",
+            "grantee_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+            sqlite_where=text("revoked_at IS NULL"),
+        ),
+    )
+
+
+class AccessLog(Base):
+    """access_log — FR5, NFR17. One row per read of a patient's record.
+
+    Pre-exists in the shared Supabase schema (verified 2026-10-07); this repo
+    adds no DDL to it. Written only by `consent/gateway.py`, one row per
+    section a non-owner reads, in the same transaction as the read. Append-
+    only: the application never updates or deletes a row.
+
+    `resource_id` is NOT NULL in the live table; section reads have no record
+    id of their own yet, so they store the patient's id.
+    """
+
+    __tablename__ = "access_log"
+
+    id: Mapped[uuid.UUID] = mapped_column("log_id", Uuid, primary_key=True, default=uuid7)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("user_profile.user_id", ondelete="SET NULL"), nullable=True
+    )
+    patient_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("patient.patient_id", ondelete="SET NULL"), nullable=True
+    )
+    consent_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("consent_grant.consent_id"), nullable=True
+    )
+    resource_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    resource_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    action: Mapped[str] = mapped_column(String(10), nullable=False)
+    is_break_glass: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    ip_address: Mapped[str | None] = mapped_column(
+        String(64).with_variant(INET(), "postgresql"), nullable=True
+    )
+    occurred_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
+
+    __table_args__ = (
+        CheckConstraint("action IN ('read', 'write', 'export')", name="access_log_action_check"),
+        Index("idx_access_log_patient_id", "patient_id"),
+        Index("idx_access_log_occurred_at", "occurred_at"),
+    )
 
 
 class AuditLog(Base):
     """FR5, NFR17 — append-only. Never updated or deleted by the application.
 
-    Owned outright by this codebase — the shared schema's `access_log` table
-    is shaped for clinical record-access/consent auditing (a required
-    `resource_id`, break-glass flag, consent linkage) and doesn't fit generic
-    auth events like login/logout/lockout, so this stays a separate table
-    rather than being force-fit into that one.
+    Owned outright by this codebase. It holds auth events and grant changes;
+    reads of a patient's record go to the shared `access_log` instead (see
+    `AccessLog`), whose required `resource_id` and consent linkage don't fit
+    generic events like login/logout/lockout.
     """
 
     __tablename__ = "audit_log"

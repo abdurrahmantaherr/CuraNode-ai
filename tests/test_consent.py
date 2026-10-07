@@ -25,7 +25,7 @@ import uuid
 from datetime import timedelta
 
 import pytest
-from app.db.models import AuditLog, ConsentGrant, Doctor, Patient, Profile, UserRole
+from app.db.models import AuditLog, Clinic, ConsentGrant, Doctor, Patient, Profile, UserRole
 from app.db.types import utcnow, uuid7
 from app.settings import settings
 from sqlalchemy import select
@@ -245,11 +245,16 @@ async def test_t4_list_active_grants(
         grantee_id=verified_doctor.id,
         revoked_at=now - timedelta(hours=1),
     )
+    # P9: one unrevoked grant per grantee is now a DB constraint, so the
+    # expired grant names a second clinic.
+    lapsed_clinic = Clinic(id=uuid7(), name="Lapsed Clinic", type="clinic")
+    db.add(lapsed_clinic)
+    await db.commit()
     await grant_row(
         db,
         patient.id,
         grantee_type="clinic",
-        grantee_id=clinic.id,
+        grantee_id=lapsed_clinic.id,
         expires_at=now - timedelta(hours=1),
     )
     await grant_row(db, other.id, grantee_type="clinic", grantee_id=clinic.id)
@@ -338,15 +343,21 @@ async def test_t9_duplicate_active_grant(client, db, patient_user, verified_doct
 
 async def test_t9_expired_grant_does_not_block(client, db, patient_user, verified_doctor):
     patient = await patient_of(db, patient_user)
-    await grant_row(
-        db,
-        patient.id,
-        grantee_type="doctor",
-        grantee_id=verified_doctor.id,
-        expires_at=utcnow() - timedelta(minutes=1),
-    )
+    lapsed_id = (
+        await grant_row(
+            db,
+            patient.id,
+            grantee_type="doctor",
+            grantee_id=verified_doctor.id,
+            expires_at=utcnow() - timedelta(minutes=1),
+        )
+    ).id
     r = await client.post(URL, json={"pmdc_number": verified_doctor.pmdc_number})
     assert r.status_code == 201
+    # P9 BL-06: the lapsed grant is closed and points at its successor.
+    lapsed = await fresh(db, ConsentGrant, lapsed_id)
+    assert lapsed.revoked_at is not None
+    assert str(lapsed.replaced_by) == r.json()["id"]
 
 
 # ── T10 — unknown PMDC ───────────────────────────────────────────────────
