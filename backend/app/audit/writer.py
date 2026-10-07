@@ -53,6 +53,7 @@ PROFILE_MEDICATION_REMOVE = "profile.medication.remove"
 # Actions emitted by the Medical Passport consent gateway (FR4, NFR16, D2).
 CONSENT_GRANT = "consent.grant"
 CONSENT_REVOKE = "consent.revoke"
+CONSENT_CHANGE = "consent.change"  # P9: sections changed (revoke + replace)
 RECORD_READ = "record.read"
 
 # Emitted by the doctor dashboard (D4). `detail` holds a patient count only.

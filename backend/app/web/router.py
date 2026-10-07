@@ -1239,7 +1239,11 @@ async def patient_passport_page(
 
 
 # BL-31 pattern — the only `saved` values honoured; user input is never reflected.
-_ACCESS_SAVED = {"granted": "access.saved.granted", "revoked": "access.saved.revoked"}
+_ACCESS_SAVED = {
+    "granted": "access.saved.granted",
+    "exists": "access.saved.exists",
+    "revoked": "access.saved.revoked",
+}
 _GRANTEE_TYPES = ("doctor", "clinic")
 
 
@@ -1352,17 +1356,28 @@ async def patient_access_grant_submit(
         if not values["grantee"].strip():
             raise ValidationFailed({"fields": {"grantee": "errors.text_required"}})
         field = "pmdc_number" if grantee_type == "doctor" else "clinic_name"
-        body = consent_schemas.GrantCreate.model_validate({field: values["grantee"]})
-        await consent_service.grant_consent(
+        body = consent_schemas.GrantCreate.model_validate(
+            # Interim (P9 S3): this P4 form has no section or duration picker
+            # yet, so it keeps P4's all-or-nothing, until-revoked meaning.
+            {
+                field: values["grantee"],
+                "sections": list(consent_schemas.SECTIONS),
+                "duration": "until_revoked",
+            }
+        )
+        _, created = await consent_service.grant_consent(
             session,
             actor,
+            sections=body.sections,
+            duration=body.duration,
             pmdc_number=body.pmdc_number,
             clinic_name=body.clinic_name,
             user_agent=request.headers.get("user-agent"),
         )
     except Exception as exc:  # noqa: BLE001 — every outcome is mapped to the page
         return await _access_failure(request, loc, session, actor, exc, values=values)
-    return RedirectResponse(f"/{loc}/patient/access?saved=granted", status_code=303)
+    saved = "granted" if created else "exists"  # BL-05: an active grant is returned as is
+    return RedirectResponse(f"/{loc}/patient/access?saved={saved}", status_code=303)
 
 
 @router.post("/{locale}/patient/access/{grant_id}/revoke")

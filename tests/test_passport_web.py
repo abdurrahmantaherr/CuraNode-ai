@@ -442,9 +442,9 @@ async def test_access_page_duplicate_and_foreign_revoke(client, db, patient_user
     await login(client, "pat@x.com")
     form = {"grantee_type": "doctor", "grantee": verified_doctor.pmdc_number}
     assert (await client.post("/en/patient/access", data=form)).status_code == 303
+    # P9 BL-05: granting again keeps the existing grant and says so (was 409).
     dup = await client.post("/en/patient/access", data=form)
-    assert dup.status_code == 409
-    assert field_errors(dup.text) == [in_html("errors.already_granted")]
+    assert dup.status_code == 303 and dup.headers["location"].endswith("?saved=exists")
 
     r = await client.post(f"/en/patient/access/{foreign.id}/revoke")
     assert r.status_code == 404 and in_html("errors.not_found") in r.text

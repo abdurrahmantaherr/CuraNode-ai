@@ -208,3 +208,19 @@ async def enforce_consent_write_rate_limit(actor: PatientDep) -> None:
 
 
 ConsentWriteRateLimit = Depends(enforce_consent_write_rate_limit)
+
+
+# ── Grantee search budget (P9) ───────────────────────────────────────────
+async def check_consent_search_rate(actor: Actor) -> None:
+    """Counts one grantee search. Shared by the API and the access page."""
+    count = await cache.incr(ratelimit_key("consent_search", str(actor.user_id)), 60)
+    if count > settings.consent_search_rate_limit_per_minute:
+        raise RateLimited(retry_after_s=60)
+
+
+async def enforce_consent_search_rate_limit(actor: PatientDep) -> None:
+    """Depends on PatientDep so 401/403 surface before 429."""
+    await check_consent_search_rate(actor)
+
+
+ConsentSearchRateLimit = Depends(enforce_consent_search_rate_limit)
