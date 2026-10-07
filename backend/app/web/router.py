@@ -39,6 +39,7 @@ from ..deps import (
     check_profile_write_rate,
     enforce_auth_rate_limit,
 )
+from ..doctor.rows import build_rows
 from ..errors import (
     AppError,
     DuplicateEntry,
@@ -648,6 +649,7 @@ async def _guarded(
     }[actor.role]
 
     is_patient = actor.role == UserRole.PATIENT.value
+    patients = None
     if is_patient:
         nav_items = _patient_nav(loc, current="dashboard")
         links = [
@@ -661,8 +663,27 @@ async def _guarded(
         links = [
             {"href": f"/{loc}/doctor/passport-lookup", "label": translate("lookup.open_link", loc)}
         ]
+        # D4 — who is listed is decided in the consent service, live, on every load.
+        granted = await consent_service.list_patients_for_doctor(session, actor)
+        patients = build_rows(granted, locale=loc, today=dbtypes.utcnow().date())
+        await audit.write(
+            session,
+            action=audit.DOCTOR_DASHBOARD_VIEW,
+            actor_user_id=actor.user_id,
+            actor_role=actor.role,
+            resource_type="patient_list",
+            ip_address=actor.ip_address,
+            user_agent=request.headers.get("user-agent"),
+            detail={"patient_count": len(patients)},
+        )
+        await session.commit()
     else:
         nav_items, links = [], []
+
+    # Only a verified doctor's page defines `patients`; shell.html keys off that.
+    extra: dict[str, Any] = {}
+    if patients is not None:
+        extra["patients"] = patients
     return _render(
         request,
         "shell.html",
@@ -677,6 +698,7 @@ async def _guarded(
         passport_no=me.passport_no,
         show_unverified_banner=show_banner,
         pending_message=pending_message,
+        **extra,
     )
 
 

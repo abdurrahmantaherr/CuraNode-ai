@@ -183,5 +183,11 @@
   "doctor_patient.title": "مریض",
   "doctor_patient.access_confirmed": "اس مریض نے آپ کو اپنے ریکارڈ تک رسائی دی ہے۔",
   "doctor_patient.record_pending": "ریکارڈ کا منظر بعد کی خصوصیت کے ساتھ آئے گا۔",
-  "doctor_patient.back": "کوئی اور مریض تلاش کریں"
+  "doctor_patient.back": "کوئی اور مریض تلاش کریں",
+  "doctor_dashboard.patients.title": "میرے مریض",
+  "doctor_dashboard.col.name": "نام",
+  "doctor_dashboard.col.age": "عمر",
+  "doctor_dashboard.col.gender": "جنس",
+  "doctor_dashboard.col.passport": "پاسپورٹ نمبر",
+  "doctor_dashboard.empty": "ابھی تک کسی مریض نے اپنا ریکارڈ آپ کے ساتھ شیئر نہیں کیا۔"
 }

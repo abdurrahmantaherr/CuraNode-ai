@@ -296,3 +296,30 @@ async def find_patient_for_doctor(session: AsyncSession, actor: Actor, passport_
 async def patient_for_doctor(session: AsyncSession, actor: Actor, patient_id: uuid.UUID) -> Patient:
     """Re-check access by patient id on every page view (BL-07)."""
     return await _granted_patient(session, actor, Patient.id == patient_id)
+
+
+async def list_patients_for_doctor(session: AsyncSession, actor: Actor) -> list[Patient]:
+    """D4 — every patient with an active grant naming this verified doctor, by name.
+
+    Same rules as `_granted_patient`: the doctor and the grant are checked live
+    on every call (BL-07), and anything but a verified doctor is `NotFound`.
+    Two active grants for one patient (nothing in the database forbids it) still
+    yield one row.
+    """
+    doctor = (
+        await session.execute(select(Doctor).where(Doctor.user_id == actor.user_id))
+    ).scalar_one_or_none()
+    if doctor is None or doctor.verification_status != VerificationStatus.VERIFIED:
+        raise NotFound()
+    rows = await session.execute(
+        select(Patient)
+        .join(ConsentGrant, ConsentGrant.patient_id == Patient.id)
+        .where(
+            ConsentGrant.grantee_type == DOCTOR,
+            ConsentGrant.grantee_id == doctor.id,
+            _active(),
+        )
+        .distinct()
+        .order_by(Patient.full_name, Patient.id)
+    )
+    return list(rows.scalars().all())
