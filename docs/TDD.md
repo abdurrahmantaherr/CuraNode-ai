@@ -303,6 +303,8 @@ CREATE UNIQUE INDEX uq_consent_one_active ON consent_grants (patient_id, grantee
 
 Grants are all-or-nothing over the patient's record. Partial scoping (share prescriptions but not lab reports) is **not** implemented — it multiplies the consent gateway's complexity and the PRD does not require it. Revocation sets `revoked_at`; grant rows are never deleted, so the history of who had access when survives.
 
+> **Amended 2026-10-08 (P9, `.claude/specs/privacy_access_spec.md`).** Grants are now **per section**: the live table is `consent_grant` (singular) and its `scope_sections` jsonb lists the shared sections (`basics`, `allergies`, `conditions`, `medications`, `prescriptions`, `lab_reports`, `visits`); `[]` means nothing is shared. Expiry is 24 h / 7 d / 30 d (default) / until revoked. Changing sections revokes the grant and creates a replacement linked by `replaced_by`. `revoked_by`, `replaced_by` and the unique active index `uq_consent_grant_one_active` are added by migration `dba968144fb4`. Reads are logged per section in the shared `access_log`, not `audit_log`. Where this section and the P9 spec disagree, the spec wins.
+
 ### 3.5 Clinical records — append-only
 
 ```sql

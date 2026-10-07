@@ -22,11 +22,12 @@ uv run backend/app/main.py                 # Start the development server
 
 ### Testing
 ```bash
-uv run pytest -q                           # Run all tests (155 tests)
+uv run pytest -q                           # Run all tests (336 tests)
 uv run pytest tests/test_auth.py -v        # Run authentication tests with verbose output
 uv run pytest tests/test_web.py -v         # Run web interface tests
 uv run pytest tests/test_oauth.py -v       # Run Google OAuth flow tests
 uv run pytest tests/test_profile.py -v     # Run patient profile (FR2) tests
+uv run pytest tests/test_privacy_access.py tests/test_privacy_access_web.py -v  # P9 consent/access tests
 ```
 
 Tests run against an in-memory SQLite database and `tests/fakes.py`'s `FakeSupabaseAuth` (a stand-in for Supabase Auth — real JWTs, HS256-signed with a test-only secret). No test makes a network call; production verifies ES256 tokens against Supabase's real JWKS instead.
@@ -38,7 +39,7 @@ uv run ruff format backend tests           # Format the codebase
 ```
 
 ### Database Management
-This project's Supabase Postgres database is **shared** with the wider CuraNode-AI product — most tables (`user_profile`, `clinic`, `patient`, `doctor`, `clinic_staff`, `doctor_affiliation`) are pre-existing and owned by that larger schema, not by this repo; so are `allergy` and `chronic_condition`. Only `audit_log` and `patient_medication` are created here (plus additive columns on shared tables).
+This project's Supabase Postgres database is **shared** with the wider CuraNode-AI product — most tables (`user_profile`, `clinic`, `patient`, `doctor`, `clinic_staff`, `doctor_affiliation`) are pre-existing and owned by that larger schema, not by this repo; so are `allergy`, `chronic_condition`, `consent_grant` and `access_log`. Only `audit_log` and `patient_medication` are created here (plus additive columns and indexes on shared tables).
 
 ```bash
 uv run alembic upgrade head                # Apply migrations (additive only — see below)
@@ -64,13 +65,14 @@ backend/
     identity/                  # Authentication system (router, service, schemas, security, oauth)
     audit/                     # Append-only audit writer (audit_log — owned by this repo)
     profile/                   # Patient profile (FR2): basics, allergies, conditions, medications — JSON API + service
+    consent/                   # Grants, consent gateway, access log (FR4/FR5, P4 + P9) — JSON API + service
     i18n/                      # English/Urdu message catalogues
     web/                       # Server-rendered page routes and form handling (incl. OAuth + onboarding)
 alembic/                       # Database migrations (additive-only, hand-written — see above)
 frontend/
   templates/                   # Jinja2 templates (base, auth pages incl. onboarding/oauth_complete, shell, partials)
   static/                      # CSS (design tokens + app) and minimal JS
-tests/                         # Test suite (authentication, web interface, OAuth flow, settings)
+tests/                         # Test suite (authentication, web, OAuth, profile, consent/access control, settings)
 docs/                          # Product requirements, technical design, design system, docs/prompts/ (OAuth plan)
 ```
 
@@ -101,26 +103,36 @@ docs/                          # Product requirements, technical design, design 
    - Every successful mutation writes exactly one `audit_log` row in the same transaction (`profile.update`, `profile.<kind>.add/update/remove`). Basic-detail changes log only `fields_changed`, never values (identity PII); entry changes also log `before`/`after` clinical field values, except `notes`, which is free text that may hold PII and is logged only by name.
    - Business-rule numbering (`BL-01`…`BL-36`) and acceptance criteria (`AC-01`…`AC-26`) live in `.claude/specs/patient_profile_spec.md` — read it before changing this feature; it is the source of truth over `docs/TDD.md` wherever they disagree.
 
-4. **Security Properties**
+4. **Privacy & access control (FR4, FR5 — P4 + P9)**
+   - `backend/app/consent/` owns it: `service.py` (grants: grant/change/revoke/list/grantee search, plus the doctor-side lookup), `gateway.py` (the **only** door to another person's profile sections), `access_log.py` (the patient's FR5 view), `router.py` (`/api/v1/me/consents*`, `/api/v1/me/access-log`). The web page `/{locale}/patient/access` and the doctor page `/{locale}/doctor/patient/{id}` call the same functions.
+   - **Grants are per section** (`basics`, `allergies`, `conditions`, `medications`, `prescriptions`, `lab_reports`, `visits` — `consent/schemas.py::SECTIONS`), stored in the shared `consent_grant.scope_sections`. `[]` means **nothing shared**. Durations: 24h / 7d / 30d (default) / until revoked. This amends TDD §3.4's all-or-nothing rule.
+   - At most one unrevoked grant per patient/grantee (`uq_consent_grant_one_active`, plus a service check). Granting again while active returns the existing grant (200, no write); a lapsed grant is closed and linked via `replaced_by`. Changing sections never edits a grant: revoke (`revoked_by`) + insert + `replaced_by`. Grants are never deleted.
+   - A clinic grant reaches every doctor with an **active** `doctor_affiliation` at that clinic. Doctor verification and affiliations are read live on every call (`service.live_doctor`).
+   - **Every** read of another patient's `allergy`/`chronic_condition`/`patient_medication`/basics goes through `gateway.read_sections`/`read_section` with a mandatory `purpose`. It writes one shared `access_log` row per section read *before* returning data, in the same transaction. `tests/test_privacy_access.py::test_ac21_*` fails the build if any other module (besides `profile/service.py`, which reads only the caller's own rows) touches those models.
+   - `ConsentDenied` subclasses `NotFound`: unverified, revoked, expired, empty-section, never-granted and nonexistent all give the identical 404 (D2). Clinic admins never pass (NFR16).
+   - An unshared section is rendered "Not shared by patient", never as an empty list. Rules: `BL-01`…`BL-25` / `AC-01`…`AC-30` in `.claude/specs/privacy_access_spec.md` (wins over `docs/TDD.md` and the P4 `medical_passport_spec.md`).
+
+5. **Security Properties**
    - Password hashing is Supabase Auth's responsibility, not this codebase's.
    - Fail-shape-identical authentication errors (same response for wrong password/unknown email/suspended account). Exact response-*timing* parity is no longer guaranteed end-to-end, since password verification now crosses the network to Supabase's GoTrue service.
    - Registration is not an oracle (duplicate emails return success-shaped response and never call Supabase or create a row).
    - Account lockout after 10 consecutive failures (15-minute lockout). OAuth honours an existing lockout but never contributes to it — there's no password on that path to brute-force.
    - Startup guards prevent running without `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` (outside `test`), `OAUTH_ENABLED=true` without `SUPABASE_ANON_KEY`, or with non-synthetic data in non-pilot environments.
 
-5. **Database schema is shared, not owned**
+6. **Database schema is shared, not owned**
    - `user_profile`, `clinic`, `patient`, `doctor`, `clinic_staff`, `doctor_affiliation` are pre-existing tables belonging to the wider CuraNode-AI product's Supabase project. `db/models.py` maps onto their real column/table names (e.g. `Patient.passport_no` → column `passport_uid`; `Doctor` has no `primary_clinic_id` — clinic membership goes through the separate `DoctorAffiliation`/`doctor_affiliation` many-to-many table instead).
    - The clinic-admin role's **database value is `"admin"`**, not `"clinic_admin"` — the shared schema's CHECK constraint only allows `patient`/`doctor`/`staff`/`admin`. The Python enum member `UserRole.CLINIC_ADMIN` is unchanged; only `.value` differs.
-   - Only `audit_log` and `patient_medication` are created and owned outright by this repo (the shared schema's `access_log` is shaped for clinical record-access/consent auditing and doesn't fit generic auth events). The patient-profile migration also adds provenance/soft-remove columns (`recorded_by`, `updated_at`, `removed_at`/`recorded_at`) to the shared `allergy`/`chronic_condition` tables — see "Patient profile (FR2)" above for the BYPASSRLS/soft-remove/editability rules that follow from this.
+   - Only `audit_log` and `patient_medication` are created and owned outright by this repo. Auth events and grant changes go to `audit_log`; reads of a patient's record go to the shared `access_log` (written only by `consent/gateway.py`). The P9 migration adds `revoked_by`, `replaced_by` and `uq_consent_grant_one_active` to the shared `consent_grant`. The patient-profile migration also adds provenance/soft-remove columns (`recorded_by`, `updated_at`, `removed_at`/`recorded_at`) to the shared `allergy`/`chronic_condition` tables — see "Patient profile (FR2)" above for the BYPASSRLS/soft-remove/editability rules that follow from this.
+   - **Migration chain warning (2026-10-07):** the shared DB's `alembic_version` is `35c4bc13fa37`, from another codebase (document/OCR work) that chained two revisions onto this repo's `488dbf2b3915`; their files are not in this repo, so `alembic current`/`upgrade` from here fails until that is reconciled. P9's `dba968144fb4` is parented on `488dbf2b3915` and has only been run on SQLite. Do not `upgrade`/`stamp` the shared DB without the schema owner's OK.
    - OAuth added no tables and no migration — "onboarding incomplete" is derived from the absence of a role row, not stored anywhere.
    - Before assuming any column/table exists, check the real schema (`information_schema` or the migration in `alembic/versions/`) rather than the original feature spec — the spec predates this reconciliation.
 
-6. **Internationalization**
+7. **Internationalization**
    - English and Urdu support with right-to-left layout
    - Locale as URL prefix (`/en/` or `/ur/`) allows language switching without losing place
    - Message catalogues in JSON format with Jinja2 template integration
 
-7. **Technology Stack**
+8. **Technology Stack**
    - **API & Pages**: FastAPI with server-rendered Jinja2 templates (chosen over SPA for single deployable)
    - **Identity**: Supabase Auth (`supabase-py`, async client) — password and Google OAuth (PKCE)
    - **Persistence**: SQLAlchemy 2.0 (async) over Supabase Postgres (asyncpg driver), migrated with Alembic; tests use SQLite in-memory
@@ -129,7 +141,7 @@ docs/                          # Product requirements, technical design, design 
    - **Observability**: Structlog for structured logging
    - **Development**: Uvicorn with reload, Ruff for linting/formatting, Pytest for testing
 
-8. **Project-Specific Constraints**
+9. **Project-Specific Constraints**
    - All development/test data is synthetic by requirement
    - Migrations are additive-only and hand-written (see Database Management above)
    - Server-rendered templates replace Next.js frontend from original TDD
@@ -143,15 +155,17 @@ docs/                          # Product requirements, technical design, design 
 5. **`backend/app/identity/oauth.py`** - PKCE primitives, the Supabase authorize-URL contract, and why `state` can't be a sibling query param (read the module docstring first)
 6. **`backend/app/db/models.py`** - Mapping onto the shared Supabase schema — table/column names differ from Python attribute names in several places
 7. **`backend/app/web/router.py`** - Server-rendered page handlers and form processing, including the OAuth start/callback routes, onboarding, and the patient-profile page handlers
-8. **`backend/app/profile/service.py`** - Patient-profile business logic (FR2): scoping, editability, duplicate/cap checks, soft-remove, audit. Read `.claude/specs/patient_profile_spec.md` first
-9. **`backend/app/settings.py`** - Configuration with validation and fail-fast checks
-10. **`tests/conftest.py`** and **`tests/fakes.py`** - Test setup, including how `get_supabase_client`/`new_auth_client`/`decode_supabase_access_token` are faked for isolated testing, and `FakeSupabaseAuth.authorize`/`exchange_code_for_session` for the OAuth flow
+8. **`backend/app/consent/gateway.py`** and **`consent/service.py`** - The consent chokepoint and grant rules (P9). Read `.claude/specs/privacy_access_spec.md` first
+9. **`backend/app/profile/service.py`** - Patient-profile business logic (FR2): scoping, editability, duplicate/cap checks, soft-remove, audit. Read `.claude/specs/patient_profile_spec.md` first
+10. **`backend/app/settings.py`** - Configuration with validation and fail-fast checks
+11. **`tests/conftest.py`** and **`tests/fakes.py`** - Test setup, including how `get_supabase_client`/`new_auth_client`/`decode_supabase_access_token` are faked for isolated testing, and `FakeSupabaseAuth.authorize`/`exchange_code_for_session` for the OAuth flow
 
 ### When Making Changes
 
 - **Authentication changes**: Focus on `deps.py`, `identity/`, and related tests. Never reintroduce a shared, stateful Supabase client across sign-in and admin operations (see Key Architectural Decisions above).
 - **OAuth changes**: Read `identity/oauth.py`'s module docstring first — the `state`-param gotcha there is easy to reintroduce by accident if the Supabase SDK/API ever looks like it should accept one. Never provision a `Patient`/`Doctor` row before onboarding; never skip the email-collision guard in `login_with_oauth`.
 - **Patient profile changes**: Read `.claude/specs/patient_profile_spec.md` first — it wins over `docs/TDD.md` wherever they disagree. Put every business rule in `profile/service.py` so the API and the web page stay in sync; never perform a query on `allergy`/`chronic_condition`/`patient_medication` without filtering by the caller's own `patient_id` (BYPASSRLS means the database will not catch a missed scope). Never let a patient edit an entry whose `recorded_by` isn't their own `user_id`.
+- **Consent / access changes**: Read `.claude/specs/privacy_access_spec.md` first. Never read another patient's sections outside `consent/gateway.py`; never return 403 for a consent failure (use `NotFound`/`ConsentDenied`); never update or delete `access_log` rows.
 - **UI changes**: Work with Jinja2 templates in `frontend/templates/` and `web/router.py`
 - **Database changes**: Modify `db/models.py` to match the *real* shared schema (verify against `information_schema` first) and write an additive Alembic migration by hand — never autogenerate
 - **Configuration**: Update `settings.py` with appropriate validation guards

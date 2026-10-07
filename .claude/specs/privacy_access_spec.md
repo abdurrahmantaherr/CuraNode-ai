@@ -168,7 +168,7 @@ async def read_sections(session, actor, patient_id, *, purpose) -> PassportView
 `ConsentDenied` is a subclass of `NotFound` with the same `code` and `http_status`, so the JSON envelope is byte-identical (D2) and existing `except NotFound` handlers keep working.
 
 ### 4.8 Doctor-side consistency (`service._granted_patient`, `list_patients_for_doctor`)
-Both gain the clinic-via-affiliation branch (AC-23), sharing one helper with the gateway (`_doctor_grant_filter(doctor, clinic_ids)`). The D4 dashboard still lists a patient whose only active grant has an empty section list. They do appear, and their page then shows every section as "Not shared". This keeps the dashboard a pure "who granted me" list.
+Both gain the clinic-via-affiliation branch (AC-23), sharing one helper with the gateway (`doctor_grant_filter(doctor_id, clinic_ids)` plus `live_doctor`). The D4 dashboard still lists a patient whose only active grant has an empty section list, which keeps it a pure "who granted me" list; opening that patient gives the D2 404 (AC-16, BL-16). Only legacy pre-migration rows can be empty, and the migration backfills them.
 
 ### 4.9 Access log (`consent/access_log.py`)
 `list_access_log(session, actor, *, cursor, limit)`:
