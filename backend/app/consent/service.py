@@ -29,7 +29,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import writer as audit
 from ..db import types as dbtypes
-from ..db.models import Clinic, ConsentGrant, Doctor, Patient, VerificationStatus
+from ..db.models import (
+    Clinic,
+    ConsentGrant,
+    Doctor,
+    DoctorAffiliation,
+    Patient,
+    VerificationStatus,
+)
 from ..deps import Actor
 from ..errors import DuplicateEntry, NotFound
 from ..profile.service import _patient_for
@@ -425,30 +432,52 @@ async def search_grantees(session: AsyncSession, actor: Actor, q: str) -> list[G
     ]
 
 
-# ── Doctor side (D2, BL-07, BL-09, BL-10) ────────────────────────────────
-# Only a grant naming this doctor counts; what a clinic grant unlocks for that
-# clinic's doctors is not yet specified. Every failure — not a verified doctor,
-# no such patient, never granted, revoked, expired — is the same `NotFound`,
-# so a lookup reveals nothing about whether a patient exists.
-async def _granted_patient(
-    session: AsyncSession, actor: Actor, condition: ColumnElement[bool]
-) -> Patient:
+# ── Doctor side (D2, BL-07, BL-09, BL-10; P9 BL-14) ──────────────────────
+# A grant reaches a doctor when it names them, or names a clinic where they
+# hold an active affiliation (P9). Every failure — not a verified doctor, no
+# such patient, never granted, revoked, expired — is the same `NotFound`, so a
+# lookup reveals nothing about whether a patient exists.
+async def live_doctor(
+    session: AsyncSession, actor: Actor
+) -> tuple[Doctor, frozenset[uuid.UUID]] | None:
+    """The caller's doctor row and active clinic ids, read now — never from
+    the token or a cache (BL-07) — or None unless they are a verified doctor."""
     doctor = (
         await session.execute(select(Doctor).where(Doctor.user_id == actor.user_id))
     ).scalar_one_or_none()
     if doctor is None or doctor.verification_status != VerificationStatus.VERIFIED:
+        return None
+    rows = await session.execute(
+        select(DoctorAffiliation.clinic_id).where(
+            DoctorAffiliation.doctor_id == doctor.id, DoctorAffiliation.status == "active"
+        )
+    )
+    return doctor, frozenset(rows.scalars().all())
+
+
+def doctor_grant_filter(
+    doctor_id: uuid.UUID, clinic_ids: frozenset[uuid.UUID]
+) -> ColumnElement[bool]:
+    """Grants naming this doctor, or a clinic they are actively affiliated with."""
+    names_doctor = (ConsentGrant.grantee_type == DOCTOR) & (ConsentGrant.grantee_id == doctor_id)
+    if not clinic_ids:
+        return names_doctor
+    names_clinic = (ConsentGrant.grantee_type == CLINIC) & ConsentGrant.grantee_id.in_(clinic_ids)
+    return or_(names_doctor, names_clinic)
+
+
+async def _granted_patient(
+    session: AsyncSession, actor: Actor, condition: ColumnElement[bool]
+) -> Patient:
+    found = await live_doctor(session, actor)
+    if found is None:
         raise NotFound()
-    # Checked live against the database on every call — never cached (BL-07).
+    doctor, clinic_ids = found
     patient = (
         await session.execute(
             select(Patient)
             .join(ConsentGrant, ConsentGrant.patient_id == Patient.id)
-            .where(
-                condition,
-                ConsentGrant.grantee_type == DOCTOR,
-                ConsentGrant.grantee_id == doctor.id,
-                _active(),
-            )
+            .where(condition, doctor_grant_filter(doctor.id, clinic_ids), _active())
             .limit(1)
         )
     ).scalar_one_or_none()
@@ -458,7 +487,7 @@ async def _granted_patient(
 
 
 async def find_patient_for_doctor(session: AsyncSession, actor: Actor, passport_no: str) -> Patient:
-    """Look a patient up by passport number — only if they granted this doctor access."""
+    """Look a patient up by passport number — only if a grant reaches this doctor."""
     return await _granted_patient(
         session, actor, Patient.passport_no == passport_no.strip().upper()
     )
@@ -470,24 +499,20 @@ async def patient_for_doctor(session: AsyncSession, actor: Actor, patient_id: uu
 
 
 async def list_patients_for_doctor(session: AsyncSession, actor: Actor) -> list[Patient]:
-    """D4 — every patient with an active grant naming this verified doctor, by name.
+    """D4 — every patient with an active grant reaching this verified doctor, by
+    name, once each (a doctor grant and a clinic grant still give one row).
 
-    Same rules as `_granted_patient`: the doctor and the grant are checked live
-    on every call (BL-07), and anything but a verified doctor is `NotFound`.
+    Same rules as `_granted_patient`: checked live on every call (BL-07), and
+    anything but a verified doctor is `NotFound`.
     """
-    doctor = (
-        await session.execute(select(Doctor).where(Doctor.user_id == actor.user_id))
-    ).scalar_one_or_none()
-    if doctor is None or doctor.verification_status != VerificationStatus.VERIFIED:
+    found = await live_doctor(session, actor)
+    if found is None:
         raise NotFound()
+    doctor, clinic_ids = found
     rows = await session.execute(
         select(Patient)
         .join(ConsentGrant, ConsentGrant.patient_id == Patient.id)
-        .where(
-            ConsentGrant.grantee_type == DOCTOR,
-            ConsentGrant.grantee_id == doctor.id,
-            _active(),
-        )
+        .where(doctor_grant_filter(doctor.id, clinic_ids), _active())
         .distinct()
         .order_by(Patient.full_name, Patient.id)
     )

@@ -21,17 +21,26 @@ import pytest
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from app.consent import gateway
+from app.consent import service as consent_service
+from app.consent.schemas import SECTIONS
 from app.db.models import (
     AccessLog,
+    Allergy,
     AuditLog,
+    ChronicCondition,
     Clinic,
     ConsentGrant,
     Doctor,
+    DoctorAffiliation,
     Patient,
+    PatientMedication,
     Profile,
     UserRole,
 )
 from app.db.types import utcnow, uuid7
+from app.deps import Actor
+from app.errors import ConsentDenied, NotFound
 from app.settings import settings
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -624,3 +633,246 @@ async def test_ac26_writes_share_one_budget(client, db, patient_user, verified_d
         gid = r.json()["id"]
     r = await client.delete(f"{URL}/{gid}")
     assert r.status_code == 429 and r.headers["retry-after"] == "60"
+
+
+# ── S4: gateway (AC-13…AC-20, AC-23) ─────────────────────────────────────
+PURPOSE = "test.read"
+
+
+def as_actor(user_id, role: str) -> Actor:
+    return Actor(user_id=user_id, role=role, ip_address="203.0.113.7")
+
+
+async def seed_record(db, patient: Patient) -> None:
+    patient.blood_group, patient.gender = "O+", "female"
+    db.add(Allergy(patient_id=patient.id, substance="Penicillin", severity="severe"))
+    db.add(Allergy(patient_id=patient.id, substance="Latex", removed_at=utcnow()))
+    db.add(ChronicCondition(patient_id=patient.id, name="Asthma"))
+    db.add(ChronicCondition(patient_id=patient.id, name="Old flu", status="resolved"))
+    db.add(PatientMedication(patient_id=patient.id, name="Salbutamol", frequency="as needed"))
+    await db.commit()
+
+
+async def access_rows(db) -> list[AccessLog]:
+    rows = await db.execute(
+        select(AccessLog).order_by(AccessLog.occurred_at).execution_options(populate_existing=True)
+    )
+    return list(rows.scalars().all())
+
+
+@pytest.fixture
+async def record(db) -> tuple[Profile, Patient]:
+    user = await make_user(db, email="rec@x.com", role=UserRole.PATIENT)
+    patient = await patient_of(db, user)
+    await seed_record(db, patient)
+    return user, patient
+
+
+async def test_ac13_owner_gets_all_sections_and_no_log_rows(db, record):
+    user, patient = record
+    view = await gateway.read_sections(
+        db, as_actor(user.id, "patient"), patient.id, purpose=PURPOSE
+    )
+    assert set(view.sections) == set(SECTIONS)
+    assert all(v is not None for v in view.sections.values())
+    assert await access_rows(db) == []
+
+
+async def test_ac14_doctor_grant_sections_only(db, record, verified_doctor):
+    _, patient = record
+    grant = await grant_row(
+        db,
+        patient.id,
+        grantee_type="doctor",
+        grantee_id=verified_doctor.id,
+        sections=["allergies", "medications"],
+    )
+    actor = as_actor(verified_doctor.user_id, "doctor")
+    access = await gateway.allowed_sections(db, actor, patient.id, purpose=PURPOSE)
+    assert access.sections == {"allergies", "medications"} and not access.is_owner
+    assert set(access.consent_for.values()) == {grant.id}
+
+    view = await gateway.read_sections(db, actor, patient.id, purpose=PURPOSE)
+    assert view.sections["allergies"] == [
+        {"substance": "Penicillin", "reaction": None, "severity": "severe"}
+    ]  # the removed allergy is not shown
+    assert [m["name"] for m in view.sections["medications"]] == ["Salbutamol"]
+    assert view.sections["basics"] is None and view.sections["conditions"] is None
+
+
+async def test_ac15_clinic_grant_via_active_affiliation_and_union(
+    db, record, clinic, clinic_doctor
+):
+    _, patient = record
+    clinic_grant = await grant_row(
+        db, patient.id, grantee_type="clinic", grantee_id=clinic.id, sections=["basics"]
+    )
+    actor = as_actor(clinic_doctor.user_id, "doctor")
+    access = await gateway.allowed_sections(db, actor, patient.id, purpose=PURPOSE)
+    assert access.sections == {"basics"}
+
+    own_grant = await grant_row(
+        db,
+        patient.id,
+        grantee_type="doctor",
+        grantee_id=clinic_doctor.id,
+        sections=["basics", "conditions"],
+    )
+    access = await gateway.allowed_sections(db, actor, patient.id, purpose=PURPOSE)
+    assert access.sections == {"basics", "conditions"}
+    # The doctor's own grant wins the attribution where both allow a section.
+    assert access.consent_for == {"basics": own_grant.id, "conditions": own_grant.id}
+    assert clinic_grant.id not in access.consent_for.values()
+
+
+async def test_ac15_ended_affiliation_denied(db, record, clinic, clinic_doctor):
+    _, patient = record
+    await grant_row(db, patient.id, grantee_type="clinic", grantee_id=clinic.id)
+    aff = (
+        await db.execute(
+            select(DoctorAffiliation).where(DoctorAffiliation.doctor_id == clinic_doctor.id)
+        )
+    ).scalar_one()
+    aff.status = "ended"
+    await db.commit()
+    with pytest.raises(ConsentDenied):
+        await gateway.allowed_sections(
+            db, as_actor(clinic_doctor.user_id, "doctor"), patient.id, purpose=PURPOSE
+        )
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["unverified", "admin", "other_patient", "revoked", "expired", "empty", "missing", "no_grant"],
+)
+async def test_ac16_denied_cases_raise_consent_denied(
+    db, record, verified_doctor, unverified_doctor, clinic, admin, second_patient, case
+):
+    _, patient = record
+    target = patient.id
+    actor = as_actor(verified_doctor.user_id, "doctor")
+    if case == "unverified":
+        await grant_row(db, patient.id, grantee_type="doctor", grantee_id=unverified_doctor.id)
+        actor = as_actor(unverified_doctor.user_id, "doctor")
+    elif case == "admin":
+        await grant_row(db, patient.id, grantee_type="clinic", grantee_id=clinic.id)
+        actor = as_actor(admin.id, "admin")
+    elif case == "other_patient":
+        actor = as_actor(second_patient.id, "patient")
+    elif case == "revoked":
+        await grant_row(
+            db,
+            patient.id,
+            grantee_type="doctor",
+            grantee_id=verified_doctor.id,
+            revoked_at=utcnow(),
+        )
+    elif case == "expired":
+        await grant_row(
+            db,
+            patient.id,
+            grantee_type="doctor",
+            grantee_id=verified_doctor.id,
+            expires_at=utcnow() - timedelta(seconds=1),
+        )
+    elif case == "empty":
+        await grant_row(
+            db, patient.id, grantee_type="doctor", grantee_id=verified_doctor.id, sections=[]
+        )
+    elif case == "missing":
+        target = uuid7()
+    with pytest.raises(ConsentDenied) as exc:
+        await gateway.read_sections(db, actor, target, purpose=PURPOSE)
+    assert isinstance(exc.value, NotFound) and exc.value.code == "NOT_FOUND"
+    assert await access_rows(db) == []
+
+
+async def test_ac17_unshared_sections_are_never_queried(db, record, verified_doctor, monkeypatch):
+    _, patient = record
+    await grant_row(
+        db, patient.id, grantee_type="doctor", grantee_id=verified_doctor.id, sections=["basics"]
+    )
+    called: list[str] = []
+    for key, reader in list(gateway._READERS.items()):
+
+        async def spy(session, p, _key=key, _reader=reader):
+            called.append(_key)
+            return await _reader(session, p)
+
+        monkeypatch.setitem(gateway._READERS, key, spy)
+    view = await gateway.read_sections(
+        db, as_actor(verified_doctor.user_id, "doctor"), patient.id, purpose=PURPOSE
+    )
+    assert called == ["basics"]
+    assert view.sections["basics"]["blood_group"] == "O+"
+
+
+async def test_ac17_section_outside_access_is_refused(db, record, verified_doctor):
+    _, patient = record
+    await grant_row(
+        db, patient.id, grantee_type="doctor", grantee_id=verified_doctor.id, sections=["basics"]
+    )
+    actor = as_actor(verified_doctor.user_id, "doctor")
+    access = await gateway.allowed_sections(db, actor, patient.id, purpose=PURPOSE)
+    with pytest.raises(ConsentDenied):
+        await gateway.read_section(db, actor, access, "allergies", purpose=PURPOSE)
+
+
+async def test_ac18_one_access_log_row_per_section_read(db, record, clinic, clinic_doctor):
+    _, patient = record
+    grant = await grant_row(
+        db,
+        patient.id,
+        grantee_type="clinic",
+        grantee_id=clinic.id,
+        sections=["allergies", "visits"],
+    )
+    await gateway.read_sections(
+        db, as_actor(clinic_doctor.user_id, "doctor"), patient.id, purpose=PURPOSE
+    )
+    rows = await access_rows(db)
+    assert sorted(r.resource_type for r in rows) == ["section.allergies", "section.visits"]
+    for r in rows:
+        assert r.action == "read" and r.is_break_glass is False
+        assert r.user_id == clinic_doctor.user_id
+        assert r.patient_id == patient.id and r.resource_id == patient.id
+        assert r.consent_id == grant.id
+        assert r.ip_address == "203.0.113.7"
+
+
+async def test_ac19_log_failure_returns_no_data(db, record, verified_doctor, monkeypatch):
+    _, patient = record
+    await grant_row(
+        db, patient.id, grantee_type="doctor", grantee_id=verified_doctor.id, sections=["basics"]
+    )
+    # An action outside the CHECK constraint makes the real INSERT fail.
+    monkeypatch.setattr(gateway, "ACTION_READ", "peek")
+    with pytest.raises(IntegrityError):
+        await gateway.read_sections(
+            db, as_actor(verified_doctor.user_id, "doctor"), patient.id, purpose=PURPOSE
+        )
+    assert await access_rows(db) == []
+
+
+@pytest.mark.parametrize("purpose", ["", "   "])
+async def test_ac20_purpose_required(db, record, purpose):
+    user, patient = record
+    with pytest.raises(ValueError):
+        await gateway.allowed_sections(
+            db, as_actor(user.id, "patient"), patient.id, purpose=purpose
+        )
+
+
+async def test_ac23_lookup_and_dashboard_honour_clinic_grants(db, record, clinic, clinic_doctor):
+    _, patient = record
+    actor = as_actor(clinic_doctor.user_id, "doctor")
+    with pytest.raises(NotFound):
+        await consent_service.patient_for_doctor(db, actor, patient.id)
+
+    await grant_row(db, patient.id, grantee_type="clinic", grantee_id=clinic.id)
+    await grant_row(db, patient.id, grantee_type="doctor", grantee_id=clinic_doctor.id)
+    assert (await consent_service.patient_for_doctor(db, actor, patient.id)).id == patient.id
+    found = await consent_service.find_patient_for_doctor(db, actor, patient.passport_no)
+    assert found.id == patient.id
+    listed = await consent_service.list_patients_for_doctor(db, actor)
+    assert [p.id for p in listed] == [patient.id]  # two grants, one row
