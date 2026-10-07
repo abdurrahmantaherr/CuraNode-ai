@@ -16,8 +16,15 @@ from pydantic_core import PydanticCustomError
 # globals — a function-local import degrades the dependency into a query param.
 from ..deps import ConsentSearchRateLimit, ConsentWriteRateLimit, PatientDep, SessionDep
 from ..errors import ValidationFailed
-from . import service
-from .schemas import ConsentGrantOut, GrantCreate, GranteeOut, SectionsUpdate, clean_query
+from . import access_log, service
+from .schemas import (
+    AccessLogPage,
+    ConsentGrantOut,
+    GrantCreate,
+    GranteeOut,
+    SectionsUpdate,
+    clean_query,
+)
 
 router = APIRouter(prefix="/api/v1/me", tags=["consent"])
 
@@ -105,3 +112,14 @@ async def revoke_consent(
 ) -> Response:
     await service.revoke_grant(session, actor, grant_id, user_agent=_ua(request))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/access-log", response_model=AccessLogPage)
+async def my_access_log(
+    actor: PatientDep,
+    session: SessionDep,
+    cursor: str | None = Query(None, max_length=200),
+    limit: int = Query(access_log.DEFAULT_LIMIT, ge=1, le=access_log.MAX_LIMIT),
+) -> AccessLogPage:
+    """FR5 — who read my record, newest first."""
+    return await access_log.list_access_log(session, actor, cursor=cursor, limit=limit)

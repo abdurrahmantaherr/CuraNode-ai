@@ -920,3 +920,88 @@ def test_ac21_no_direct_profile_table_reads_outside_gateway():
         "Read another patient's profile sections through consent/gateway.py "
         f"(P9 BL-12), not directly: {offenders}"
     )
+
+
+# ── S7: access log (AC-22) ───────────────────────────────────────────────
+LOG_URL = "/api/v1/me/access-log"
+
+
+async def log_row(db, patient_id, *, user_id, section="basics", consent_id=None, at=None):
+    row = AccessLog(
+        user_id=user_id,
+        patient_id=patient_id,
+        consent_id=consent_id,
+        resource_type=f"section.{section}",
+        resource_id=patient_id,
+        action="read",
+        occurred_at=at or utcnow(),
+    )
+    db.add(row)
+    await db.commit()
+    return row
+
+
+async def test_ac22_access_log_lists_reads_with_names_and_clinic(
+    client, db, patient_user, clinic, clinic_doctor
+):
+    me = await patient_of(db, patient_user)
+    await grant_row(
+        db,
+        me.id,
+        grantee_type="clinic",
+        grantee_id=clinic.id,
+        sections=["allergies", "basics"],
+    )
+    await gateway.read_sections(
+        db, as_actor(clinic_doctor.user_id, "doctor"), me.id, purpose=PURPOSE
+    )
+    r = await client.get(LOG_URL)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["next_cursor"] is None
+    assert sorted(i["section"] for i in body["items"]) == ["allergies", "basics"]
+    for item in body["items"]:
+        assert item["accessor_name"] == "Dr Bilal Ahmed"
+        assert item["accessor_specialty"] == "Dermatology"
+        assert item["clinic_name"] == clinic.name
+
+
+async def test_ac22_own_rows_only_newest_first_paged(
+    client, db, patient_user, second_patient, verified_doctor
+):
+    me = await patient_of(db, patient_user)
+    other = await patient_of(db, second_patient)
+    base = utcnow() - timedelta(hours=1)
+    for i in range(5):
+        await log_row(db, me.id, user_id=verified_doctor.user_id, at=base + timedelta(minutes=i))
+    await log_row(db, other.id, user_id=verified_doctor.user_id)  # someone else's record
+    await log_row(db, me.id, user_id=patient_user.id)  # the patient's own read
+
+    first = (await client.get(LOG_URL, params={"limit": 2})).json()
+    assert len(first["items"]) == 2 and first["next_cursor"]
+    second = (await client.get(LOG_URL, params={"limit": 2, "cursor": first["next_cursor"]})).json()
+    third = (await client.get(LOG_URL, params={"limit": 2, "cursor": second["next_cursor"]})).json()
+    assert third["next_cursor"] is None
+    times = [i["occurred_at"] for p in (first, second, third) for i in p["items"]]
+    assert len(times) == 5 and times == sorted(times, reverse=True)
+    assert all(i["accessor_name"] == "Dr Ayesha Khan" for i in first["items"])
+    assert all(i["clinic_name"] is None for i in first["items"])  # a doctor grant
+
+
+@pytest.mark.parametrize("cursor", ["!!!", "bm90LWEtY3Vyc29y"])
+async def test_ac22_bad_cursor_422(client, db, patient_user, cursor):
+    r = await client.get(LOG_URL, params={"cursor": cursor})
+    assert r.status_code == 422
+    assert r.json()["error"]["details"]["fields"]["cursor"] == "errors.cursor_invalid"
+
+
+async def test_ac22_limit_bounds(client, db, patient_user):
+    assert (await client.get(LOG_URL, params={"limit": 0})).status_code == 422
+    assert (await client.get(LOG_URL, params={"limit": 101})).status_code == 422
+
+
+@pytest.mark.parametrize("email", ["dr@x.com", "adm@x.com"])
+async def test_ac25_access_log_is_patient_only(client, db, verified_doctor, admin, email):
+    assert (await client.get(LOG_URL)).status_code == 401
+    await login(client, email)
+    assert (await client.get(LOG_URL)).status_code == 403
