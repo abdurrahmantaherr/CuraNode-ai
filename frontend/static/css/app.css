@@ -496,3 +496,10 @@ h1.auth-title {
 @media (pointer: coarse) {
   .btn, .btn--sm, .topnav__link, .role-tile, .input, .select { min-height: 44px; }
 }
+
+/* D4 — doctor's patient list. */
+.patient-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.patient-table th,
+.patient-table td { text-align: start; padding: var(--sp-3) var(--sp-4); border-block-end: 1px solid var(--line); }
+.patient-table th { font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.patient-table tbody tr:last-child td { border-block-end: 0; }

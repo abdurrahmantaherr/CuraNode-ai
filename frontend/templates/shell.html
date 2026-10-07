@@ -32,9 +32,12 @@
           <span class="chip">{{ t('patient.dashboard.passport') }}</span>
         {% endif %}
       </div>
-      <p style="margin:var(--sp-6) 0 0;font-size:13.5px;color:var(--muted);max-width:64ch">
-        {{ t('dashboard.placeholder') }}
-      </p>
+      {% if patients is not defined %}
+        {#- A verified doctor's dashboard has real content now (D4). -#}
+        <p style="margin:var(--sp-6) 0 0;font-size:13.5px;color:var(--muted);max-width:64ch">
+          {{ t('dashboard.placeholder') }}
+        </p>
+      {% endif %}
       {% if links %}
         <p style="margin:var(--sp-5) 0 0;display:flex;flex-wrap:wrap;gap:var(--sp-2)">
           {% for link in links %}
@@ -43,6 +46,10 @@
         </p>
       {% endif %}
     </div>
+
+    {% if patients is defined %}
+      {% include "doctor/_patient_list.html" %}
+    {% endif %}
   </main>
 </div>
 {% endblock %}
