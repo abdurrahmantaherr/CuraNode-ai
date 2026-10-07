@@ -22,11 +22,14 @@ uv run backend/app/main.py                 # Start the development server
 
 ### Testing
 ```bash
-uv run pytest -q                           # Run all tests (155 tests)
+uv run pytest -q                           # Run all tests (244 tests)
 uv run pytest tests/test_auth.py -v        # Run authentication tests with verbose output
 uv run pytest tests/test_web.py -v         # Run web interface tests
 uv run pytest tests/test_oauth.py -v       # Run Google OAuth flow tests
 uv run pytest tests/test_profile.py -v     # Run patient profile (FR2) tests
+uv run pytest tests/test_consent.py -v     # Run Medical Passport consent (FR4) API tests
+uv run pytest tests/test_passport_web.py -v   # Run passport / access / doctor-lookup page tests
+uv run pytest tests/test_doctor_dashboard.py tests/test_doctor_rows.py -v   # Run doctor dashboard (D4) tests
 ```
 
 Tests run against an in-memory SQLite database and `tests/fakes.py`'s `FakeSupabaseAuth` (a stand-in for Supabase Auth — real JWTs, HS256-signed with a test-only secret). No test makes a network call; production verifies ES256 tokens against Supabase's real JWKS instead.
@@ -64,14 +67,22 @@ backend/
     identity/                  # Authentication system (router, service, schemas, security, oauth)
     audit/                     # Append-only audit writer (audit_log — owned by this repo)
     profile/                   # Patient profile (FR2): basics, allergies, conditions, medications — JSON API + service
+    consent/                   # Medical Passport consent (FR4/D2): grant, list, revoke, doctor-side lookups — JSON API + service
+    doctor/                    # Doctor dashboard (D4 v1): pure display-row builder for consented patients
     i18n/                      # English/Urdu message catalogues
     web/                       # Server-rendered page routes and form handling (incl. OAuth + onboarding)
 alembic/                       # Database migrations (additive-only, hand-written — see above)
 frontend/
   templates/                   # Jinja2 templates (base, auth pages incl. onboarding/oauth_complete, shell, partials)
+                               #   patient/passport.html, patient/access.html,
+                               #   doctor/lookup.html, doctor/patient.html, doctor/_patient_list.html
   static/                      # CSS (design tokens + app) and minimal JS
 tests/                         # Test suite (authentication, web interface, OAuth flow, settings)
+                               #   test_consent.py, test_passport_web.py,
+                               #   test_doctor_rows.py, test_doctor_dashboard.py
 docs/                          # Product requirements, technical design, design system, docs/prompts/ (OAuth plan)
+  superpowers/                 # D4 doctor-dashboard design spec (specs/) and implementation plan (plans/)
+.claude/specs/                 # Feature specs: patient_profile_spec.md, medical_passport_spec.md, oauth.md, oauth-exec.md, SPEC_patient_profile_plan.md
 ```
 
 ### Key Architectural Decisions
@@ -134,6 +145,19 @@ docs/                          # Product requirements, technical design, design 
    - Migrations are additive-only and hand-written (see Database Management above)
    - Server-rendered templates replace Next.js frontend from original TDD
 
+9. **Medical Passport consent (FR1/FR4/D2)**
+   - `backend/app/consent/` (`schemas.py`, `service.py`, `router.py`) owns all consent business logic. The JSON API (`/api/v1/me/consents`: `GET` list, `POST` grant, `DELETE` revoke) and the server-rendered pages (`/{locale}/patient/passport`, `/{locale}/patient/access`, handlers in `web/router.py`) call the **same** service functions.
+   - The live table is **`consent_grant`** (singular), not TDD §3.4's `consent_grants`; `ConsentGrant` in `db/models.py` is mapped to the verified schema, including `scope_sections` (`jsonb`) and a polymorphic `grantee_id` with no FK. Grants are all-or-nothing and "until revoked" in this version — `scope_sections` and `expires_at` exist but no UI offers them. The live `idx_consent_grant_active_lookup` is a plain partial index, **not** unique, so "one active grant per patient/grantee" (BL-04) is enforced in `consent/service.py`, never relied on from the database.
+   - Same BYPASSRLS rule as the profile feature: every grant lookup filters by the caller's own `patient_id` in application code. Grants are never hard-deleted — revoke sets `revoked_at`, a repeat revoke writes nothing, and each successful mutation writes exactly one `audit_log` row (`consent.grant`, `consent.revoke`) in the same transaction. A revoke takes effect on the very next request — no cache anywhere on the access path.
+   - **D2 (a doctor without a grant sees nothing, not even that the patient exists):** every doctor-side failure — not a verified doctor, no such patient, never granted, revoked, expired — raises the identical `NotFound`. `find_patient_for_doctor` (by passport number) and `patient_for_doctor` (by patient id) re-check the grant live on every call; the doctor patient URL carries the patient's id, never the passport number, because paths reach the access log. Only grants naming the doctor count; what a clinic grant unlocks for that clinic's doctors is not yet specified.
+   - The QR code on the passport page encodes `passport_no` alone. Consent writes are rate-limited per user (`consent_write_rate_limit_per_minute`, via `ConsentWriteRateLimit` / `check_consent_write_rate` in `deps.py`). Nothing logs a PMDC number, clinic name, or passport number (AC-12).
+   - Business-rule numbering (`BL-01`…`BL-12`) and acceptance criteria live in `.claude/specs/medical_passport_spec.md` — read it before changing this feature. Its §1, §3 and §8 are written; where it is silent, stop and ask rather than invent a column, endpoint, or behaviour.
+
+10. **Doctor dashboard (D4 v1)**
+   - A verified doctor's home page (`/{locale}/doctor`) lists the patients with an active grant naming them. Who may be seen is decided only in `consent/service.py` (`list_patients_for_doctor`, the same live-checked rules as the lookup); `doctor/rows.py` is pure formatting (`build_rows`, `age_in_years`) with no database access and no consent decisions. Gender is shown as its translated label, with a legacy stored value shown as-is.
+   - Doctor pages: `/{locale}/doctor/passport-lookup` (GET/POST) and `/{locale}/doctor/patient/{patient_id}`, guarded by `_doctor_page_guard` in `web/router.py`. Viewing the dashboard writes a `doctor.dashboard.view` audit row.
+   - Templates: `frontend/templates/doctor/` (`_patient_list.html`, `lookup.html`, `patient.html`) and `frontend/templates/patient/` (`passport.html`, `access.html`, `profile.html`). The design spec and implementation plan are in `docs/superpowers/specs/` and `docs/superpowers/plans/`.
+
 ### Important Files to Understand First
 
 1. **`backend/app/main.py`** - Application entrypoint, middleware, startup guards
@@ -152,6 +176,8 @@ docs/                          # Product requirements, technical design, design 
 - **Authentication changes**: Focus on `deps.py`, `identity/`, and related tests. Never reintroduce a shared, stateful Supabase client across sign-in and admin operations (see Key Architectural Decisions above).
 - **OAuth changes**: Read `identity/oauth.py`'s module docstring first — the `state`-param gotcha there is easy to reintroduce by accident if the Supabase SDK/API ever looks like it should accept one. Never provision a `Patient`/`Doctor` row before onboarding; never skip the email-collision guard in `login_with_oauth`.
 - **Patient profile changes**: Read `.claude/specs/patient_profile_spec.md` first — it wins over `docs/TDD.md` wherever they disagree. Put every business rule in `profile/service.py` so the API and the web page stay in sync; never perform a query on `allergy`/`chronic_condition`/`patient_medication` without filtering by the caller's own `patient_id` (BYPASSRLS means the database will not catch a missed scope). Never let a patient edit an entry whose `recorded_by` isn't their own `user_id`.
+- **Medical Passport changes**: Read `.claude/specs/medical_passport_spec.md` first. Put every consent rule in `consent/service.py`; filter every grant lookup by the caller's own `patient_id`; never make a doctor-side denial distinguishable from "no such patient" (always the same `NotFound`); never put a passport number in a URL, log line, or audit row.
+- **Doctor dashboard changes**: Keep `doctor/rows.py` pure — consent decisions belong in `consent/service.py`.
 - **UI changes**: Work with Jinja2 templates in `frontend/templates/` and `web/router.py`
 - **Database changes**: Modify `db/models.py` to match the *real* shared schema (verify against `information_schema` first) and write an additive Alembic migration by hand — never autogenerate
 - **Configuration**: Update `settings.py` with appropriate validation guards
