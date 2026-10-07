@@ -37,7 +37,7 @@ def age_in_years(born: date | None, today: date) -> int | None:
     return years
 
 
-def _gender_label(value: str | None, locale: str) -> str:
+def gender_label(value: str | None, locale: str) -> str:
     """The stored code as its translated label.
 
     The column is shared with the wider product, so a legacy value outside
@@ -57,7 +57,7 @@ def build_rows(patients: Sequence[Patient], *, locale: str, today: date) -> list
             PatientRow(
                 name=p.full_name,
                 age=str(age) if age is not None else DASH,
-                gender=_gender_label(p.gender, locale),
+                gender=gender_label(p.gender, locale),
                 passport_no=p.passport_no,
                 # The id, not the passport number: paths reach the access log (P4 AC-12).
                 href=f"/{locale}/doctor/patient/{p.id}",

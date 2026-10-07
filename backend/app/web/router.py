@@ -12,7 +12,7 @@ place" with no client state to juggle.
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Annotated, Any
 from urllib.parse import urlencode
 
@@ -22,11 +22,14 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 from pydantic import ValidationError
+from pydantic_core import PydanticCustomError
 from sqlalchemy import select
 from supabase_auth.errors import AuthApiError
 
 from ..audit import writer as audit
 from ..cache import cache, oauth_state_key
+from ..consent import access_log as consent_access_log
+from ..consent import gateway as consent_gateway
 from ..consent import schemas as consent_schemas
 from ..consent import service as consent_service
 from ..db import types as dbtypes
@@ -35,11 +38,12 @@ from ..deps import (
     Actor,
     OptionalActorDep,
     SessionDep,
+    check_consent_search_rate,
     check_consent_write_rate,
     check_profile_write_rate,
     enforce_auth_rate_limit,
 )
-from ..doctor.rows import build_rows
+from ..doctor.rows import age_in_years, build_rows, gender_label
 from ..errors import (
     AppError,
     DuplicateEntry,
@@ -1238,13 +1242,38 @@ async def patient_passport_page(
     )
 
 
-# BL-31 pattern — the only `saved` values honoured; user input is never reflected.
+# BL-25 / profile BL-31 pattern — the only `saved` values honoured; user input
+# is never reflected.
 _ACCESS_SAVED = {
     "granted": "access.saved.granted",
     "exists": "access.saved.exists",
+    "changed": "access.saved.changed",
     "revoked": "access.saved.revoked",
 }
-_GRANTEE_TYPES = ("doctor", "clinic")
+_DURATIONS = tuple(consent_schemas.DURATIONS)
+_LATER_SECTIONS = frozenset({"prescriptions", "lab_reports", "visits"})  # filled by P2/P3
+
+
+def _pkt(ts: datetime | None) -> str:
+    """A stored UTC timestamp as Pakistan time, `YYYY-MM-DD HH:MM`."""
+    if ts is None:
+        return ""
+    if ts.tzinfo is None:  # SQLite returns naive datetimes; every stored value is UTC
+        ts = ts.replace(tzinfo=UTC)
+    return ts.astimezone(dbtypes.PKT).strftime("%Y-%m-%d %H:%M")
+
+
+def _pkt_date(ts: datetime | None) -> str:
+    return _pkt(ts)[:10]
+
+
+def _parse_grantee(value: str) -> tuple[str, uuid.UUID] | None:
+    """`doctor:<uuid>` / `clinic:<uuid>` from the search result radios."""
+    kind, _, raw = value.partition(":")
+    if kind not in ("doctor", "clinic"):
+        return None
+    parsed = _parse_entry_id(raw)
+    return (kind, parsed) if parsed is not None else None
 
 
 async def _render_access(
@@ -1254,12 +1283,16 @@ async def _render_access(
     actor: Actor,
     *,
     status_code: int = 200,
+    q: str = "",
+    q_error: str | None = None,
+    results: list[consent_schemas.GranteeOut] | None = None,
     form_state: dict[str, Any] | None = None,
     saved: str | None = None,
     page_error: str | None = None,
 ) -> Response:
     try:
-        grants = await consent_service.list_grants(session, actor)
+        every = await consent_service.list_grants(session, actor, include_revoked=True)
+        log = await consent_access_log.list_access_log(session, actor)
     except NotFound:
         return RedirectResponse(f"/{loc}/onboarding", status_code=303)
     return _render(
@@ -1272,12 +1305,38 @@ async def _render_access(
         crumb=translate("auth.role.patient", loc),
         page_title=translate("access.title", loc),
         nav_items=_patient_nav(loc, current="access"),
-        grants=grants,
-        grantee_types=_GRANTEE_TYPES,
-        form_state=form_state or {"values": {"grantee_type": "doctor"}, "errors": {}},
+        grants=[g for g in every if g.active],
+        past=[g for g in every if not g.active],
+        log=log.items,
+        sections=consent_schemas.SECTIONS,
+        later_sections=_LATER_SECTIONS,
+        durations=_DURATIONS,
+        q=q,
+        q_error=q_error,
+        results=results,
+        form_state=form_state
+        or {"values": {"sections": [], "duration": consent_schemas.DEFAULT_DURATION}, "errors": {}},
         saved=saved,
         page_error=page_error,
+        pkt=_pkt,
+        pkt_date=_pkt_date,
     )
+
+
+async def _search(
+    session: SessionDep, actor: Actor, loc: str, q: str, *, count: bool
+) -> tuple[list[consent_schemas.GranteeOut] | None, str | None]:
+    """Grantee results for `q`, or a field error. `count` draws on the search
+    budget; a re-render after a failed grant re-shows results without it."""
+    if not q:
+        return None, None
+    try:
+        cleaned = consent_schemas.clean_query(q)
+    except PydanticCustomError as exc:
+        return None, translate(exc.message_template, loc, **(exc.context or {}))
+    if count:
+        await check_consent_search_rate(actor)
+    return await consent_service.search_grantees(session, actor, cleaned), None
 
 
 async def _access_failure(
@@ -1287,29 +1346,45 @@ async def _access_failure(
     actor: Actor,
     exc: Exception,
     *,
-    values: dict[str, str],
+    values: dict[str, Any],
+    q: str = "",
 ) -> Response:
-    """Map a failed grant (`values` set) or revoke (`values` empty) onto the
-    re-rendered page."""
+    """Map a failed grant (`values` set) or a failed change/revoke (`values`
+    empty) onto the re-rendered page (spec §4.12)."""
     await session.rollback()
+    results, _ = await _search(session, actor, loc, q, count=False) if values else (None, None)
 
     async def page(code: int, errors: dict[str, str] | None = None, **kw: Any) -> Response:
         state = {"values": values, "errors": errors or {}} if values else None
         return await _render_access(
-            request, loc, session, actor, status_code=code, form_state=state, **kw
+            request,
+            loc,
+            session,
+            actor,
+            status_code=code,
+            q=q,
+            results=results,
+            form_state=state,
+            **kw,
         )
 
     if isinstance(exc, ValidationError):
-        # Whichever field the schema names, the page has one input for it.
-        first = next(iter(_field_errors(exc, loc).values()))
-        return await page(422, {"grantee": first})
+        errors: dict[str, str] = {}
+        for err in exc.errors():
+            field = str(err["loc"][0]) if err["loc"] else "grantee"
+            # The id fields come from the chosen radio, so they report on it.
+            field = "grantee" if field in ("doctor_id", "clinic_id") else field
+            msg = err["msg"] if str(err["msg"]).startswith("errors.") else "errors.choice_invalid"
+            errors.setdefault(field, translate(msg, loc))
+        if not values:
+            return await page(422, page_error=next(iter(errors.values())))
+        return await page(422, errors)
     if isinstance(exc, ValidationFailed):
         fields = exc.details.get("fields", {})
         return await page(422, {k: translate(v, loc) for k, v in fields.items()})
     if isinstance(exc, NotFound):
-        if values:  # a grant whose grantee wasn't found — unknown ≡ unverified (BL-02)
-            key = f"errors.grantee_{values['grantee_type']}_not_found"
-            return await page(404, {"grantee": translate(key, loc)})
+        if values:  # the chosen grantee isn't grantable — unknown ≡ unverified (BL-01)
+            return await page(404, {"grantee": translate("errors.grantee_not_found", loc)})
         return await page(404, page_error=translate("errors.not_found", loc))
     if isinstance(exc, DuplicateEntry):
         return await page(409, {"grantee": translate("errors.already_granted", loc)})
@@ -1325,13 +1400,39 @@ async def patient_access_page(
     session: SessionDep,
     actor: OptionalActorDep,
     saved: str | None = None,
+    q: str = "",
 ) -> Response:
     if (redirect := _patient_page_guard(request, locale, actor, "access")) is not None:
         return redirect
     assert actor is not None
     loc = normalise_locale(locale)
     banner = translate(_ACCESS_SAVED[saved], loc) if saved in _ACCESS_SAVED else None
-    return await _render_access(request, loc, session, actor, saved=banner)
+    q = q[:200]
+    try:
+        results, q_error = await _search(session, actor, loc, q, count=True)
+    except RateLimited:
+        return await _render_access(
+            request,
+            loc,
+            session,
+            actor,
+            status_code=429,
+            q=q,
+            page_error=translate("errors.rate_limited", loc),
+        )
+    except NotFound:
+        return RedirectResponse(f"/{loc}/onboarding", status_code=303)
+    return await _render_access(
+        request,
+        loc,
+        session,
+        actor,
+        status_code=422 if q_error else 200,
+        q=q,
+        q_error=q_error,
+        results=results,
+        saved=banner,
+    )
 
 
 @router.post("/{locale}/patient/access")
@@ -1343,26 +1444,24 @@ async def patient_access_grant_submit(
     assert actor is not None
     loc = normalise_locale(locale)
     form = await request.form()
-    values = {
-        "grantee_type": str(form.get("grantee_type", "")),
+    values: dict[str, Any] = {
         "grantee": str(form.get("grantee", "")),
+        "sections": [str(s) for s in form.getlist("sections")],
+        "duration": str(form.get("duration", "")),
     }
+    q = str(form.get("q", ""))[:200]
 
     try:
         await check_consent_write_rate(actor)
-        grantee_type = values["grantee_type"]
-        if grantee_type not in _GRANTEE_TYPES:
-            raise ValidationFailed({"fields": {"grantee_type": "errors.choice_invalid"}})
-        if not values["grantee"].strip():
-            raise ValidationFailed({"fields": {"grantee": "errors.text_required"}})
-        field = "pmdc_number" if grantee_type == "doctor" else "clinic_name"
+        grantee = _parse_grantee(values["grantee"])
+        if grantee is None:
+            raise ValidationFailed({"fields": {"grantee": "errors.choice_invalid"}})
+        kind, grantee_id = grantee
         body = consent_schemas.GrantCreate.model_validate(
-            # Interim (P9 S3): this P4 form has no section or duration picker
-            # yet, so it keeps P4's all-or-nothing, until-revoked meaning.
             {
-                field: values["grantee"],
-                "sections": list(consent_schemas.SECTIONS),
-                "duration": "until_revoked",
+                f"{kind}_id": grantee_id,
+                "sections": values["sections"],
+                "duration": values["duration"],
             }
         )
         _, created = await consent_service.grant_consent(
@@ -1370,14 +1469,44 @@ async def patient_access_grant_submit(
             actor,
             sections=body.sections,
             duration=body.duration,
-            pmdc_number=body.pmdc_number,
-            clinic_name=body.clinic_name,
+            doctor_id=body.doctor_id,
+            clinic_id=body.clinic_id,
             user_agent=request.headers.get("user-agent"),
         )
     except Exception as exc:  # noqa: BLE001 — every outcome is mapped to the page
-        return await _access_failure(request, loc, session, actor, exc, values=values)
+        return await _access_failure(request, loc, session, actor, exc, values=values, q=q)
     saved = "granted" if created else "exists"  # BL-05: an active grant is returned as is
     return RedirectResponse(f"/{loc}/patient/access?saved={saved}", status_code=303)
+
+
+@router.post("/{locale}/patient/access/{grant_id}/sections")
+async def patient_access_sections_submit(
+    request: Request, locale: str, grant_id: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _patient_page_guard(request, locale, actor, "access")) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    parsed_id = _parse_entry_id(grant_id)
+    form = await request.form()
+
+    try:
+        if parsed_id is None:
+            raise NotFound()  # a malformed id is NotFound on the web, not a raw 422
+        await check_consent_write_rate(actor)
+        body = consent_schemas.SectionsUpdate.model_validate(
+            {"sections": [str(s) for s in form.getlist("sections")]}
+        )
+        await consent_service.change_sections(
+            session,
+            actor,
+            parsed_id,
+            sections=body.sections,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped to the page
+        return await _access_failure(request, loc, session, actor, exc, values={})
+    return RedirectResponse(f"/{loc}/patient/access?saved=changed", status_code=303)
 
 
 @router.post("/{locale}/patient/access/{grant_id}/revoke")
@@ -1508,12 +1637,23 @@ async def doctor_patient_page(
     try:
         if parsed_id is None:
             raise NotFound()
-        # Re-checked on every view: a revoke takes effect on the next request (BL-07).
-        patient = await consent_service.patient_for_doctor(session, actor, parsed_id)
-    except NotFound:
+        # Through the consent gateway, re-checked on every view (BL-07): only the
+        # shared sections are read, and each read is logged (P9 BL-17, BL-18).
+        view = await consent_gateway.read_sections(
+            session, actor, parsed_id, purpose="doctor.patient_view"
+        )
+    except NotFound:  # includes ConsentDenied — one D2 response for every refusal
         return _render_lookup(
             request, loc, status_code=404, error=translate("lookup.not_found", loc)
         )
+    basics = view.sections["basics"]
+    if basics is not None:
+        age = age_in_years(basics["date_of_birth"], dbtypes.today_pk())
+        basics = {
+            **basics,
+            "age": str(age) if age is not None else "—",
+            "gender": gender_label(basics["gender"], loc),
+        }
     return _render(
         request,
         "doctor/patient.html",
@@ -1521,5 +1661,7 @@ async def doctor_patient_page(
         crumb=translate("auth.role.doctor", loc),
         page_title=translate("doctor_patient.title", loc),
         nav_items=_doctor_nav(loc, current="lookup"),
-        passport_no=patient.passport_no,
+        passport_no=view.passport_no,
+        sections=consent_schemas.SECTIONS,
+        shared={**view.sections, "basics": basics},
     )
