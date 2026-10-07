@@ -469,7 +469,8 @@ h1.auth-title {
    (and scannable) in the dark theme too. */
 .qr {
   margin: 0;
-  inline-size: 220px;
+  flex: 0 0 auto;
+  inline-size: 140px;
   max-inline-size: 100%;
   border-radius: var(--r-card-sm);
   overflow: hidden;
