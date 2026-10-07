@@ -11,6 +11,7 @@ database; nothing here touches the shared Supabase project.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import uuid
@@ -876,3 +877,46 @@ async def test_ac23_lookup_and_dashboard_honour_clinic_grants(db, record, clinic
     assert found.id == patient.id
     listed = await consent_service.list_patients_for_doctor(db, actor)
     assert [p.id for p in listed] == [patient.id]  # two grants, one row
+
+
+# ── S5: one door (AC-21) ─────────────────────────────────────────────────
+APP = ROOT / "backend" / "app"
+PROFILE_TABLE_MODELS = {"Allergy", "ChronicCondition", "PatientMedication"}
+# The only modules allowed to touch the profile-table models: their mapping,
+# the owner's own service (always scoped to the caller), and the gateway.
+ALLOWED = {
+    APP / "db" / "models.py",
+    APP / "profile" / "service.py",
+    APP / "consent" / "gateway.py",
+}
+
+
+def profile_model_uses(source: str) -> set[str]:
+    """Every exact name of a profile-table model a module imports or uses."""
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Name) and node.id in PROFILE_TABLE_MODELS:
+            found.add(node.id)
+        elif isinstance(node, ast.Attribute) and node.attr in PROFILE_TABLE_MODELS:
+            found.add(node.attr)
+        elif isinstance(node, ast.ImportFrom):
+            found.update(a.name for a in node.names if a.name in PROFILE_TABLE_MODELS)
+    return found
+
+
+def test_ac21_scanner_catches_a_direct_read():
+    leaky = "from app.db.models import Allergy\nselect(models.ChronicCondition)\n"
+    assert profile_model_uses(leaky) == {"Allergy", "ChronicCondition"}
+    assert profile_model_uses("x = AllergyCreate") == set()  # schema names are fine
+
+
+def test_ac21_no_direct_profile_table_reads_outside_gateway():
+    offenders = {
+        str(path.relative_to(ROOT)): sorted(uses)
+        for path in APP.rglob("*.py")
+        if path not in ALLOWED and (uses := profile_model_uses(path.read_text(encoding="utf-8")))
+    }
+    assert offenders == {}, (
+        "Read another patient's profile sections through consent/gateway.py "
+        f"(P9 BL-12), not directly: {offenders}"
+    )
