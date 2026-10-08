@@ -135,7 +135,36 @@ def test_ac29_migration_is_additive():
     upgrade = source.split("def upgrade()")[1].split("def downgrade()")[0]
     for forbidden in ("drop_", "alter_column", "rename", "DROP ", "DELETE "):
         assert forbidden not in upgrade
-    assert 'down_revision: str | Sequence[str] | None = "488dbf2b3915"' in source
+    assert 'down_revision: str | Sequence[str] | None = "35c4bc13fa37"' in source
+
+
+def test_ac29_revision_chain_is_single_and_unbroken():
+    """One head, and the chain runs through the reconstructed upstream revision."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    config = Config()
+    config.set_main_option("script_location", str(ROOT / "alembic"))
+    script = ScriptDirectory.from_config(config)
+    assert script.get_heads() == ["dba968144fb4"]
+    chain = [rev.revision for rev in script.walk_revisions("base", "heads")]
+    assert chain == ["dba968144fb4", "35c4bc13fa37", "488dbf2b3915", "6feacefae2d0"]
+
+
+def test_ac29_placeholder_upgrade_is_noop_and_downgrade_refuses():
+    spec = importlib.util.spec_from_file_location(
+        "placeholder",
+        ROOT / "alembic" / "versions" / "35c4bc13fa37_reconstructed_document_ocr_placeholder.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        _run(conn, module.upgrade)  # touches nothing
+        assert sa.inspect(conn).get_table_names() == []
+        with pytest.raises(RuntimeError, match="placeholder"):
+            _run(conn, module.downgrade)
 
 
 async def test_ac29_one_unrevoked_grant_per_grantee_in_the_model(db):
