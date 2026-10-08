@@ -190,5 +190,11 @@
   "errors.registration_failed": "We couldn't create your account right now. Please try again in a few minutes.",
   "errors.cross_origin": "This form has to be sent from the CuraNode-AI site. Reload the page and try again.",
   "auth.register.created": "Your account has been created. Please sign in.",
-  "errors.email_taken": "An account with this email already exists. Please log in."
+  "errors.email_taken": "An account with this email already exists. Please log in.",
+  "doctor_dashboard.patients.title": "My patients",
+  "doctor_dashboard.col.name": "Name",
+  "doctor_dashboard.col.age": "Age",
+  "doctor_dashboard.col.gender": "Gender",
+  "doctor_dashboard.col.passport": "Passport number",
+  "doctor_dashboard.empty": "No patients have shared their record with you yet."
 }

@@ -190,5 +190,11 @@
   "errors.registration_failed": "ہم ابھی آپ کا اکاؤنٹ نہیں بنا سکے۔ براہِ کرم چند منٹ بعد دوبارہ کوشش کریں۔",
   "errors.cross_origin": "یہ فارم صرف CuraNode-AI کی سائٹ سے بھیجا جا سکتا ہے۔ صفحہ دوبارہ لوڈ کر کے کوشش کریں۔",
   "auth.register.created": "آپ کا اکاؤنٹ بن گیا ہے۔ براہِ کرم سائن اِن کریں۔",
-  "errors.email_taken": "اس ای میل سے ایک اکاؤنٹ پہلے سے موجود ہے۔ براہِ کرم لاگ اِن کریں۔"
+  "errors.email_taken": "اس ای میل سے ایک اکاؤنٹ پہلے سے موجود ہے۔ براہِ کرم لاگ اِن کریں۔",
+  "doctor_dashboard.patients.title": "میرے مریض",
+  "doctor_dashboard.col.name": "نام",
+  "doctor_dashboard.col.age": "عمر",
+  "doctor_dashboard.col.gender": "جنس",
+  "doctor_dashboard.col.passport": "پاسپورٹ نمبر",
+  "doctor_dashboard.empty": "ابھی تک کسی مریض نے اپنا ریکارڈ آپ کے ساتھ شیئر نہیں کیا۔"
 }

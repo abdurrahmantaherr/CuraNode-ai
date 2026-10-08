@@ -55,6 +55,9 @@ CONSENT_GRANT = "consent.grant"
 CONSENT_REVOKE = "consent.revoke"
 RECORD_READ = "record.read"
 
+# Emitted by the doctor dashboard (D4). `detail` holds a patient count only.
+DOCTOR_DASHBOARD_VIEW = "doctor.dashboard.view"
+
 
 async def write(
     session: AsyncSession,
