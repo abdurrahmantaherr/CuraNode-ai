@@ -37,16 +37,17 @@ def _register_payload(email: str, **extra):
 
 
 # ── T1 / AC-01 — patient registration ────────────────────────────────────
-async def test_t1_patient_registration(client, db):
+async def test_t1_patient_registration(client, db, fake_supabase):
     r = await client.post("/api/v1/auth/register", json=_register_payload("a@b.com"))
     assert r.status_code == 201, r.text
-    body = r.json()
-    assert body["role"] == "patient"
-    assert body["landing_route"] == "/en/patient"
+    assert r.json() == {"status": "registered", "message_key": "auth.register.created"}
 
-    # Signed in immediately — both cookies present (no OTP step).
-    assert settings.access_cookie_name in r.cookies
-    assert settings.refresh_cookie_name in r.cookies
+    # No session from registration — the user signs in normally next.
+    assert settings.access_cookie_name not in r.cookies
+    assert settings.refresh_cookie_name not in r.cookies
+    # Created confirmed, so Supabase sends no verification email.
+    assert fake_supabase.users["a@b.com"]["confirmed"] is True
+    assert "resend" not in fake_supabase.calls
 
     user = (await db.execute(select(Profile).where(Profile.email == "a@b.com"))).scalar_one()
     assert user.role == UserRole.PATIENT
@@ -58,6 +59,12 @@ async def test_t1_patient_registration(client, db):
     assert patient is not None
     assert patient.passport_no.startswith("CN-")
     assert len(patient.passport_no) == 12
+
+    login = await client.post(
+        "/api/v1/auth/login", json={"email": "a@b.com", "password": TEST_PASSWORD}
+    )
+    assert login.status_code == 200
+    assert login.json()["landing_route"] == "/en/patient"
 
 
 # ── T5 / AC-05 — login success ───────────────────────────────────────────
@@ -314,7 +321,6 @@ async def test_t21_doctor_registration_is_unverified(client, db, clinic):
         ),
     )
     assert r.status_code == 201
-    assert r.json()["role"] == "doctor"
 
     user = (await db.execute(select(Profile).where(Profile.email == "doc1@x.com"))).scalar_one()
     doctor = (await db.execute(select(Doctor).where(Doctor.user_id == user.id))).scalar_one()
@@ -338,7 +344,7 @@ async def test_t21_injected_is_verified_is_ignored(client, db, clinic):
             primary_clinic_id=str(clinic.id),
             is_verified=True,
             verified_by=str(clinic.id),
-            status="active",
+            status="suspended",
         ),
     )
     assert r.status_code == 201
@@ -347,6 +353,7 @@ async def test_t21_injected_is_verified_is_ignored(client, db, clinic):
     assert doctor.verification_status == VerificationStatus.PENDING, (
         "client injected is_verified into the row"
     )
+    assert user.status == AccountStatus.ACTIVE, "client injected status"
 
 
 async def test_t21_doctor_missing_fields_and_bad_clinic(client, db, clinic):
@@ -400,22 +407,45 @@ def test_t23_access_token_claims_carry_no_role_or_verification():
 
     from app.identity.security import AccessClaims
 
-    assert {f.name for f in fields(AccessClaims)} == {"user_id"}
+    # `session_id`/`issued_at` exist only for lifetime/logout checks (M3).
+    assert {f.name for f in fields(AccessClaims)} == {"user_id", "session_id", "issued_at"}
 
 
-# ── T24 / AC-24 — duplicate email is not an oracle ──────────────────────
-async def test_t24_duplicate_email_no_oracle(client, db):
+# ── T24 — duplicate email (after normalisation) is refused ──────────────
+@pytest.mark.parametrize(
+    "variant", ["dup@x.com", "DUP@x.com", "Dup@X.com", "  dup@x.com  ", "dup@x.com "]
+)
+async def test_t24_duplicate_email_is_refused(client, db, fake_supabase, variant):
     first = await client.post("/api/v1/auth/register", json=_register_payload("dup@x.com"))
     assert first.status_code == 201
 
-    for variant in ("dup@x.com", "DUP@x.com", "  Dup@X.com  "):
-        again = await client.post("/api/v1/auth/register", json=_register_payload(variant))
-        assert again.status_code == 201, variant
-        # Shape matches success, but no session is issued.
-        assert set(again.json()) == set(first.json())
-        assert settings.access_cookie_name not in again.cookies
+    again = await client.post("/api/v1/auth/register", json=_register_payload(variant))
+    assert again.status_code == 409, variant
+    error = again.json()["error"]
+    assert error["code"] == "EMAIL_ALREADY_REGISTERED"
+    assert error["message"] == "An account with this email already exists. Please log in."
+    assert "set-cookie" not in again.headers
 
+    # Nothing new was created — not in the app, not in Supabase.
     count = len(
         (await db.execute(select(Profile).where(Profile.email == "dup@x.com"))).scalars().all()
     )
     assert count == 1
+    assert fake_supabase.calls.count("admin.create_user") == 1
+
+
+async def test_t24_registration_stores_the_normalised_email(client, db, fake_supabase):
+    r = await client.post(
+        "/api/v1/auth/register", json=_register_payload("  Mixed.Case@Gmail.COM ")
+    )
+    assert r.status_code == 201
+    user = (
+        await db.execute(select(Profile).where(Profile.email == "mixed.case@gmail.com"))
+    ).scalar_one()
+    assert user.email == "mixed.case@gmail.com"
+    assert "mixed.case@gmail.com" in fake_supabase.users
+    # Any casing of it signs in.
+    login = await client.post(
+        "/api/v1/auth/login", json={"email": "MIXED.case@gmail.com", "password": TEST_PASSWORD}
+    )
+    assert login.status_code == 200

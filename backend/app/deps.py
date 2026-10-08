@@ -11,16 +11,18 @@ next call (SPEC AC-08, BL-03).
 
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from fastapi import Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .cache import cache, ratelimit_key
+from .cache import cache, ratelimit_key, revoked_session_key, tokens_revoked_before_key
 from .db.models import (
     AccountStatus,
     ClinicStaff,
@@ -32,8 +34,13 @@ from .db.models import (
     VerificationStatus,
 )
 from .db.session import get_session
-from .errors import Forbidden, RateLimited, Unauthenticated
-from .identity.security import InvalidToken, decode_supabase_access_token
+from .errors import CrossOriginRejected, Forbidden, RateLimited, Unauthenticated
+from .identity.security import (
+    CLOCK_SKEW_S,
+    AccessClaims,
+    InvalidToken,
+    decode_supabase_access_token,
+)
 from .settings import settings
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -57,6 +64,44 @@ class Actor:
     onboarding_complete: bool = True
 
 
+def access_token_max_age_s() -> int:
+    return settings.access_token_minutes * 60 + CLOCK_SKEW_S
+
+
+async def token_is_current(claims: AccessClaims) -> bool:
+    """Local, DB-free checks on top of signature/expiry verification.
+
+    1. Lifetime cap — an access token older than ACCESS_TOKEN_MINUTES is
+       refused even if Supabase's own JWT expiry (a dashboard setting) is
+       longer, so a copied token cannot outlive the session cookie.
+    2. Logout revocation — `service.logout` records the logged-out session
+       and an "issued before" epoch for the user; tokens they cover are dead
+       immediately rather than at expiry.
+
+    The markers live in the process cache, so on a multi-worker deployment
+    they need the shared Redis-backed cache (same limitation as rate limits —
+    see docs/auth_hardening.md). Refresh tokens are revoked server-side by
+    Supabase regardless.
+    """
+    if claims.issued_at is None:
+        return False
+    now = int(time.time())
+    if now - claims.issued_at > access_token_max_age_s():
+        return False
+    if claims.session_id and await cache.get(revoked_session_key(claims.session_id)):
+        return False
+    revoked_before = await cache.get(tokens_revoked_before_key(str(claims.user_id)))
+    return not (revoked_before is not None and claims.issued_at < revoked_before)
+
+
+async def revoke_access_tokens(claims: AccessClaims) -> None:
+    """Kill this session's access tokens, and every older token of the user."""
+    ttl = access_token_max_age_s() + 60
+    if claims.session_id:
+        await cache.set(revoked_session_key(claims.session_id), True, ttl)
+    await cache.set(tokens_revoked_before_key(str(claims.user_id)), int(time.time()), ttl)
+
+
 async def _load_actor(request: Request, session: AsyncSession) -> Actor | None:
     token = request.cookies.get(settings.access_cookie_name)
     if not token:
@@ -64,6 +109,8 @@ async def _load_actor(request: Request, session: AsyncSession) -> Actor | None:
     try:
         claims = await decode_supabase_access_token(token)
     except InvalidToken:
+        return None
+    if not await token_is_current(claims):
         return None
 
     user = await session.get(Profile, claims.user_id)
@@ -165,7 +212,54 @@ VerifiedDoctorDep = Annotated[Actor, Depends(require_verified_doctor)]
 ClinicAdminDep = Annotated[Actor, Depends(require_role("admin"))]
 
 
+# ── Same-origin check for credential forms (login CSRF, audit M6) ───────
+def _origin_of(url: str) -> str | None:
+    parts = urlsplit(url)
+    if not parts.scheme or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc}".lower()
+
+
+def is_same_origin(request: Request) -> bool:
+    """True unless the browser says this request came from another origin.
+
+    Session cookies are SameSite=Strict, which already keeps authenticated
+    state changes same-site — but login and registration are *unauthenticated*
+    POSTs, and the response sets a fresh session cookie, so a hostile page
+    could sign a victim into the attacker's account. Browsers send `Origin`
+    on every POST (falling back to `Referer`); when either is present it must
+    be this site. When both are absent the request did not come from a
+    browser form, so there is no victim session to forge.
+    """
+    allowed = {o for o in (_origin_of(settings.public_base_url),) if o}
+    host = request.headers.get("host")
+    if host:
+        allowed.add(f"{request.url.scheme}://{host}".lower())
+
+    origin = request.headers.get("origin")
+    if origin is not None:
+        return origin.lower() in allowed  # includes the opaque "null" origin → refused
+    referer = request.headers.get("referer")
+    if referer is not None:
+        return _origin_of(referer) in allowed
+    return True
+
+
+async def require_same_origin(request: Request) -> None:
+    if not is_same_origin(request):
+        raise CrossOriginRejected()
+
+
+SameOrigin = Depends(require_same_origin)
+
+
 # ── Rate limiting (TDD 7.7 — 5/min on auth endpoints) ────────────────────
+# Per-process, keyed on the TCP peer address. Production limitations (no Redis
+# in this project yet): counters are not shared across workers and reset on
+# restart, and behind a reverse proxy every client shares the proxy's address
+# unless uvicorn is started with --proxy-headers/--forwarded-allow-ips for
+# that proxy. See docs/auth_hardening.md. Account lockout does NOT depend on
+# this — it is enforced atomically in the database (identity/service.py).
 async def enforce_auth_rate_limit(request: Request) -> None:
     identifier = request.client.host if request.client else "unknown"
     count = await cache.incr(ratelimit_key("auth", identifier), 60)

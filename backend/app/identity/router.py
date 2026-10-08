@@ -12,13 +12,14 @@ from fastapi import APIRouter, Body, Request, Response, status
 from sqlalchemy import select
 
 from ..db.models import Clinic
-from ..deps import ActorDep, AuthRateLimit, SessionDep
+from ..deps import ActorDep, AuthRateLimit, SameOrigin, SessionDep
 from ..identity import service
 from ..identity.schemas import (
     ClinicOut,
     LoginRequest,
     MeOut,
     RegisterRequest,
+    RegistrationCreated,
     SessionOut,
 )
 from ..identity.security import TokenPair
@@ -63,28 +64,26 @@ def clear_session_cookies(response: Response) -> None:
 @router.post(
     "/auth/register",
     status_code=status.HTTP_201_CREATED,
-    response_model=SessionOut,
-    dependencies=[AuthRateLimit],
+    response_model=RegistrationCreated,
+    dependencies=[SameOrigin, AuthRateLimit],
 )
 async def register(
     request: Request,
-    response: Response,
     session: SessionDep,
     body: Annotated[RegisterRequest, Body()],
-) -> SessionOut:
-    out, pair = await service.register(
+) -> RegistrationCreated:
+    """201 on success; 409 `EMAIL_ALREADY_REGISTERED` if the address is taken.
+    No session is issued — the client signs in with `/auth/login`."""
+    await service.register(
         session,
         body,
         ip=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
-    # `pair is None` is the duplicate-email path: identical body, no cookies.
-    if pair is not None:
-        set_session_cookies(response, pair)
-    return out
+    return RegistrationCreated()
 
 
-@router.post("/auth/login", response_model=SessionOut, dependencies=[AuthRateLimit])
+@router.post("/auth/login", response_model=SessionOut, dependencies=[SameOrigin, AuthRateLimit])
 async def login(
     request: Request, response: Response, session: SessionDep, body: LoginRequest
 ) -> SessionOut:

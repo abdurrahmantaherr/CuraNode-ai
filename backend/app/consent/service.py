@@ -7,7 +7,8 @@ own `patient_id`, and a foreign or nonexistent grant id surface as the same
 
 `consent_grant` has no unique constraint behind BL-04 (the live
 `idx_consent_grant_active_lookup` is a plain partial index), so "one active
-grant per patient/grantee" is enforced here. Grants are never hard-deleted
+grant per patient/grantee" is enforced here, under a patient-row lock so
+concurrent grants cannot both pass the check. Grants are never hard-deleted
 (BL-08); revoking sets `revoked_at`, and a repeat revoke writes nothing
 (BL-06). Each successful mutation writes exactly one audit row in the same
 transaction.
@@ -164,6 +165,11 @@ async def grant_consent(
         raise ValueError("exactly one of pmdc_number or clinic_name is required")
 
     patient = await _patient_for(session, actor)
+    # Serialise concurrent grants for this patient, so two requests cannot
+    # both pass `_check_no_active` (BL-04). A unique index can't express
+    # "active" (unrevoked AND unexpired), so a row lock does it instead.
+    # Postgres only — SQLAlchemy omits FOR UPDATE on SQLite.
+    await session.execute(select(Patient.id).where(Patient.id == patient.id).with_for_update())
     if pmdc_number is not None:
         doctor = await _resolve_doctor(session, pmdc_number)
         grantee_type, grantee_id = DOCTOR, doctor.id

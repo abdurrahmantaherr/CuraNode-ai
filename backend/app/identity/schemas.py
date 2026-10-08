@@ -11,6 +11,7 @@ Two absences are deliberate and security-relevant:
 
 from __future__ import annotations
 
+import unicodedata
 import uuid
 from datetime import datetime
 from typing import Annotated, Literal
@@ -24,10 +25,22 @@ PASSWORD_MIN = 10
 PASSWORD_MAX = 128
 
 
+def _clean_name(value: object) -> object:
+    """Runs BEFORE the length constraints: trims first, so a whitespace-only
+    name fails `min_length` instead of being stored as "" (audit L1), and
+    refuses control characters (newlines, NUL, bidi overrides, ...)."""
+    if isinstance(value, str):
+        value = value.strip()
+        if any(unicodedata.category(ch)[0] == "C" for ch in value):
+            raise ValueError("errors.text_invalid")
+    return value
+
+
 def _normalise_email(value: str) -> str:
     """Trim and lower-case so casing can never create a second account.
 
-    This is what makes Postgres CITEXT unnecessary (SPEC BL-11).
+    This is what makes Postgres CITEXT unnecessary (SPEC BL-11); the
+    `uq_user_profile_email_lower` index backs it at the database level.
     """
     return value.strip().lower()
 
@@ -44,10 +57,18 @@ class _RegisterBase(BaseModel):
     def _norm(cls, v: str) -> str:
         return _normalise_email(v)
 
-    @field_validator("full_name", mode="after")
+    @field_validator("password", mode="after")
     @classmethod
-    def _trim(cls, v: str) -> str:
-        return v.strip()
+    def _not_blank(cls, v: str) -> str:
+        # Length alone let "          " through (audit L2).
+        if not v.strip():
+            raise ValueError("errors.password_blank")
+        return v
+
+    @field_validator("full_name", mode="before")
+    @classmethod
+    def _trim(cls, v: object) -> object:
+        return _clean_name(v)
 
 
 class PatientRegisterRequest(_RegisterBase):
@@ -77,10 +98,10 @@ class _OnboardingBase(BaseModel):
     phone_e164: str | None = Field(default=None, pattern=r"^\+92[0-9]{10}$")
     preferred_locale: Locale = "en"
 
-    @field_validator("full_name", mode="after")
+    @field_validator("full_name", mode="before")
     @classmethod
-    def _trim(cls, v: str) -> str:
-        return v.strip()
+    def _trim(cls, v: object) -> object:
+        return _clean_name(v)
 
 
 class PatientOnboardingRequest(_OnboardingBase):
@@ -108,6 +129,14 @@ class LoginRequest(BaseModel):
     @classmethod
     def _norm(cls, v: str) -> str:
         return _normalise_email(v)
+
+
+class RegistrationCreated(BaseModel):
+    """Registration succeeded. Deliberately no session: the user signs in
+    through the normal login flow."""
+
+    status: Literal["registered"] = "registered"
+    message_key: str = "auth.register.created"
 
 
 class SessionOut(BaseModel):

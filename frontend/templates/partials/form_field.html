@@ -88,6 +88,16 @@
   {% endif %}
 {% endmacro %}
 
+{#- Informational (non-error) banner, e.g. "check your email". Only ever fed
+    a catalogue string chosen by the server — never request input. -#}
+{% macro form_notice(message) %}
+  {% if message %}
+    <div class="banner banner--ok" role="status">
+      <span aria-hidden="true">✓</span><span>{{ message }}</span>
+    </div>
+  {% endif %}
+{% endmacro %}
+
 {% macro submit(label, id='submit-btn') %}
   <button class="btn btn--primary btn--block" type="submit" id="{{ id }}"
           data-label="{{ label }}">{{ label }}</button>

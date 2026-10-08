@@ -154,12 +154,19 @@ async def test_t19_submitting_state_present():
 
 
 # ── Registration through the browser form ───────────────────────────────
-async def test_web_patient_registration_signs_in(client, db):
+async def test_web_patient_registration_then_normal_login(client, db):
     r = await client.post("/en/register", data=_form())
     assert r.status_code == 303
-    assert r.headers["location"] == "/en/patient"
-    assert settings.access_cookie_name in client.cookies
+    assert r.headers["location"] == "/en/login?registered=1"
+    assert settings.access_cookie_name not in client.cookies
 
+    notice = await client.get(r.headers["location"])
+    assert translate("auth.register.created", "en") in notice.text
+
+    signed_in = await client.post(
+        "/en/login", data={"email": "web@x.com", "password": TEST_PASSWORD}
+    )
+    assert signed_in.headers["location"] == "/en/patient"
     page = await client.get("/en/patient")
     assert page.status_code == 200
     assert "CN-" in page.text  # passport number is shown
@@ -177,8 +184,12 @@ async def test_web_doctor_registration_shows_pending_banner(client, db, clinic):
         ),
     )
     assert r.status_code == 303
-    assert r.headers["location"] == "/en/doctor"
+    assert r.headers["location"] == "/en/login?registered=1"
 
+    signed_in = await client.post(
+        "/en/login", data={"email": "webdoc@x.com", "password": TEST_PASSWORD}
+    )
+    assert signed_in.headers["location"] == "/en/doctor"
     page = await client.get("/en/doctor")
     assert page.status_code == 200
     # FR3 — non-dismissible awaiting-verification state.
@@ -196,12 +207,12 @@ async def test_web_doctor_missing_fields_rerenders(client, db, clinic):
     assert translate("errors.doctor_fields_required", "en") in r.text
 
 
-async def test_web_duplicate_email_does_not_confirm_existence(client, db):
+async def test_web_duplicate_email_is_rejected_with_clear_message(client, db):
     await make_user(db, email="taken@x.com", role=UserRole.PATIENT)
-    r = await client.post("/en/register", data=_form(email="taken@x.com"))
-    # Sent to sign in, with no hint that the address is registered.
-    assert r.status_code == 303
-    assert r.headers["location"] == "/en/login"
+    r = await client.post("/en/register", data=_form(email="  Taken@X.com "))
+    assert r.status_code == 409
+    assert 'aria-invalid="true"' in r.text  # flagged on the email field
+    assert "An account with this email already exists. Please log in." in r.text
     assert settings.access_cookie_name not in client.cookies
 
 

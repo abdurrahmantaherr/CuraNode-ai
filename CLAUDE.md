@@ -17,24 +17,26 @@ Google sign-in is optional and off by default (`OAUTH_ENABLED=false`). To enable
 ### Running the Application
 ```bash
 uv run backend/app/main.py                 # Start the development server
-# Access at http://127.0.0.1:8000
+# Access at http://127.0.0.1:8000 — use the PUBLIC_BASE_URL host, not localhost (OAuth state cookie is host-bound)
 ```
 
 ### Testing
 ```bash
-uv run pytest -q                           # Run all tests (155 tests)
+uv run pytest -q                           # Run all tests (Postgres-level guard tests skip without CURANODE_PG_TEST_URL)
 uv run pytest tests/test_auth.py -v        # Run authentication tests with verbose output
 uv run pytest tests/test_web.py -v         # Run web interface tests
 uv run pytest tests/test_oauth.py -v       # Run Google OAuth flow tests
 uv run pytest tests/test_profile.py -v     # Run patient profile (FR2) tests
+uv run pytest tests/test_auth_security.py -v   # Run auth security-audit regression tests
+CURANODE_PG_TEST_URL=postgresql+asyncpg://postgres@127.0.0.1:5432/postgres uv run pytest tests/test_pg_authority_guards.py  # LOCAL Postgres only — see docs/auth_hardening.md
 ```
 
 Tests run against an in-memory SQLite database and `tests/fakes.py`'s `FakeSupabaseAuth` (a stand-in for Supabase Auth — real JWTs, HS256-signed with a test-only secret). No test makes a network call; production verifies ES256 tokens against Supabase's real JWKS instead.
 
 ### Linting and Formatting
 ```bash
-uv run ruff check backend tests            # Lint the codebase
-uv run ruff format backend tests           # Format the codebase
+uv run ruff check backend tests alembic    # Lint the codebase
+uv run ruff format backend tests alembic   # Format the codebase
 ```
 
 ### Database Management
@@ -58,39 +60,44 @@ backend/
     paths.py                   # Directory location constants
     deps.py                    # Authentication dependencies and role-based access control
     errors.py                  # Error handling taxonomy and envelope
-    cache.py                   # TTL store for lockouts and rate limits
+    cache.py                   # In-process TTL store: rate limits, OAuth state, logout revocation markers (NOT lockout — that's in the DB)
     log_config.py              # Structured logging with PII redaction
     db/                        # Database layer (models mapped onto the shared schema, async session)
     identity/                  # Authentication system (router, service, schemas, security, oauth)
     audit/                     # Append-only audit writer (audit_log — owned by this repo)
     profile/                   # Patient profile (FR2): basics, allergies, conditions, medications — JSON API + service
+    consent/                   # Medical Passport sharing (FR4): grant/revoke, consent-gated doctor lookup — JSON API + service
     i18n/                      # English/Urdu message catalogues
     web/                       # Server-rendered page routes and form handling (incl. OAuth + onboarding)
 alembic/                       # Database migrations (additive-only, hand-written — see above)
 frontend/
   templates/                   # Jinja2 templates (base, auth pages incl. onboarding/oauth_complete, shell, partials)
   static/                      # CSS (design tokens + app) and minimal JS
-tests/                         # Test suite (authentication, web interface, OAuth flow, settings)
-docs/                          # Product requirements, technical design, design system, docs/prompts/ (OAuth plan)
+tests/                         # Test suite (auth, web, OAuth, profile, consent, audit regressions; test_pg_authority_guards.py needs local Postgres)
+docs/                          # PRD, TDD, design system, auth_hardening.md (security ops notes), docs/prompts/ (OAuth plan)
 ```
 
 ### Key Architectural Decisions
 
 1. **Authentication & Session Management**
    - **Identity is fully delegated to Supabase Auth** — this codebase never hashes a password or signs a session token. `identity/security.py` talks to Supabase's Auth API server-side only (service-role key, never exposed to templates/JS).
-   - Access tokens are Supabase-issued JWTs, verified **locally** against the project's public JWKS (asymmetric ES256 signing keys — not a shared HS256 secret). `decode_supabase_access_token` in `identity/security.py` yields only a `user_id`; nothing else is trusted from the token.
+   - Access tokens are Supabase-issued JWTs, verified **locally** against the project's public JWKS (asymmetric ES256 signing keys — not a shared HS256 secret). `decode_supabase_access_token` in `identity/security.py` yields `user_id`, plus `session_id`/`issued_at` used only by `deps.token_is_current` (lifetime cap + logout revocation); role and verification are never read from the token.
    - **Two separate Supabase client lifecycles matter and must not be conflated**: `get_supabase_client()` returns a process-wide singleton used only for `auth.admin.*` calls; `new_auth_client()` builds a fresh, single-use client for every `sign_in_with_password`/`refresh_session`/`exchange_code_for_session` call. The SDK's client is stateful — signing in mutates the client's session and starts a background auto-refresh timer — so sharing one instance across users, or between a sign-in and a later admin call, corrupts it (observed in practice as `AuthApiError: User not allowed` on a subsequent admin call).
    - A Postgres trigger (`on_auth_user_created`) auto-inserts a default `user_profile` row the instant a Supabase auth user is created. `identity/service.py`'s `register()` fetches and *updates* that row rather than inserting a second one.
    - Refresh tokens are single-use; rotation and reuse-family revocation are handled by Supabase Auth itself.
    - Role verification happens per-request from the database (never from the token) for immediate revocation — four explicit dependencies in `deps.py`: `ActorDep`, `PatientDep`, `VerifiedDoctorDep`, `ClinicAdminDep`. No ad-hoc role checks anywhere in the codebase.
-   - Login lockout (10 failures / 15 min) is tracked app-side against `user_profile.failed_logins`/`locked_until`, checked *before* Supabase is ever called, so it's independent of Supabase's own abuse protection.
+   - Login lockout (10 failures / 15 min) is tracked app-side against `user_profile.failed_logins`/`locked_until` with atomic SQL: `_reserve_attempt` claims an attempt slot (one `UPDATE … WHERE failed_logins < max RETURNING`) *before* Supabase is called, so concurrent guesses can't exceed the threshold; an expired lock starts a fresh window. Never reintroduce a Python-side `failed_logins += 1`.
+   - **No email verification** (product decision). `register()` creates the Supabase user with `email_confirm=True` (no email is sent), the account is `active` at once, and no session is issued — the user then signs in normally. Emails are trimmed + lower-cased; an existing address raises `EmailAlreadyRegistered` (409), both from the profile check and from Supabase's `email_exists` when two registrations race.
+   - Because password registration doesn't prove email ownership, `login_with_oauth` **refuses Google sign-in for any Supabase user with a password (`email`) identity** (fails closed on a missing identity list). Otherwise Supabase's automatic identity linking would attach a real owner's Google identity to a squatter's password account. Never remove this check while registration is unverified.
+   - Registration is all-or-nothing: anything failing after `admin.create_user` rolls back and deletes exactly that just-created user (`_delete_auth_user`). An `email_exists` from Supabase is a lost race → duplicate path, and must never delete anyone.
 
 2. **OAuth (Google sign-in)**
    - Off by default (`OAUTH_ENABLED=false`); a fail-fast guard requires `SUPABASE_ANON_KEY` when it's turned on. Server-side PKCE only — the browser never sees a token. All of it lives in `identity/oauth.py` and the OAuth/onboarding routes in `web/router.py`.
    - **Supabase's `/authorize` endpoint does not accept a caller-supplied `state` query param** — confirmed by reading the real SDK's `AsyncGoTrueClient._get_url_for_provider`, which sends only `provider`/`redirect_to`/`code_challenge`/`code_challenge_method`. GoTrue manages its own internal state for the round trip to the provider; a client-supplied `state=` collides with that and comes back as `error_code=bad_oauth_state` (reproduced against a live project). This app's own CSRF-binding state instead rides **inside** `redirect_to`'s own query string — never as a sibling param to `authorize_url()`.
    - The `on_auth_user_created` trigger fires for OAuth signups too, defaulting `role='patient'` — `service.login_with_oauth()` must **update** that row, exactly like `register()` does, never insert a second one.
    - A brand-new OAuth user is never auto-assigned a role: `Doctor.pmdc_number` is `UNIQUE NOT NULL` and a patient's passport number is permanent, so guessing wrong would be unfixable. Instead `deps.py`'s `Actor.onboarding_complete` gates every dashboard route until `/{locale}/onboarding` is completed.
-   - An email Google returns that already belongs to a *different* `user_profile` row is refused and the freshly-issued Supabase session is revoked (`service.login_with_oauth`) — an unverified provider email must never take over a password account.
+   - An email Google returns that already belongs to a *different* `user_profile` row is refused and the freshly-issued Supabase session is revoked (`service.login_with_oauth`) — an unverified provider email must never take over a password account. Separately, a Google sign-in whose Supabase user has a password identity raises `OAuthPasswordAccountExists` (see Authentication above) — this also hits real accounts that had Google auto-linked before, by design.
+   - The OAuth state cookie is host-bound: start and finish the flow on the `PUBLIC_BASE_URL` host. Starting on `localhost` when `PUBLIC_BASE_URL` is `127.0.0.1` (or vice versa) fails the state check with a generic 400.
    - The state cookie (`cn_oauth_state`) is `SameSite=Lax` — it must survive the cross-site return hop from Google via Supabase. Session cookies stay `Strict`; a same-site interstitial template (`auth/oauth_complete.html`) bounces the browser through one same-site request first so `Strict` cookies aren't dropped on arrival.
 
 3. **Patient profile (FR2)**
@@ -101,16 +108,27 @@ docs/                          # Product requirements, technical design, design 
    - Every successful mutation writes exactly one `audit_log` row in the same transaction (`profile.update`, `profile.<kind>.add/update/remove`). Basic-detail changes log only `fields_changed`, never values (identity PII); entry changes also log `before`/`after` clinical field values, except `notes`, which is free text that may hold PII and is logged only by name.
    - Business-rule numbering (`BL-01`…`BL-36`) and acceptance criteria (`AC-01`…`AC-26`) live in `.claude/specs/patient_profile_spec.md` — read it before changing this feature; it is the source of truth over `docs/TDD.md` wherever they disagree.
 
+3b. **Medical Passport consent (FR4)**
+   - `backend/app/consent/` owns grant/revoke and the doctor lookup; the web pages (`/{locale}/patient/access`, `/{locale}/doctor/passport-lookup`, `/{locale}/doctor/patient/{id}`) call the same service. Spec: `.claude/specs/medical_passport_spec.md`.
+   - A grant names a *verified* doctor (by PMDC number) or a clinic (unique case-insensitive name); unknown and unverified are the same `NotFound`. Grants are never hard-deleted — revoking sets `revoked_at`.
+   - A doctor sees a patient only through an active grant naming that doctor, re-checked on every view; every failure is the same 404 so a lookup can't probe whether a patient exists. Clinic grants don't yet unlock anything for a clinic's doctors.
+   - "Active" = unrevoked AND unexpired, which a unique index can't express — concurrent grants are serialised by `SELECT … FOR UPDATE` on the patient row instead. Don't replace that with a `WHERE revoked_at IS NULL` unique index: it would let an expired grant block a new one.
+
 4. **Security Properties**
    - Password hashing is Supabase Auth's responsibility, not this codebase's.
    - Fail-shape-identical authentication errors (same response for wrong password/unknown email/suspended account). Exact response-*timing* parity is no longer guaranteed end-to-end, since password verification now crosses the network to Supabase's GoTrue service.
-   - Registration is not an oracle (duplicate emails return success-shaped response and never call Supabase or create a row).
-   - Account lockout after 10 consecutive failures (15-minute lockout). OAuth honours an existing lockout but never contributes to it — there's no password on that path to brute-force.
+   - Registration DOES reveal whether an email is registered (explicit 409, product decision); a duplicate never calls Supabase or creates a row. Login stays non-revealing: unknown-email and locked logins make one decoy Supabase sign-in so they cost the same round trip as a wrong password.
+   - Access tokens older than `ACCESS_TOKEN_MINUTES`, and tokens covered by a logout, are refused locally in `deps.token_is_current` (in-process cache markers — no DB lookup per request).
+   - Login and registration POSTs (web + API) refuse a foreign `Origin`/`Referer` (`deps.is_same_origin`) against login CSRF. The OAuth callback is a GET and must stay exempt. Any new unauthenticated credential POST should use the same check.
+   - Every non-static response gets `Cache-Control: no-store` and a CSP (no inline scripts; inline `style=` attributes and Google Fonts allowed; no `form-action`, which would break the OAuth redirect chain). HSTS only in `pilot`. Set in `main.py`'s middleware.
+   - Unhandled errors are logged by exception *type* only (`errors.unhandled_handler`) — DB/Supabase messages can quote PII the redaction processor can't see inside a string.
+   - Account lockout after 10 failed passwords (15-minute lockout; see Authentication above for the atomic reservation). OAuth honours an existing lockout but never contributes to it — there's no password on that path to brute-force.
    - Startup guards prevent running without `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` (outside `test`), `OAUTH_ENABLED=true` without `SUPABASE_ANON_KEY`, or with non-synthetic data in non-pilot environments.
 
 5. **Database schema is shared, not owned**
    - `user_profile`, `clinic`, `patient`, `doctor`, `clinic_staff`, `doctor_affiliation` are pre-existing tables belonging to the wider CuraNode-AI product's Supabase project. `db/models.py` maps onto their real column/table names (e.g. `Patient.passport_no` → column `passport_uid`; `Doctor` has no `primary_clinic_id` — clinic membership goes through the separate `DoctorAffiliation`/`doctor_affiliation` many-to-many table instead).
    - The clinic-admin role's **database value is `"admin"`**, not `"clinic_admin"` — the shared schema's CHECK constraint only allows `patient`/`doctor`/`staff`/`admin`. The Python enum member `UserRole.CLINIC_ADMIN` is unchanged; only `.value` differs.
+   - Migration `a3c1f0e7b2d4` adds BEFORE triggers (`cn_guard_*_authority`) that stop `anon`/`authenticated` Data API callers who aren't admins from changing authoritative columns (doctor verification/PMDC, profile email/lockout/synthetic flag, passport number), plus `uq_user_profile_email_lower`; `b7d2e9c4a1f6` revokes TRUNCATE from the API roles. Neither has been applied to the shared database — see `docs/auth_hardening.md` §3.
    - Only `audit_log` and `patient_medication` are created and owned outright by this repo (the shared schema's `access_log` is shaped for clinical record-access/consent auditing and doesn't fit generic auth events). The patient-profile migration also adds provenance/soft-remove columns (`recorded_by`, `updated_at`, `removed_at`/`recorded_at`) to the shared `allergy`/`chronic_condition` tables — see "Patient profile (FR2)" above for the BYPASSRLS/soft-remove/editability rules that follow from this.
    - OAuth added no tables and no migration — "onboarding incomplete" is derived from the absence of a role row, not stored anywhere.
    - Before assuming any column/table exists, check the real schema (`information_schema` or the migration in `alembic/versions/`) rather than the original feature spec — the spec predates this reconciliation.
@@ -145,15 +163,16 @@ docs/                          # Product requirements, technical design, design 
 7. **`backend/app/web/router.py`** - Server-rendered page handlers and form processing, including the OAuth start/callback routes, onboarding, and the patient-profile page handlers
 8. **`backend/app/profile/service.py`** - Patient-profile business logic (FR2): scoping, editability, duplicate/cap checks, soft-remove, audit. Read `.claude/specs/patient_profile_spec.md` first
 9. **`backend/app/settings.py`** - Configuration with validation and fail-fast checks
-10. **`tests/conftest.py`** and **`tests/fakes.py`** - Test setup, including how `get_supabase_client`/`new_auth_client`/`decode_supabase_access_token` are faked for isolated testing, and `FakeSupabaseAuth.authorize`/`exchange_code_for_session` for the OAuth flow
+10. **`tests/conftest.py`** and **`tests/fakes.py`** - Test setup, including how `get_supabase_client`/`new_auth_client`/`decode_supabase_access_token` are faked for isolated testing, `FakeSupabaseAuth.authorize`/`exchange_code_for_session` for the OAuth flow (an explicit `user_id` of an existing password user simulates Supabase's identity linking), and `fail_next` for injecting Supabase errors
+11. **`docs/auth_hardening.md`** - What the security audit fixes rely on outside the code (Supabase dashboard, unapplied migrations, trade-offs)
 
 ### When Making Changes
 
-- **Authentication changes**: Focus on `deps.py`, `identity/`, and related tests. Never reintroduce a shared, stateful Supabase client across sign-in and admin operations (see Key Architectural Decisions above).
+- **Authentication changes**: Focus on `deps.py`, `identity/`, and related tests. Never reintroduce a shared, stateful Supabase client across sign-in and admin operations (see Key Architectural Decisions above). Every audit fix has a regression test in `tests/test_auth_security.py` — keep them passing, and add one for any new security behaviour.
 - **OAuth changes**: Read `identity/oauth.py`'s module docstring first — the `state`-param gotcha there is easy to reintroduce by accident if the Supabase SDK/API ever looks like it should accept one. Never provision a `Patient`/`Doctor` row before onboarding; never skip the email-collision guard in `login_with_oauth`.
 - **Patient profile changes**: Read `.claude/specs/patient_profile_spec.md` first — it wins over `docs/TDD.md` wherever they disagree. Put every business rule in `profile/service.py` so the API and the web page stay in sync; never perform a query on `allergy`/`chronic_condition`/`patient_medication` without filtering by the caller's own `patient_id` (BYPASSRLS means the database will not catch a missed scope). Never let a patient edit an entry whose `recorded_by` isn't their own `user_id`.
 - **UI changes**: Work with Jinja2 templates in `frontend/templates/` and `web/router.py`
-- **Database changes**: Modify `db/models.py` to match the *real* shared schema (verify against `information_schema` first) and write an additive Alembic migration by hand — never autogenerate
+- **Database changes**: Modify `db/models.py` to match the *real* shared schema (verify against `information_schema` first) and write an additive Alembic migration by hand — never autogenerate. Keep migration SQL one statement per `op.execute` (Alembic runs on asyncpg), and for triggers/RLS/grants add a test to `tests/test_pg_authority_guards.py`. Never apply a migration to the shared database without the schema owners' sign-off; its `alembic_version` (`35c4bc13fa37` as of 2026-10-08) is not a revision in this repo.
 - **Configuration**: Update `settings.py` with appropriate validation guards
 - **Testing**: Follow existing patterns in `tests/` using the fixtures in `conftest.py` and the fake Supabase double in `tests/fakes.py`. Any test asserting OAuth-disabled behaviour must `monkeypatch` `oauth_enabled` explicitly — `Settings` reads `.env` regardless of `ENVIRONMENT`, so a developer's local `OAUTH_ENABLED=true` leaks into the test process too.
 

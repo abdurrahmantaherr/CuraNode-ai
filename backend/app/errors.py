@@ -14,6 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .i18n.catalogue import translate
+from .log_config import get_logger
 
 
 class AppError(Exception):
@@ -41,6 +42,45 @@ class Unauthenticated(AppError):
     code = "UNAUTHENTICATED"
     http_status = status.HTTP_401_UNAUTHORIZED
     message_key = "errors.unauthenticated"
+    retryable = False
+
+
+class OAuthPasswordAccountExists(Unauthenticated):
+    """Google sign-in reached a Supabase user that was registered with a
+    password. Refused (audit H1) — that account signs in with its password.
+    Only ever raised after the caller authenticated as the email's Google
+    owner, so naming the reason reveals nothing to anyone else."""
+
+    code = "OAUTH_PASSWORD_ACCOUNT"
+    message_key = "errors.oauth_email_conflict"
+
+
+class EmailAlreadyRegistered(AppError):
+    """Registration for an email (after trim + lower-case) that already has
+    an account. Generic: says nothing about the existing account."""
+
+    code = "EMAIL_ALREADY_REGISTERED"
+    http_status = status.HTTP_409_CONFLICT
+    message_key = "errors.email_taken"
+    retryable = False
+
+
+class RegistrationFailed(AppError):
+    """Registration could not be completed and was rolled back. Deliberately
+    generic — never carries a Supabase or database error detail."""
+
+    code = "REGISTRATION_FAILED"
+    http_status = status.HTTP_503_SERVICE_UNAVAILABLE
+    message_key = "errors.registration_failed"
+    retryable = True
+
+
+class CrossOriginRejected(AppError):
+    """A credential form was posted from another origin (login CSRF)."""
+
+    code = "CROSS_ORIGIN_REJECTED"
+    http_status = status.HTTP_403_FORBIDDEN
+    message_key = "errors.cross_origin"
     retryable = False
 
 
@@ -166,6 +206,18 @@ async def validation_handler(request: Request, exc: Exception) -> JSONResponse:
 
 
 async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Generic message to the caller; the detail is logged, never returned."""
+    """Generic message to the caller; the failure is logged, never returned.
+
+    Only the exception TYPE, path and request id are logged — not the message
+    or traceback, which for database/Supabase errors can quote the email, a
+    PMDC number or other PII the redaction processor cannot see inside a
+    string (SPEC BL-14). The request id ties the log line to the response."""
     request_id, locale = _context(request)
+    get_logger().error(
+        "unhandled_error",
+        error_type=type(exc).__name__,
+        method=request.method,
+        path=request.url.path,
+        request_id=request_id,
+    )
     return JSONResponse(status_code=500, content=envelope(AppError(), request_id, locale))

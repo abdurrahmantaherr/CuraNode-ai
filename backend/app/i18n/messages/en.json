@@ -183,5 +183,12 @@
   "doctor_patient.title": "Patient",
   "doctor_patient.access_confirmed": "This patient has given you access to their record.",
   "doctor_patient.record_pending": "The record view arrives with a later feature.",
-  "doctor_patient.back": "Find another patient"
+  "doctor_patient.back": "Find another patient",
+  "errors.pmdc_taken": "This PMDC number is already registered. If that is a mistake, contact your clinic administrator.",
+  "errors.password_rejected": "That password is too weak. Choose a longer, less common one.",
+  "errors.password_blank": "Your password can't be only spaces.",
+  "errors.registration_failed": "We couldn't create your account right now. Please try again in a few minutes.",
+  "errors.cross_origin": "This form has to be sent from the CuraNode-AI site. Reload the page and try again.",
+  "auth.register.created": "Your account has been created. Please sign in.",
+  "errors.email_taken": "An account with this email already exists. Please log in."
 }

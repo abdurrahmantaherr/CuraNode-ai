@@ -22,6 +22,7 @@ _BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
+import re
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -83,10 +84,34 @@ app = FastAPI(
 )
 
 
+# A client-supplied correlation id is echoed into logs and response headers,
+# so only a short, inert token is accepted; anything else is replaced.
+_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+# CSP: scripts only from this origin (no inline script exists); styles allow
+# 'unsafe-inline' because templates use `style=` attributes, plus Google
+# Fonts. `form-action` is deliberately omitted — the OAuth start form's
+# redirect chain (Supabase → Google) would otherwise be blocked by it.
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'"
+)
+
+
 @app.middleware("http")
 async def request_context(request: Request, call_next):  # type: ignore[no-untyped-def]
     """Attach a correlation id and the active locale to every request."""
-    request.state.request_id = request.headers.get("X-Request-Id", secrets.token_urlsafe(12))
+    supplied = request.headers.get("X-Request-Id", "")
+    request.state.request_id = (
+        supplied if _REQUEST_ID.fullmatch(supplied) else secrets.token_urlsafe(12)
+    )
 
     # Locale comes from the URL prefix, falling back to a cookie then default.
     parts = request.url.path.strip("/").split("/")
@@ -102,6 +127,15 @@ async def request_context(request: Request, call_next):  # type: ignore[no-untyp
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "same-origin"
+    response.headers.setdefault("Content-Security-Policy", _CSP)
+    if settings.environment == "pilot":
+        # Pilot is https-only (settings guard); never sent over plain-http dev.
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
+    if not request.url.path.startswith("/static/"):
+        # Pages and API responses can carry medical data: never let a shared
+        # clinic browser serve them from cache (or bfcache) after logout.
+        # Static assets keep normal caching.
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 

@@ -1,11 +1,12 @@
 """In-process fake for Supabase Auth, so tests never touch the network.
 
 Mirrors just the subset of `supabase.AsyncClient` used by
-`app.identity.service`: `auth.admin.create_user`, `auth.admin.sign_out`,
-`auth.sign_in_with_password`, `auth.refresh_session`. Access tokens are real
-JWTs, but signed with a plain HS256 test secret rather than the project's
-real asymmetric (ES256/JWKS) keys — `app.identity.security` verifies against
-a live JWKS endpoint in production, which tests must not touch. `conftest.py`
+`app.identity.service`: `auth.admin.create_user` / `delete_user` /
+`update_user_by_id` / `sign_out`, `auth.sign_in_with_password`,
+`auth.refresh_session` and `auth.exchange_code_for_session`. Access tokens are real JWTs, but signed
+with a plain HS256 test secret rather than the project's real asymmetric
+(ES256/JWKS) keys — `app.identity.security` verifies against a live JWKS
+endpoint in production, which tests must not touch. `conftest.py`
 monkeypatches `decode_supabase_access_token` itself (both where it's imported
 directly and where it's used as a module attribute) to `fake_decode_token`
 below, so the rest of the app's verification *call sites* are still
@@ -15,6 +16,10 @@ Refresh-token rotation and reuse-family revocation are implemented to match
 Supabase's documented behavior: replaying an already-rotated refresh token
 invalidates every token ever issued in that session's family, not just the
 replayed one.
+
+`sign_in_with_password` mirrors GoTrue in answering `email_not_confirmed`
+only AFTER the password matched, for users created unconfirmed. `fail_next`
+lets a test inject an `AuthApiError` into the next call of a named method.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ import hashlib
 import secrets
 import time
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import jwt
@@ -36,7 +42,11 @@ TEST_JWT_SECRET = "test-only-supabase-jwt-secret-not-the-real-project-key"
 async def fake_decode_token(token: str) -> AccessClaims:
     try:
         payload = jwt.decode(token, TEST_JWT_SECRET, algorithms=["HS256"], audience="authenticated")
-        return AccessClaims(user_id=uuid.UUID(payload["sub"]))
+        return AccessClaims(
+            user_id=uuid.UUID(payload["sub"]),
+            session_id=payload.get("session_id"),
+            issued_at=payload.get("iat"),
+        )
     except (jwt.PyJWTError, KeyError, ValueError) as exc:
         raise InvalidToken(str(exc)) from exc
 
@@ -55,6 +65,7 @@ class FakeAdminAPI:
 
     async def create_user(self, attrs: dict[str, Any]) -> _Obj:
         self._backend.calls.append("admin.create_user")
+        self._backend.maybe_fail("admin.create_user")
         email = attrs["email"]
         if email in self._backend.users:
             raise AuthApiError(
@@ -65,16 +76,36 @@ class FakeAdminAPI:
         user_id = secrets.token_hex(16)
         # Format as a UUID string so `uuid.UUID(...)` in service.py accepts it.
         user_id = f"{user_id[:8]}-{user_id[8:12]}-{user_id[12:16]}-{user_id[16:20]}-{user_id[20:]}"
-        self._backend.users[email] = {"id": user_id, "password": attrs["password"]}
+        self._backend.users[email] = {
+            "id": user_id,
+            "password": attrs["password"],
+            "confirmed": bool(attrs.get("email_confirm")),
+            "providers": {"email"},
+        }
         return _Obj(user=_Obj(id=user_id))
+
+    async def delete_user(self, id: str, should_soft_delete: bool = False) -> None:
+        self._backend.calls.append("admin.delete_user")
+        self._backend.maybe_fail("admin.delete_user")
+        self._backend.deleted_user_ids.append(id)
+        for email, record in list(self._backend.users.items()):
+            if record["id"] == id:
+                del self._backend.users[email]
+
+    async def update_user_by_id(self, uid: str, attributes: dict[str, Any]) -> _Obj:
+        self._backend.calls.append("admin.update_user_by_id")
+        for record in self._backend.users.values():
+            if record["id"] == uid and "password" in attributes:
+                record["password"] = attributes["password"]
+        return _Obj(user=_Obj(id=uid))
 
     async def sign_out(self, jwt_token: str, scope: str = "global") -> None:
         self._backend.calls.append("admin.sign_out")
         self._backend.revoked_access_tokens.add(jwt_token)
 
     def __getattr__(self, name: str) -> Any:
-        # Any admin method the fake does not model (e.g. `update_user_by_id`)
-        # is still recorded, so a test can assert it was never reached.
+        # Any admin method the fake does not model is still recorded, so a
+        # test can assert it was never reached.
         async def _unmodelled(*_a: Any, **_kw: Any) -> None:
             self._backend.calls.append(f"admin.{name}")
 
@@ -95,11 +126,15 @@ class FakeAuthClient:
 
     async def sign_in_with_password(self, creds: dict[str, Any]) -> _Obj:
         self._backend.calls.append("sign_in_with_password")
+        self._backend.sign_in_emails.append(creds["email"])
         record = self._backend.users.get(creds["email"])
         if record is None or record["password"] != creds["password"]:
             raise AuthApiError("Invalid login credentials", 400, "invalid_credentials")
+        # GoTrue checks the password first, then confirmation.
+        if not record["confirmed"]:
+            raise AuthApiError("Email not confirmed", 400, "email_not_confirmed")
         session = self._backend.issue_session(record["id"])
-        return _Obj(user=_Obj(id=record["id"]), session=session)
+        return _Obj(user=self._backend.user_obj(creds["email"]), session=session)
 
     async def exchange_code_for_session(self, params: dict[str, Any]) -> _Obj:
         """Mirrors the real SDK's PKCE exchange: validates the verifier
@@ -115,9 +150,26 @@ class FakeAuthClient:
         computed = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
         if computed != challenge:
             raise AuthApiError("Invalid Verifier", 400, "bad_code_verifier")
+        # GoTrue's automatic identity linking: an OAuth identity minted for
+        # an existing auth user (same id) is linked onto it, and the
+        # provider-verified email marks the user confirmed.
+        record = backend.users.get(email)
+        if record is not None and record["id"] == user_id:
+            record["providers"].add("google")
+            record["confirmed"] = True
         session = backend.issue_session(user_id)
+        providers = (
+            sorted(record["providers"]) if record and record["id"] == user_id else ["google"]
+        )
         return _Obj(
-            user=_Obj(id=user_id, email=email, user_metadata=user_metadata), session=session
+            user=_Obj(
+                id=user_id,
+                email=email,
+                user_metadata=user_metadata,
+                email_confirmed_at=datetime.now(UTC),
+                identities=[_Obj(provider=p) for p in providers],
+            ),
+            session=session,
         )
 
     async def refresh_session(self, refresh_token: str | None = None) -> _Obj:
@@ -147,7 +199,8 @@ class FakeSupabaseAuth:
 
     def __init__(self, jwt_secret: str = TEST_JWT_SECRET) -> None:
         self._jwt_secret = jwt_secret
-        self.users: dict[str, dict[str, str]] = {}
+        # email -> {"id", "password", "confirmed", "providers"}
+        self.users: dict[str, dict[str, Any]] = {}
         self.refresh_tokens: dict[str, tuple[str, str]] = {}
         self.spent_tokens: dict[str, str] = {}
         self.revoked_families: set[str] = set()
@@ -157,15 +210,42 @@ class FakeSupabaseAuth:
         # email -> user_id, for OAuth identities `authorize()` has minted
         # before — a *returning* OAuth user must get the same identity back.
         self.oauth_identities: dict[str, str] = {}
+        self.deleted_user_ids: list[str] = []
+        # Every address a password sign-in was attempted for, in order.
+        self.sign_in_emails: list[str] = []
+        # method name -> error to raise on its next call (see `fail_next`).
+        self._failures: dict[str, AuthApiError] = {}
         # Every Auth API call the app makes, in order — lets a test assert a
         # feature never touches Supabase Auth at all (patient profile AC-07).
         self.calls: list[str] = []
         self.auth = FakeAuthClient(self)
 
-    def register(self, user_id: str, email: str, password: str) -> None:
+    def register(self, user_id: str, email: str, password: str, *, confirmed: bool = True) -> None:
         """Back-door for fixtures that create a `Profile` row directly,
         bypassing the register endpoint."""
-        self.users[email] = {"id": user_id, "password": password}
+        self.users[email] = {
+            "id": user_id,
+            "password": password,
+            "confirmed": confirmed,
+            "providers": {"email"},
+        }
+
+    def fail_next(self, method: str, error: AuthApiError) -> None:
+        self._failures[method] = error
+
+    def maybe_fail(self, method: str) -> None:
+        error = self._failures.pop(method, None)
+        if error is not None:
+            raise error
+
+    def user_obj(self, email: str) -> _Obj:
+        record = self.users[email]
+        return _Obj(
+            id=record["id"],
+            email=email,
+            email_confirmed_at=datetime.now(UTC) if record["confirmed"] else None,
+            identities=[_Obj(provider=p) for p in sorted(record["providers"])],
+        )
 
     def authorize(
         self,
@@ -181,10 +261,9 @@ class FakeSupabaseAuth:
 
         Repeat calls for the same email (no explicit `user_id`) return the
         same identity, matching a returning OAuth user. `user_id` lets a test
-        force a *different* Supabase auth identity for an email that already
-        has one — the real-world shape of the email-collision case
-        (docs/oauth.md §8b step 2): Supabase does not always auto-link a new
-        OAuth identity to an existing account with the same email.
+        force a specific Supabase auth identity: a *different* id is the
+        email-collision case (docs/oauth.md §8b step 2), while the id of an
+        existing password account simulates GoTrue's automatic linking.
         """
         if user_id is None:
             user_id = self.oauth_identities.get(email) or str(uuid.uuid4())
@@ -204,7 +283,17 @@ class FakeSupabaseAuth:
         now = int(time.time())
         expires_at = now + 900
         access_token = jwt.encode(
-            {"sub": user_id, "aud": "authenticated", "iat": now, "exp": expires_at},
+            {
+                "sub": user_id,
+                "aud": "authenticated",
+                "iat": now,
+                "exp": expires_at,
+                # Supabase keeps one session_id across refreshes of a login.
+                "session_id": family_id,
+                # Unique per token, as Supabase's are; without it two tokens
+                # minted in the same second would be byte-identical.
+                "jti": secrets.token_hex(8),
+            },
             self._jwt_secret,
             algorithm="HS256",
         )

@@ -38,13 +38,16 @@ from ..deps import (
     check_consent_write_rate,
     check_profile_write_rate,
     enforce_auth_rate_limit,
+    is_same_origin,
 )
 from ..errors import (
     AppError,
     DuplicateEntry,
+    EmailAlreadyRegistered,
     ListFull,
     NotEditable,
     NotFound,
+    OAuthPasswordAccountExists,
     RateLimited,
     Unauthenticated,
     ValidationFailed,
@@ -111,11 +114,29 @@ def _initials(name: str) -> str:
 
 
 # ── Login ────────────────────────────────────────────────────────────────
+# The only notices the login page shows from a query flag — the flag picks a
+# fixed message; user input is never reflected (BL-31 pattern).
+_LOGIN_NOTICES = {
+    "registered": "auth.register.created",
+}
+
+
 @router.get("/{locale}/login", response_class=HTMLResponse)
 async def login_page(request: Request, locale: str, actor: OptionalActorDep) -> Response:
     if actor is not None:
         return RedirectResponse(f"/{normalise_locale(locale)}/{_area(actor.role)}", status_code=303)
-    return _render(request, "auth/login.html", locale, role="patient", values={}, errors={})
+    loc = normalise_locale(locale)
+    notice = next(
+        (
+            translate(key, loc)
+            for flag, key in _LOGIN_NOTICES.items()
+            if request.query_params.get(flag)
+        ),
+        None,
+    )
+    return _render(
+        request, "auth/login.html", locale, role="patient", values={}, errors={}, notice=notice
+    )
 
 
 @router.post("/{locale}/login")
@@ -142,6 +163,11 @@ async def login_submit(
             errors={},
             form_error=translate(message_key, loc, **params),
         )
+
+    # Login CSRF (audit M6): a hostile page must not be able to sign the
+    # victim's browser into an attacker's account.
+    if not is_same_origin(request):
+        return fail("errors.cross_origin", 403)
 
     try:
         await enforce_auth_rate_limit(request)
@@ -241,6 +267,9 @@ async def register_submit(
             form_error=form_error,
         )
 
+    if not is_same_origin(request):
+        return await rerender({}, translate("errors.cross_origin", loc), 403)
+
     try:
         await enforce_auth_rate_limit(request)
     except RateLimited:
@@ -280,29 +309,54 @@ async def register_submit(
             )
         else:
             body = PatientRegisterRequest(**payload)
-    except (ValidationError, ValueError):
-        return await rerender({"email": translate("errors.email_invalid", loc)})
+    except ValidationError as exc:
+        return await rerender(_register_field_errors(exc, loc))
+    except ValueError:
+        # `uuid.UUID(primary_clinic_id)` — a tampered clinic selector.
+        return await rerender({"primary_clinic_id": translate("errors.clinic_unknown", loc)})
 
     try:
-        out, pair = await service.register(
+        await service.register(
             session,
             body,
             ip=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
-    except ValidationFailed:
-        return await rerender({"primary_clinic_id": translate("errors.clinic_unknown", loc)})
-    except AppError:
-        return await rerender({}, translate("errors.internal", loc), 500)
+    except ValidationFailed as exc:
+        fields = exc.details.get("fields", {})
+        return await rerender({k: translate(v, loc) for k, v in fields.items()})
+    except EmailAlreadyRegistered as exc:
+        return await rerender({"email": translate(exc.message_key, loc)}, code=exc.http_status)
+    except AppError as exc:
+        return await rerender({}, translate(exc.message_key, loc), exc.http_status)
 
-    if pair is None:
-        # Duplicate email. Do not confirm the address exists — send the user to
-        # sign in instead (SPEC AC-24, BL-05).
-        return RedirectResponse(f"/{loc}/login", status_code=303)
+    # No session from registration: the user signs in normally.
+    return RedirectResponse(f"/{loc}/login?registered=1", status_code=303)
 
-    response = RedirectResponse(f"/{loc}/{_area(out.role)}", status_code=303)
-    set_session_cookies(response, pair)
-    return response
+
+# What a schema rejection on the register form means, per field. Validators
+# that raise a catalogue key (e.g. `errors.text_invalid`) win over the default.
+_REGISTER_FIELD_ERRORS = {
+    "full_name": "errors.name_required",
+    "email": "errors.email_invalid",
+    "password": "errors.password_short",
+    "phone_e164": "errors.phone_invalid",
+    "pmdc_number": "errors.doctor_fields_required",
+    "specialty": "errors.doctor_fields_required",
+    "primary_clinic_id": "errors.clinic_unknown",
+}
+_VALIDATOR_KEYS = ("errors.text_invalid", "errors.password_blank")
+
+
+def _register_field_errors(exc: ValidationError, loc: str) -> dict[str, str]:
+    errors: dict[str, str] = {}
+    for err in exc.errors():
+        field = str(err["loc"][0]) if err["loc"] else ""
+        message = str(err.get("msg", ""))
+        key = next((k for k in _VALIDATOR_KEYS if k in message), None)
+        key = key or _REGISTER_FIELD_ERRORS.get(field, "errors.validation_failed")
+        errors.setdefault(field or "email", translate(key, loc))
+    return errors
 
 
 @router.post("/{locale}/logout")
@@ -411,7 +465,7 @@ async def oauth_callback(
     # Not locale-prefixed — the redirect URI registered with Supabase has to
     # be one fixed string; locale is recovered from the stored PendingAuth.
 
-    def fail(loc: str) -> Response:
+    def fail(loc: str, message_key: str = "errors.oauth_failed") -> Response:
         response = _render(
             request,
             "auth/login.html",
@@ -420,7 +474,7 @@ async def oauth_callback(
             role="patient",
             values={},
             errors={},
-            form_error=translate("errors.oauth_failed", loc),
+            form_error=translate(message_key, loc),
         )
         _clear_oauth_state_cookie(response)
         return response
@@ -461,6 +515,10 @@ async def oauth_callback(
             ip=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
+    except OAuthPasswordAccountExists as exc:
+        # Reached only by the email's verified Google owner: tell them to use
+        # the password sign-in instead of a generic failure.
+        return fail(loc, exc.message_key)
     except Unauthenticated:
         return fail(loc)
 

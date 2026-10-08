@@ -66,7 +66,6 @@ async def sessionmaker_(engine):
 def fresh_cache(monkeypatch):
     c = InMemoryCache()
     monkeypatch.setattr("app.cache.cache", c)
-    monkeypatch.setattr("app.identity.service.cache", c)
     monkeypatch.setattr("app.deps.cache", c)
     return c
 

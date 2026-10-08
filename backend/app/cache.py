@@ -1,8 +1,10 @@
 """Ephemeral key/value store with TTL — the Redis role from TDD 1.2.
 
-Holds refresh-token families, login lockouts, and rate-limit counters. The
-interface is deliberately the small subset of Redis the application uses, so a
-`RedisCache` can be dropped in for pilot without touching call sites.
+Holds rate-limit counters, OAuth state, and logout revocation markers for
+access tokens. Login lockout is NOT here — it lives in `user_profile` so it
+survives restarts and is shared across workers. The interface is deliberately
+the small subset of Redis the application uses, so a `RedisCache` can be
+dropped in for pilot without touching call sites.
 
 Nothing here is a source of truth: every key is TTL-bounded and losing the
 store only forces re-login (PLAN 9, rollback step 3).
@@ -83,21 +85,20 @@ cache: Cache = InMemoryCache()
 
 
 # ── Keyspace (SPEC 7) ────────────────────────────────────────────────────
-def refresh_key(token_hash: str) -> str:
-    return f"refresh:{token_hash}"
-
-
-def refresh_family_key(family_id: str) -> str:
-    return f"refresh_family:{family_id}"
-
-
 def ratelimit_key(scope: str, identifier: str) -> str:
     return f"ratelimit:{scope}:{identifier}"
 
 
-def lockout_key(user_id: str) -> str:
-    return f"lockout:{user_id}"
-
-
 def oauth_state_key(state: str) -> str:
     return f"oauth_state:{state}"
+
+
+def revoked_session_key(session_id: str) -> str:
+    """Set at logout: access tokens of this Supabase session are dead."""
+    return f"revoked_session:{session_id}"
+
+
+def tokens_revoked_before_key(user_id: str) -> str:
+    """Set at logout (global scope): every access token of this user issued
+    before the stored epoch second is dead, on any device."""
+    return f"tokens_revoked_before:{user_id}"

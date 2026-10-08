@@ -17,6 +17,7 @@
 
     <form class="card" method="post" action="/{{ locale }}/login" novalidate>
       {{ f.form_banner(form_error) }}
+      {{ f.form_notice(notice) }}
 
       {#- Real radio inputs, not buttons: the browser submits `role` natively,
           keyboard and screen-reader behaviour come free, and the toggle still

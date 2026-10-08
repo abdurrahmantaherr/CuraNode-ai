@@ -33,6 +33,7 @@ from sqlalchemy import (
     String,
     Text,
     Uuid,
+    text,
 )
 from sqlalchemy import (
     Enum as SAEnum,
@@ -137,7 +138,12 @@ class Profile(Base):
         back_populates="user", uselist=False, foreign_keys="Doctor.user_id"
     )
 
-    __table_args__ = (Index("idx_user_profile_role_status", "role", "status"),)
+    __table_args__ = (
+        Index("idx_user_profile_role_status", "role", "status"),
+        # Case-insensitive uniqueness — created on Postgres by migration
+        # a3c1f0e7b2d4; mirrored here so the SQLite test schema enforces it too.
+        Index("uq_user_profile_email_lower", text("lower(email)"), unique=True),
+    )
 
 
 class Clinic(Base):

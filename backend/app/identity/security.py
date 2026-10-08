@@ -27,6 +27,7 @@ import asyncio
 import secrets
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 import jwt
 from supabase import AsyncClient, create_async_client
@@ -42,7 +43,14 @@ class InvalidToken(Exception):
 
 @dataclass(frozen=True)
 class AccessClaims:
+    """What the app reads from a verified access token. Deliberately no role
+    and no verification state — those are re-read from the database on every
+    request (SPEC AC-08). `session_id`/`issued_at` exist only so `deps.py` can
+    enforce the access-token lifetime and logout revocation locally."""
+
     user_id: uuid.UUID
+    session_id: str | None = None
+    issued_at: int | None = None
 
 
 @dataclass(frozen=True)
@@ -78,9 +86,24 @@ async def decode_supabase_access_token(token: str) -> AccessClaims:
             leeway=CLOCK_SKEW_S,
             audience="authenticated",
         )
-        return AccessClaims(user_id=uuid.UUID(payload["sub"]))
+        return AccessClaims(
+            user_id=uuid.UUID(payload["sub"]),
+            session_id=payload.get("session_id"),
+            issued_at=payload.get("iat"),
+        )
     except (jwt.PyJWTError, KeyError, ValueError) as exc:
         raise InvalidToken(str(exc)) from exc
+
+
+# ── Supabase user-object helpers ─────────────────────────────────────────
+def identity_providers(auth_user: Any) -> set[str]:
+    """Providers linked to a Supabase auth user (`email`, `google`, ...)."""
+    providers: set[str] = set()
+    for identity in getattr(auth_user, "identities", None) or []:
+        provider = identity.get("provider") if isinstance(identity, dict) else identity.provider
+        if provider:
+            providers.add(str(provider))
+    return providers
 
 
 _client: AsyncClient | None = None

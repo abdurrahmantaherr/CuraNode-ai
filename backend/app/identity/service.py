@@ -8,30 +8,47 @@ app's responsibility:
 
 * Self-registration may create a doctor *account*, never doctor *access*.
   `is_verified` is written as False here and is never read from the request.
-* Registration must not become an email-enumeration oracle: a duplicate
-  returns the same shape as a success, creates nothing in Supabase or the
-  local DB, and issues no cookies.
-* Login lockout (10 failures / 15 minutes) is tracked locally against
-  `profiles.failed_logins`/`locked_until` — a locked account is refused
-  before Supabase is ever called, and a lock is never extended by further
-  attempts (SPEC BL-10). NOTE: because password verification now crosses the
-  network to Supabase, the exact timing-indistinguishability Supabase's own
-  GoTrue service provides is outside this app's control; only the response
-  *shape* (identical `Unauthenticated`) is guaranteed here.
+* No email verification step (product decision): a registered account is
+  `active` at once and signs in through the normal login flow. Emails are
+  trimmed and lower-cased; an already-registered address is refused with
+  `EmailAlreadyRegistered` (409) — by the profile check first, and by Supabase
+  Auth's own unique-email constraint (`email_exists`) when two registrations
+  race. Registration therefore does reveal whether an address is registered;
+  the per-IP auth rate limit is what bounds probing it.
+* Registration is all-or-nothing: if anything fails after the Supabase user
+  was created, that user (and, by FK cascade, its trigger-created profile) is
+  deleted again — and only a user this very request created is ever deleted.
+* Login lockout (10 failures / 15 minutes) is tracked in
+  `user_profile.failed_logins`/`locked_until` with atomic SQL: an attempt slot
+  is reserved BEFORE Supabase is called, so concurrent guesses cannot exceed
+  the threshold, a lock is never extended by further attempts (SPEC BL-10),
+  and an expired lock starts a fresh window instead of re-locking on the next
+  single failure.
+* Unknown-email and locked-account logins still make one (decoy) Supabase
+  round trip, so they are not instantly distinguishable from a wrong
+  password by response time. GoTrue's own internal timing (bcrypt only runs
+  for existing users) remains outside this app's control; only the response
+  *shape* (identical `Unauthenticated`) is an exact guarantee.
+* Because password registrations do not prove email ownership, Google sign-in
+  is refused for any Supabase user that has a password (`email`) identity.
+  Otherwise an attacker could register `victim@gmail.com` with their own
+  password, and Supabase's automatic identity linking would later attach the
+  real owner's Google identity to that attacker-controlled account (audit H1:
+  pre-account takeover). Fails closed when the identity list is missing.
 """
 
 from __future__ import annotations
 
+import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from supabase_auth.errors import AuthApiError
 
 from ..audit import writer as audit
-from ..cache import cache, lockout_key
 from ..db.models import (
     AccountStatus,
     Clinic,
@@ -45,7 +62,15 @@ from ..db.models import (
     VerificationStatus,
 )
 from ..db.types import uuid7
-from ..errors import Unauthenticated, ValidationFailed
+from ..deps import revoke_access_tokens
+from ..errors import (
+    EmailAlreadyRegistered,
+    OAuthPasswordAccountExists,
+    RegistrationFailed,
+    Unauthenticated,
+    ValidationFailed,
+)
+from ..log_config import get_logger
 from ..settings import settings
 from . import oauth as oauth_mod
 from . import security
@@ -61,11 +86,28 @@ from .schemas import (
 
 PASSPORT_MAX_ATTEMPTS = 5
 
+# GoTrue error codes (supabase_auth.types.ErrorCode).
+_EMAIL_TAKEN_CODES = frozenset({"email_exists", "user_already_exists"})
+_WEAK_PASSWORD_CODES = frozenset({"weak_password"})
+_DECOY_DOMAIN = "login-decoy.invalid"
+
+log = get_logger()
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 async def _user_by_email(session: AsyncSession, email: str) -> Profile | None:
-    result = await session.execute(select(Profile).where(Profile.email == email))
-    return result.scalar_one_or_none()
+    # Case-insensitive, matching `uq_user_profile_email_lower`. `.first()`
+    # rather than `scalar_one_or_none()`: a duplicate row (impossible once the
+    # unique index exists) must not turn a victim's login into a 500.
+    result = await session.execute(
+        select(Profile).where(func.lower(Profile.email) == email.strip().lower()).limit(1)
+    )
+    return result.scalars().first()
+
+
+async def _pmdc_taken(session: AsyncSession, pmdc_number: str) -> bool:
+    row = await session.execute(select(Doctor.id).where(Doctor.pmdc_number == pmdc_number))
+    return row.first() is not None
 
 
 async def _unique_passport_no(session: AsyncSession) -> str:
@@ -162,6 +204,93 @@ async def _sign_out(access_token: str | None) -> None:
         pass
 
 
+async def _delete_auth_user(user_id: uuid.UUID) -> None:
+    """Compensation for a half-finished registration. Only ever called with
+    the id `admin.create_user` returned in the same request, so it can never
+    delete a pre-existing account. `user_profile` (and everything hanging off
+    it) goes with it via `ON DELETE CASCADE` from `auth.users`."""
+    client = await security.get_supabase_client()
+    try:
+        await client.auth.admin.delete_user(str(user_id))
+    except Exception as exc:  # noqa: BLE001 — best effort; never mask the original failure
+        log.warning(
+            "registration_compensation_failed", user_id=str(user_id), error=type(exc).__name__
+        )
+
+
+async def _decoy_password_check() -> None:
+    """One throwaway Supabase sign-in against an address that cannot exist,
+    so an unknown-email or locked-account login costs the same network round
+    trip as a wrong password. Never raises."""
+    client = await security.new_auth_client()
+    try:
+        await client.auth.sign_in_with_password(
+            {
+                "email": f"{secrets.token_hex(12)}@{_DECOY_DOMAIN}",
+                "password": secrets.token_urlsafe(24),
+            }
+        )
+    except Exception:  # noqa: BLE001, S110 — a decoy's outcome is irrelevant
+        pass
+
+
+# ── Lockout bookkeeping (atomic; see module docstring) ──────────────────
+async def _release_expired_lock(session: AsyncSession, user_id: uuid.UUID, now: datetime) -> None:
+    """An expired lock starts a fresh window. Without this the counter stays
+    at the threshold and ONE wrong guess every 15 minutes would keep a victim
+    locked out forever (audit H3). A NULL `locked_until` at the threshold only
+    exists in rows written before this code; it is treated as expired."""
+    await session.execute(
+        update(Profile)
+        .where(
+            Profile.id == user_id,
+            Profile.failed_logins >= settings.max_failed_logins,
+            or_(Profile.locked_until.is_(None), Profile.locked_until <= now),
+        )
+        .values(failed_logins=0, locked_until=None)
+        .execution_options(synchronize_session=False)
+    )
+
+
+async def _reserve_attempt(session: AsyncSession, user_id: uuid.UUID, now: datetime) -> int | None:
+    """Atomically claims one password attempt BEFORE Supabase is called.
+
+    Returns the attempt number, or None when the account is locked. The
+    increment and the threshold check are one UPDATE, so concurrent requests
+    can never get more than `max_failed_logins` password checks per window
+    (audit M4). The attempt that reaches the threshold sets the lock in the
+    same statement; a correct password clears it again (`_clear_attempts`).
+    """
+    lock_until = now + timedelta(minutes=settings.lockout_minutes)
+    result = await session.execute(
+        update(Profile)
+        .where(Profile.id == user_id, Profile.failed_logins < settings.max_failed_logins)
+        .values(
+            failed_logins=Profile.failed_logins + 1,
+            locked_until=case(
+                (Profile.failed_logins + 1 >= settings.max_failed_logins, lock_until),
+                else_=Profile.locked_until,
+            ),
+        )
+        .returning(Profile.failed_logins)
+        .execution_options(synchronize_session=False)
+    )
+    row = result.first()
+    # Commit now so the reservation is visible to concurrent requests (and
+    # the row lock is released) before the slow network call to Supabase.
+    await session.commit()
+    return None if row is None else int(row[0])
+
+
+async def _clear_attempts(session: AsyncSession, user_id: uuid.UUID) -> None:
+    await session.execute(
+        update(Profile)
+        .where(Profile.id == user_id)
+        .values(failed_logins=0, locked_until=None)
+        .execution_options(synchronize_session=False)
+    )
+
+
 # ── Registration (SPEC 4.1) ──────────────────────────────────────────────
 async def register(
     session: AsyncSession,
@@ -169,11 +298,15 @@ async def register(
     *,
     ip: str | None = None,
     user_agent: str | None = None,
-) -> tuple[SessionOut, security.TokenPair | None]:
-    """Create a patient or doctor account and sign the user in.
+) -> None:
+    """Create an active patient or doctor account. No session is issued —
+    the user signs in through the normal login flow afterwards.
 
-    Returns `(SessionOut, None)` on the duplicate-email path so the router can
-    emit an identical body with no cookies (SPEC AC-24).
+    Raises `EmailAlreadyRegistered` if the (normalised) email is taken,
+    `ValidationFailed` for an unknown clinic, a PMDC number already
+    registered, or a password Supabase's policy rejects, and
+    `RegistrationFailed` — never a raw Supabase/database error — for
+    everything else.
     """
     is_doctor = isinstance(body, DoctorRegisterRequest)
 
@@ -182,84 +315,83 @@ async def register(
         if clinic is None:
             raise ValidationFailed({"fields": {"primary_clinic_id": "errors.clinic_unknown"}})
 
-    existing = await _user_by_email(session, body.email)
-    if existing is not None:
-        # Enumeration guard. Shape matches success exactly; no row, no cookies,
-        # and Supabase is never called.
-        return (
-            SessionOut(
-                user_id=uuid7(),
-                role="patient",
-                full_name=body.full_name,
-                locale=body.preferred_locale,
-                landing_route=landing_route_for("patient", body.preferred_locale),
-                access_expires_at=datetime.now(UTC)
-                + timedelta(minutes=settings.access_token_minutes),
-            ),
-            None,
-        )
+    if await _user_by_email(session, body.email) is not None:
+        # Nothing is created and Supabase is never called.
+        raise EmailAlreadyRegistered()
+
+    if is_doctor and await _pmdc_taken(session, body.pmdc_number):
+        raise ValidationFailed({"fields": {"pmdc_number": "errors.pmdc_taken"}})
 
     client = await security.get_supabase_client()
-    created = await client.auth.admin.create_user(
-        {
-            "email": body.email,
-            "password": body.password,
-            # No verification channel exists, so the account is usable
-            # immediately — matches AccountStatus.ACTIVE below.
-            "email_confirm": True,
-        }
-    )
+    try:
+        created = await client.auth.admin.create_user(
+            {
+                "email": body.email,
+                "password": body.password,
+                # No verification step: confirmed at creation, so Supabase
+                # never sends a confirmation email and allows password login.
+                "email_confirm": True,
+            }
+        )
+    except AuthApiError as exc:
+        if exc.code in _EMAIL_TAKEN_CODES:
+            # Supabase Auth's unique-email constraint: a concurrent
+            # registration for the same address won the race (or the address
+            # exists in Supabase only). Nothing of ours exists to clean up —
+            # and the existing user must NOT be touched.
+            raise EmailAlreadyRegistered() from None
+        if exc.code in _WEAK_PASSWORD_CODES:
+            raise ValidationFailed({"fields": {"password": "errors.password_rejected"}}) from None
+        raise RegistrationFailed() from None
     user_id = uuid.UUID(created.user.id)
 
-    # A DB trigger (`on_auth_user_created`) already inserted a default
-    # `user_profile` row (role='patient', locale='en', status='active') the
-    # instant the Supabase auth user was created — by the time this admin
-    # call returns, that trigger has already committed. Update it rather
-    # than inserting again, or role/verification-relevant fields silently
-    # revert to the trigger's defaults.
-    user = await session.get(Profile, user_id)
-    if user is None:
-        # Defensive fallback only — should be unreachable while the trigger
-        # exists, but this must not become an account created ex nihilo.
-        user = Profile(id=user_id)
-        session.add(user)
+    try:
+        # A DB trigger (`on_auth_user_created`) already inserted a default
+        # `user_profile` row (role='patient', locale='en', status='active')
+        # the instant the Supabase auth user was created — update it rather
+        # than inserting again, or role/verification-relevant fields silently
+        # revert to the trigger's defaults.
+        user = await session.get(Profile, user_id)
+        if user is None:
+            # Defensive fallback only — should be unreachable while the
+            # trigger exists, but this must not become an account created ex
+            # nihilo.
+            user = Profile(id=user_id)
+            session.add(user)
 
-    user.email = body.email
-    user.phone_e164 = body.phone_e164
-    user.role = UserRole.DOCTOR if is_doctor else UserRole.PATIENT
-    user.status = AccountStatus.ACTIVE
-    user.preferred_locale = LocaleCode(body.preferred_locale)
-    user.full_name = body.full_name
-    user.is_synthetic = settings.environment != "pilot"
-    await session.flush()
+        user.email = body.email
+        user.phone_e164 = body.phone_e164
+        user.role = UserRole.DOCTOR if is_doctor else UserRole.PATIENT
+        user.status = AccountStatus.ACTIVE
+        user.preferred_locale = LocaleCode(body.preferred_locale)
+        user.full_name = body.full_name
+        user.is_synthetic = settings.environment != "pilot"
+        await session.flush()
 
-    await provision_role_records(
-        session,
-        user,
-        role=user.role,
-        full_name=body.full_name,
-        pmdc_number=body.pmdc_number if is_doctor else None,
-        specialty=body.specialty if is_doctor else None,
-        primary_clinic_id=body.primary_clinic_id if is_doctor else None,
-    )
+        await provision_role_records(
+            session,
+            user,
+            role=user.role,
+            full_name=body.full_name,
+            pmdc_number=body.pmdc_number if is_doctor else None,
+            specialty=body.specialty if is_doctor else None,
+            primary_clinic_id=body.primary_clinic_id if is_doctor else None,
+        )
 
-    await audit.write(
-        session,
-        action=audit.AUTH_REGISTER,
-        actor_user_id=user.id,
-        actor_role=user.role.value,
-        ip_address=ip,
-        user_agent=user_agent,
-        detail={"role": user.role.value},
-    )
-
-    auth_client = await security.new_auth_client()
-    signed_in = await auth_client.auth.sign_in_with_password(
-        {"email": body.email, "password": body.password}
-    )
-    out, pair = _session_out(user, signed_in.session)
-    await session.commit()
-    return out, pair
+        await audit.write(
+            session,
+            action=audit.AUTH_REGISTER,
+            actor_user_id=user.id,
+            actor_role=user.role.value,
+            ip_address=ip,
+            user_agent=user_agent,
+            detail={"role": user.role.value},
+        )
+        await session.commit()
+    except Exception:  # noqa: BLE001 — ANY failure after create_user must be compensated
+        await session.rollback()
+        await _delete_auth_user(user_id)
+        raise RegistrationFailed() from None
 
 
 # ── Login (SPEC 4.4) ─────────────────────────────────────────────────────
@@ -272,17 +404,17 @@ async def login(
 ) -> tuple[SessionOut, security.TokenPair]:
     user = await _user_by_email(session, body.email)
     if user is None:
+        await _decoy_password_check()
         raise Unauthenticated()
 
     now = datetime.now(UTC)
-    locked_until = user.locked_until
-    if locked_until is not None and locked_until.tzinfo is None:
-        locked_until = locked_until.replace(tzinfo=UTC)
-
-    if locked_until is not None and locked_until > now:
-        # Do NOT extend the lock — otherwise an attacker could keep a real user
-        # locked out indefinitely (SPEC BL-10). Supabase is never called while
-        # locked.
+    await _release_expired_lock(session, user.id, now)
+    attempt = await _reserve_attempt(session, user.id, now)
+    if attempt is None:
+        # Locked. Do NOT extend the lock — otherwise an attacker could keep a
+        # real user locked out indefinitely (SPEC BL-10). The real password is
+        # never sent to Supabase while locked; the decoy only evens out timing.
+        await _decoy_password_check()
         raise Unauthenticated()
 
     auth_client = await security.new_auth_client()
@@ -291,32 +423,30 @@ async def login(
             {"email": body.email, "password": body.password}
         )
     except AuthApiError:
-        user.failed_logins += 1
-        if user.failed_logins >= settings.max_failed_logins:
-            user.locked_until = now + timedelta(minutes=settings.lockout_minutes)
-            await cache.set(lockout_key(str(user.id)), True, settings.lockout_minutes * 60)
+        if attempt >= settings.max_failed_logins:
             await audit.write(
                 session,
                 action=audit.AUTH_LOCKOUT,
                 actor_user_id=user.id,
                 actor_role=user.role.value,
                 ip_address=ip,
-                detail={"failed_logins": user.failed_logins},
+                detail={"failed_logins": attempt},
             )
-        await session.commit()
-        raise Unauthenticated()
+            await session.commit()
+        raise Unauthenticated() from None
+
+    # The password was right: whatever happens next, it was not a failed guess.
+    await _clear_attempts(session, user.id)
 
     if user.status != AccountStatus.ACTIVE:
         # Suspended must stay indistinguishable from a wrong password. The
         # session Supabase just issued is valid, so it must be revoked rather
         # than handed to the caller.
         await _sign_out(signed_in.session.access_token)
+        await session.commit()
         raise Unauthenticated()
 
-    user.failed_logins = 0
-    user.locked_until = None
     user.last_login_at = now
-    await cache.delete(lockout_key(str(user.id)))
 
     await audit.write(
         session,
@@ -368,6 +498,28 @@ async def login_with_oauth(
         await _sign_out(exchanged.session.access_token)
         raise Unauthenticated()
 
+    providers = security.identity_providers(exchanged.user)
+    if not providers or "email" in providers:
+        # This Supabase user has a password identity: it was registered with
+        # a password, and password registration never proves email ownership.
+        # If Supabase linked this Google identity onto it by email, signing in
+        # here would hand the real owner an account a squatter may control
+        # (audit H1). Refuse and revoke; the password owner signs in with the
+        # password. An empty identity list fails closed.
+        await _sign_out(exchanged.session.access_token)
+        if user is not None:
+            await audit.write(
+                session,
+                action=audit.AUTH_OAUTH_LINK_REFUSED,
+                actor_user_id=user.id,
+                actor_role=user.role.value,
+                ip_address=ip,
+                user_agent=user_agent,
+                detail={"provider": provider, "reason": "password_account"},
+            )
+            await session.commit()
+        raise OAuthPasswordAccountExists()
+
     if user is None:
         # Defensive fallback only (should be unreachable while the trigger
         # exists) — `email` is NOT NULL, so it must be set before this is
@@ -401,10 +553,8 @@ async def login_with_oauth(
         user.full_name = fields["full_name"]
     user.is_synthetic = settings.environment != "pilot"
 
-    user.failed_logins = 0
-    user.locked_until = None
     user.last_login_at = now
-    await cache.delete(lockout_key(str(user.id)))
+    await _clear_attempts(session, user.id)
     await session.flush()
 
     onboarding_required = await _onboarding_required(session, user)
@@ -537,7 +687,11 @@ async def logout(session: AsyncSession, access_token: str | None) -> None:
     except security.InvalidToken:
         return
 
+    # Supabase revokes every refresh token of the user (scope="global");
+    # the access tokens themselves are stateless JWTs, so they are also
+    # marked dead locally until they would have expired (audit M3).
     await _sign_out(access_token)
+    await revoke_access_tokens(claims)
     await audit.write(session, action=audit.AUTH_LOGOUT, actor_user_id=claims.user_id)
     await session.commit()
 
