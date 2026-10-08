@@ -21,6 +21,7 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     JSON,
@@ -30,6 +31,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     Uuid,
@@ -383,6 +385,155 @@ class ConsentGrant(Base):
     granted_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
     expires_at: Mapped[datetime | None] = _ts(nullable=True)
     revoked_at: Mapped[datetime | None] = _ts(nullable=True)
+
+
+# ── Patient history access (D2) ─────────────────────────────────────────
+# Branch A: all tables below pre-exist in the shared Supabase schema and are
+# owned by the wider CuraNode-AI product. No migration; read-only for D2.
+class Encounter(Base):
+    """encounter — doctor-owned, do not write from patient-facing code.
+    Read-only for D2.
+    """
+
+    __tablename__ = "encounter"
+
+    id: Mapped[uuid.UUID] = mapped_column("encounter_id", Uuid, primary_key=True, default=uuid7)
+    appointment_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient.patient_id"), nullable=False
+    )
+    doctor_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("doctor.doctor_id"), nullable=False
+    )
+    clinic_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("clinic.clinic_id"), nullable=False
+    )
+    visit_datetime: Mapped[datetime] = _ts(nullable=False)
+    chief_complaint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    clinical_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    what_changed_diff: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class Diagnosis(Base):
+    """diagnosis — doctor-owned, read-only for D2."""
+
+    __tablename__ = "diagnosis"
+
+    id: Mapped[uuid.UUID] = mapped_column("diagnosis_id", Uuid, primary_key=True, default=uuid7)
+    encounter_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("encounter.encounter_id"), nullable=False
+    )
+    icd10_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    description: Mapped[str | None] = mapped_column(String, nullable=True)
+    severity: Mapped[str | None] = mapped_column(String, nullable=True)
+    is_chronic: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+
+class VitalSign(Base):
+    """vital_sign — doctor-owned, read-only for D2."""
+
+    __tablename__ = "vital_sign"
+
+    id: Mapped[uuid.UUID] = mapped_column("vital_id", Uuid, primary_key=True, default=uuid7)
+    encounter_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("encounter.encounter_id"), nullable=False
+    )
+    height_cm: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    weight_kg: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    bp_systolic: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bp_diastolic: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pulse_bpm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    temperature_c: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    spo2: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recorded_at: Mapped[datetime] = _ts(nullable=False)
+
+
+class Prescription(Base):
+    """prescription — doctor-owned, read-only for D2."""
+
+    __tablename__ = "prescription"
+
+    id: Mapped[uuid.UUID] = mapped_column("prescription_id", Uuid, primary_key=True, default=uuid7)
+    encounter_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("encounter.encounter_id"), nullable=False
+    )
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient.patient_id"), nullable=False
+    )
+    doctor_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("doctor.doctor_id"), nullable=False
+    )
+    issue_date: Mapped[date] = mapped_column(nullable=False)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = _ts(nullable=False)
+
+
+class PrescriptionItem(Base):
+    """prescription_item — doctor-owned, read-only for D2."""
+
+    __tablename__ = "prescription_item"
+
+    id: Mapped[uuid.UUID] = mapped_column("item_id", Uuid, primary_key=True, default=uuid7)
+    prescription_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("prescription.prescription_id")
+    )
+    medicine_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("medicine.medicine_id"))
+    dosage: Mapped[str | None] = mapped_column(String, nullable=True)
+    frequency: Mapped[str | None] = mapped_column(String, nullable=True)
+    duration_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    route: Mapped[str | None] = mapped_column(String, nullable=True)
+    instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class Medicine(Base):
+    """medicine — reference table, read-only."""
+
+    __tablename__ = "medicine"
+
+    id: Mapped[uuid.UUID] = mapped_column("medicine_id", Uuid, primary_key=True, default=uuid7)
+    generic_name: Mapped[str] = mapped_column(String, nullable=False)
+    brand_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    strength: Mapped[str | None] = mapped_column(String, nullable=True)
+    form: Mapped[str | None] = mapped_column(String, nullable=True)
+    atc_code: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class LabReport(Base):
+    """lab_report — doctor/lab-owned, read-only for D2."""
+
+    __tablename__ = "lab_report"
+
+    id: Mapped[uuid.UUID] = mapped_column("report_id", Uuid, primary_key=True, default=uuid7)
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient.patient_id"), nullable=False
+    )
+    encounter_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("encounter.encounter_id"), nullable=True
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    lab_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    report_date: Mapped[date | None] = mapped_column(nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class LabResult(Base):
+    """lab_result — doctor/lab-owned, read-only for D2."""
+
+    __tablename__ = "lab_result"
+
+    id: Mapped[uuid.UUID] = mapped_column("result_id", Uuid, primary_key=True, default=uuid7)
+    report_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("lab_report.report_id"), nullable=False
+    )
+    test_name: Mapped[str] = mapped_column(String, nullable=False)
+    loinc_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    value: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    unit: Mapped[str | None] = mapped_column(String, nullable=True)
+    ref_range_low: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    ref_range_high: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    flag: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class AuditLog(Base):
