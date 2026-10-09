@@ -10,7 +10,7 @@ logic) needed minimal churn.
 `user_profile`/`clinic`/`patient`/`doctor`/`clinic_staff`/`doctor_affiliation`
 are pre-existing tables owned by the shared schema — this module never
 creates or drops them; nor does it own the shared `allergy`/
-`chronic_condition` tables. Only `audit_log` and `patient_medication` are
+`chronic_condition` tables, or `doctor_schedule`/`schedule_exception` (D7). Only `audit_log` and `patient_medication` are
 owned outright by this codebase, plus a handful of additive columns on
 `user_profile`/`doctor`/`allergy`/`chronic_condition` that the shared schema
 didn't have yet (see the Alembic migrations for exactly what was added).
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from sqlalchemy import (
     JSON,
@@ -30,8 +30,10 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
+    Time,
     Uuid,
     text,
 )
@@ -76,6 +78,15 @@ class VerificationStatus(str, enum.Enum):
     PENDING = "pending"
     VERIFIED = "verified"
     REJECTED = "rejected"
+
+
+class ScheduleExceptionType(str, enum.Enum):
+    """`schedule_exception.type` (D7). `leave` and `emergency` both mean
+    "unavailable"; `extra` adds hours."""
+
+    LEAVE = "leave"
+    EMERGENCY = "emergency"
+    EXTRA = "extra"
 
 
 def _ts(**kw: object) -> Mapped[datetime]:
@@ -251,6 +262,104 @@ class ClinicStaff(Base):
     role: Mapped[str] = mapped_column(String(40), nullable=False)
     joined_at: Mapped[datetime] = mapped_column(
         "joined_at", DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
+# ── Doctor schedule (D7) ─────────────────────────────────────────────────
+class DoctorSchedule(Base):
+    """doctor_schedule — one weekly slot of a doctor at a clinic (D7).
+
+    Shared, pre-existing table (verified against the live schema 2026-10-10).
+    A slot belongs to an *affiliation*, which gives both the doctor and the
+    clinic. `slot_minutes` is the booked-appointment grid; `max_tokens` caps
+    patients per session per date, booked plus walk-in (D7 R12–R14).
+
+    `status` has no CHECK in the live table. `active` is live; D7 removes a
+    slot by setting `inactive` and never deletes a row. Readers treat any value
+    other than `active` as not live, since other codebases share the table.
+
+    The first four CHECKs mirror the live ones; the last two were added by D7's
+    migration (`291c06a2b86f`).
+    """
+
+    __tablename__ = "doctor_schedule"
+
+    id: Mapped[uuid.UUID] = mapped_column("schedule_id", Uuid, primary_key=True, default=uuid7)
+    affiliation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("doctor_affiliation.affiliation_id", ondelete="CASCADE"), nullable=False
+    )
+    weekday: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    start_time: Mapped[time] = mapped_column(Time, nullable=False)
+    end_time: Mapped[time] = mapped_column(Time, nullable=False)
+    slot_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+
+    __table_args__ = (
+        CheckConstraint("end_time > start_time", name="doctor_schedule_check"),
+        CheckConstraint("weekday >= 0 AND weekday <= 6", name="doctor_schedule_weekday_check"),
+        CheckConstraint("slot_minutes > 0", name="doctor_schedule_slot_minutes_check"),
+        CheckConstraint("max_tokens >= 0", name="doctor_schedule_max_tokens_check"),
+        CheckConstraint(
+            "slot_minutes BETWEEN 5 AND 60 AND slot_minutes % 5 = 0",
+            name="doctor_schedule_slot_minutes_grid",
+        ),
+        CheckConstraint("max_tokens >= 1", name="doctor_schedule_max_tokens_min"),
+        Index("idx_doctor_schedule_affiliation_id", "affiliation_id"),
+    )
+
+
+class ScheduleException(Base):
+    """schedule_exception — time off on, or extra hours anchored to, one slot
+    on one date (D7).
+
+    Shared, pre-existing table. D7's migration (`291c06a2b86f`) added
+    `start_time`/`end_time` (time off for a window, or the extra's window;
+    both NULL = the whole slot), `removed_at` (soft-remove; rows are never
+    deleted) and `max_tokens` (an extra's own cap; NULL = inherit the anchor
+    slot's cap, read live), plus their CHECKs and the date index.
+    """
+
+    __tablename__ = "schedule_exception"
+
+    id: Mapped[uuid.UUID] = mapped_column("exception_id", Uuid, primary_key=True, default=uuid7)
+    schedule_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("doctor_schedule.schedule_id", ondelete="CASCADE"), nullable=False
+    )
+    exception_date: Mapped[date] = mapped_column(nullable=False)
+    kind: Mapped[ScheduleExceptionType] = mapped_column(
+        "type", _enum(ScheduleExceptionType, "schedule_exception_type"), nullable=False
+    )
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
+    start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    removed_at: Mapped[datetime | None] = _ts(nullable=True)
+    max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "type IN ('leave', 'emergency', 'extra')", name="schedule_exception_type_check"
+        ),
+        CheckConstraint(
+            "(start_time IS NULL) = (end_time IS NULL)", name="schedule_exception_times_pair"
+        ),
+        CheckConstraint(
+            "start_time IS NULL OR end_time > start_time", name="schedule_exception_times_order"
+        ),
+        CheckConstraint(
+            "type <> 'extra' OR (start_time IS NOT NULL AND end_time IS NOT NULL)",
+            name="schedule_exception_extra_has_times",
+        ),
+        CheckConstraint(
+            "max_tokens IS NULL OR max_tokens >= 1", name="schedule_exception_max_tokens_min"
+        ),
+        CheckConstraint(
+            "max_tokens IS NULL OR type = 'extra'",
+            name="schedule_exception_max_tokens_extra_only",
+        ),
+        Index("idx_schedule_exception_schedule_id", "schedule_id"),
+        Index("idx_schedule_exception_date", "exception_date"),
     )
 
 
