@@ -16,12 +16,13 @@ the shared CuraNode-AI schema, not this repo). It:
 
 `access_log` needs no DDL: the shared table already has every column P9 uses.
 
-Parent: `35c4bc13fa37`, a reconstructed placeholder for the document/OCR
-codebase's revisions that the shared database is at (see that file). Applying
-this to the shared database still needs the schema owner's OK.
+Parent: `e3a52c8d7f14`, a reconstructed placeholder for the document/OCR
+codebase's revision that the shared database is at (see that file; it follows
+the earlier placeholder `35c4bc13fa37`). Applying this to the shared database
+still needs the schema owner's OK.
 
 Revision ID: dba968144fb4
-Revises: 35c4bc13fa37
+Revises: e3a52c8d7f14
 Create Date: 2026-10-08 12:00:00.000000
 
 """
@@ -35,7 +36,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "dba968144fb4"
-down_revision: str | Sequence[str] | None = "35c4bc13fa37"
+down_revision: str | Sequence[str] | None = "e3a52c8d7f14"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

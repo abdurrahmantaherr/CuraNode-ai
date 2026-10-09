@@ -135,11 +135,11 @@ def test_ac29_migration_is_additive():
     upgrade = source.split("def upgrade()")[1].split("def downgrade()")[0]
     for forbidden in ("drop_", "alter_column", "rename", "DROP ", "DELETE "):
         assert forbidden not in upgrade
-    assert 'down_revision: str | Sequence[str] | None = "35c4bc13fa37"' in source
+    assert 'down_revision: str | Sequence[str] | None = "e3a52c8d7f14"' in source
 
 
 def test_ac29_revision_chain_is_single_and_unbroken():
-    """One head, and the chain runs through the reconstructed upstream revision."""
+    """One head, and the chain runs through both reconstructed upstream revisions."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -148,7 +148,13 @@ def test_ac29_revision_chain_is_single_and_unbroken():
     script = ScriptDirectory.from_config(config)
     assert script.get_heads() == ["dba968144fb4"]
     chain = [rev.revision for rev in script.walk_revisions("base", "heads")]
-    assert chain == ["dba968144fb4", "35c4bc13fa37", "488dbf2b3915", "6feacefae2d0"]
+    assert chain == [
+        "dba968144fb4",
+        "e3a52c8d7f14",
+        "35c4bc13fa37",
+        "488dbf2b3915",
+        "6feacefae2d0",
+    ]
 
 
 def test_ac29_placeholder_upgrade_is_noop_and_downgrade_refuses():
