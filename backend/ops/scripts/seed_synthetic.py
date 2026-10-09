@@ -2,11 +2,16 @@
 
 Produces the minimum set SPEC §7 requires: clinics, an active patient, a
 verified doctor, an UNVERIFIED doctor, and a clinic admin. The unverified
-doctor matters most — it is what makes the FR3 lockout demonstrable.
+doctor matters most — it is what makes the FR3 lockout demonstrable. The
+verified doctor works at two clinics with weekly hours at both (D7), so the
+multi-clinic schedule and its conflict rule can be tried.
 
 Credentials are created in Supabase Auth (via the service-role Admin API);
 this script only owns the app-side `profiles`/`patients`/`doctors` rows.
-Schema is applied via Alembic (`uv run alembic upgrade head`), not here.
+It writes to the SHARED database, so only the schema owner runs it, never
+from a dev machine and never as part of a task. The schema is applied by the
+schema owner via Alembic, not here. The weekly slots it adds use only columns
+that `doctor_schedule` already has, so they do not depend on D7's migration.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ from pathlib import Path
 # Runnable directly: `uv run backend/ops/scripts/seed_synthetic.py`
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 
 from app.db.models import (
     AccountStatus,
@@ -27,6 +32,7 @@ from app.db.models import (
     ClinicStaff,
     Doctor,
     DoctorAffiliation,
+    DoctorSchedule,
     LocaleCode,
     Patient,
     Profile,
@@ -119,15 +125,42 @@ async def seed() -> None:
             verified_at=utcnow(),
         )
         session.add(verified_doctor)
-        session.add(
-            DoctorAffiliation(
-                id=uuid7(),
-                doctor_id=verified_doctor.id,
-                clinic_id=clinics[0].id,
-                start_date=datetime.now(UTC).date(),
-                status="active",
-            )
+        primary = DoctorAffiliation(
+            id=uuid7(),
+            doctor_id=verified_doctor.id,
+            clinic_id=clinics[0].id,
+            start_date=datetime.now(UTC).date(),
+            status="active",
         )
+        # D7: a second active affiliation, so the doctor works at two clinics.
+        second = DoctorAffiliation(
+            id=uuid7(),
+            doctor_id=verified_doctor.id,
+            clinic_id=clinics[2].id,
+            start_date=datetime.now(UTC).date(),
+            status="active",
+        )
+        session.add_all([primary, second])
+        await session.flush()
+        # Monday/Wednesday mornings at the first clinic, Monday evening and
+        # Thursday afternoon at the second: 15 minutes per patient.
+        for affiliation, weekday, start, end, cap in (
+            (primary, 0, time(9), time(13), 16),
+            (primary, 2, time(9), time(13), 16),
+            (second, 0, time(15), time(18), 12),
+            (second, 3, time(14), time(18), 16),
+        ):
+            session.add(
+                DoctorSchedule(
+                    id=uuid7(),
+                    affiliation_id=affiliation.id,
+                    weekday=weekday,
+                    start_time=start,
+                    end_time=end,
+                    slot_minutes=15,
+                    max_tokens=cap,
+                )
+            )
 
         unverified_doctor = Doctor(
             id=uuid7(),
@@ -156,7 +189,7 @@ async def seed() -> None:
 
     print("Seeded synthetic data. Password for every account:", PASSWORD)
     print("  patient    ayesha.raza@example.com")
-    print("  doctor     adnan.haleem@example.com   (verified)")
+    print("  doctor     adnan.haleem@example.com   (verified; weekly hours at two clinics)")
     print("  doctor     nadia.iqbal@example.com    (UNVERIFIED — locked out of clinical routes)")
     print("  admin      front.desk@example.com")
 
