@@ -425,6 +425,8 @@ CREATE TABLE extraction_reviews (                     -- FR12
 
 ### 3.7 Scheduling and queue
 
+> **Amended 2026-10-10 (D7, `.claude/specs/D7-multi-hospital-schedule.md`).** The live tables are `doctor_schedule` and `schedule_exception` (singular), not the two below. A weekly slot belongs to a `doctor_affiliation` (which gives doctor and clinic), carries `slot_minutes` (5–60 in steps of 5, set by the doctor; the booked-appointment grid only) and `max_tokens` (entered by the doctor, ≥ 1 by CHECK, ≤ 200 in the app; the cap on booked plus walk-in patients per session per date), and is removed by `status = 'inactive'`. A `schedule_exception` hangs off one slot: `leave`/`emergency` time off (whole slot, or a window in D7's `start_time`/`end_time`) or `extra` hours with an optional own `max_tokens` (NULL inherits the anchor slot's cap, read live); it is soft-removed with `removed_at`. There is no `valid_from`/`valid_to` and no one-exception-per-day rule. No two effective windows of one doctor may overlap at any clinic. D7's additions are migration `291c06a2b86f`. Where this section and the D7 spec disagree, the spec wins.
+
 ```sql
 CREATE TABLE doctor_schedules (                       -- FR18
     id            UUID PRIMARY KEY,
@@ -1253,6 +1255,8 @@ ClinicAdminDep    = Annotated[Actor, Depends(require_role("clinic_admin"))]
 | Schedules | R | R | R (own) | R (own) | RW (own clinic) |
 | Queue | R (own entry) | — | R (own) | — | RW (own clinic) |
 | Doctor verification | — | — | — | — | W (own clinic) |
+
+> **Amended 2026-10-10 (D7).** "Schedules": a doctor, verified or unverified, has RW on their **own** schedule (`DoctorDep`; the schedule exposes no patient data). Clinic-admin RW (FR18) and patient R (FR15) remain planned, not built.
 
 Clinic admins have **no** access to clinical records. They manage schedules and queues, which requires patient names and appointment times, not medical history. This is least privilege and it is also what NFR16 requires — there is no administrative override.
 
