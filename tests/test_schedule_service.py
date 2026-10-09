@@ -7,7 +7,9 @@ needs state; writes under test go through the service.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import uuid
 from datetime import date, time, timedelta
 
@@ -16,9 +18,13 @@ from app.db import types as dbtypes
 from app.db.models import (
     Appointment,
     AuditLog,
+    Base,
+    Clinic,
+    Doctor,
     DoctorAffiliation,
     DoctorSchedule,
     Patient,
+    Profile,
     ScheduleException,
     ScheduleExceptionType,
     UserRole,
@@ -29,6 +35,7 @@ from app.schedule import service
 from app.schedule.schemas import ExtraCreate, SlotCreate, SlotUpdate, TimeOffCreate
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from tests.conftest import add_affiliation, doctor_of, make_user
 
@@ -749,3 +756,80 @@ async def test_u10_service_extra_at_another_clinic_overlapping_s(
     with pytest.raises(ScheduleConflict) as exc:
         await service.add_extra(db, me, extra_body(second_clinic.id, "12:00", "14:00"))
     assert exc.value.details["conflict_id"] == str(s.id)
+
+
+# ── T16 audit: the last two gaps ─────────────────────────────────────────
+async def test_ac4_extra_at_an_inactive_clinic_is_rejected(db, me, doc, inactive_clinic):
+    closed = await add_affiliation(db, doc.id, inactive_clinic.id)
+    await add_slot(db, closed)  # a slot exists there, but the clinic is inactive
+    with pytest.raises(ValidationFailed) as exc:
+        await service.add_extra(db, me, extra_body(inactive_clinic.id, "14:00", "16:00"))
+    assert exc.value.details["fields"] == {"clinic_id": "errors.schedule_clinic_not_affiliated"}
+
+
+# AC-12, truly concurrent: Postgres only. It creates and DROPS every table in
+# the database it is given, so it runs only against a throwaway local test
+# database named in D7_TEST_POSTGRES_URL — never the shared Supabase DB.
+PG_URL = os.environ.get("D7_TEST_POSTGRES_URL", "")
+
+
+def _safe_pg_url(url: str) -> bool:
+    database = url.rsplit("/", 1)[-1].split("?", 1)[0]
+    return (
+        url.startswith("postgresql+asyncpg://")
+        and "supabase" not in url.lower()
+        and "test" in database.lower()
+    )
+
+
+@pytest.mark.skipif(not PG_URL, reason="needs a throwaway local Postgres in D7_TEST_POSTGRES_URL")
+async def test_ac12_concurrent_overlapping_adds_on_postgres():
+    assert _safe_pg_url(PG_URL), "refusing: not a local *test* Postgres database"
+    engine = create_async_engine(PG_URL)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as s:
+            user = Profile(
+                id=dbtypes.uuid7(),
+                email="pg.doctor@x.com",
+                role=UserRole.DOCTOR,
+                full_name="PG Doctor",
+                is_synthetic=True,
+            )
+            clinic = Clinic(id=dbtypes.uuid7(), name="PG Clinic", type="clinic")
+            s.add_all([user, clinic])
+            await s.flush()
+            doctor = Doctor(
+                id=dbtypes.uuid7(), user_id=user.id, full_name="PG Doctor", pmdc_number="PG-1"
+            )
+            s.add(doctor)
+            await s.flush()
+            s.add(
+                DoctorAffiliation(
+                    id=dbtypes.uuid7(),
+                    doctor_id=doctor.id,
+                    clinic_id=clinic.id,
+                    start_date=TODAY,
+                    status="active",
+                )
+            )
+            await s.commit()
+        actor = Actor(user_id=user.id, role=UserRole.DOCTOR.value)
+
+        async def attempt(start: str, end: str) -> str:
+            async with factory() as s:
+                try:
+                    await service.add_slots(s, actor, slot_body(clinic.id, start=start, end=end))
+                    return "ok"
+                except ScheduleConflict:
+                    return "conflict"
+
+        results = await asyncio.gather(attempt("09:00", "13:00"), attempt("12:00", "14:00"))
+        assert sorted(results) == ["conflict", "ok"]
+    finally:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+        await engine.dispose()
