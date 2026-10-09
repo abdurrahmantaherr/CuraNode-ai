@@ -363,6 +363,44 @@ class ScheduleException(Base):
     )
 
 
+class Appointment(Base):
+    """appointment — shared, pre-existing; owned by the booking work (P5).
+
+    Mapped only so D7 can COUNT upcoming bookings against a slot (spec R10)
+    and so the SQLite test schema has the table. D7 never writes it and never
+    reads a patient column; columns and CHECK follow the live table
+    (verified 2026-10-10).
+    """
+
+    __tablename__ = "appointment"
+
+    id: Mapped[uuid.UUID] = mapped_column("appointment_id", Uuid, primary_key=True, default=uuid7)
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient.patient_id", ondelete="CASCADE"), nullable=False
+    )
+    doctor_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("doctor.doctor_id"), nullable=False
+    )
+    clinic_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("clinic.clinic_id"), nullable=False
+    )
+    schedule_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("doctor_schedule.schedule_id"), nullable=True
+    )
+    slot_start: Mapped[datetime] = _ts(nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="booked")
+    booking_channel: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    created_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('booked', 'checked_in', 'done', 'cancelled')",
+            name="appointment_status_check",
+        ),
+        Index("idx_appointment_schedule_id", "schedule_id"),
+    )
+
+
 # ── Patient profile (FR2) ────────────────────────────────────────────────
 class Allergy(Base):
     """A patient's known allergy.
