@@ -1930,6 +1930,7 @@ async def _render_schedule(
         status_code=status_code,
         nav_items=_doctor_nav(loc, current="schedule", verified=actor.is_verified_doctor),
         crumb=translate(ROLE_LABEL["doctor"], loc),
+        page_title=translate("schedule.title", loc),
         full_name=full_name,
         initials=_initials(full_name),
         role_label=translate(ROLE_LABEL["doctor"], loc),

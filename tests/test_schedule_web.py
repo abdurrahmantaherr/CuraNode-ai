@@ -124,3 +124,60 @@ async def test_time_off_extra_and_removal(doctor_client, db, clinic):
 
     r = await doctor_client.post(f"{PAGE}/exceptions/{exceptions[0].id}/remove")
     assert r.headers["location"].endswith("saved=exception_removed#exceptions")
+
+
+# ── The page (T11) ───────────────────────────────────────────────────────
+async def test_empty_page_renders_for_a_pending_doctor(doctor_client):
+    r = await doctor_client.get(PAGE)
+    assert r.status_code == 200
+    body = r.text
+    assert "My schedule" in body
+    assert "You have no weekly hours yet." in body
+    assert 'action="/en/doctor/schedule/slots"' in body  # the add form
+    assert "Time off applies only to the hours already on your schedule" in body  # AC-25
+
+
+async def test_week_view_lists_and_capacity_render(doctor_client, clinic):
+    await doctor_client.post(f"{PAGE}/slots", data=slot_form(clinic))
+    await doctor_client.post(
+        f"{PAGE}/extra",
+        data={
+            "exception_date": TODAY.isoformat(),
+            "clinic_id": str(clinic.id),
+            "start_time": "13:00",
+            "end_time": "15:00",
+            "max_tokens": "",
+        },
+    )
+    r = await doctor_client.get(PAGE)
+    body = r.text
+    assert r.status_code == 200
+    assert "09:00–13:00" in body and "13:00–15:00" in body  # AC-1, the week view
+    assert "Up to 16 patients" in body
+    assert "Up to 16 patients (from your Monday hours)" in body  # AC-33, inherited cap
+    assert "15 min per patient · up to 16 patients" in body
+    assert "Shifa International" in body
+
+
+async def test_a_failed_add_rerenders_with_the_conflict_and_the_values(doctor_client, clinic):
+    await doctor_client.post(f"{PAGE}/slots", data=slot_form(clinic))
+    r = await doctor_client.post(
+        f"{PAGE}/slots", data=slot_form(clinic, start="12:00", end="14:00")
+    )
+    assert r.status_code == 409
+    assert "This overlaps your Monday 09:00–13:00 hours at Shifa International." in r.text
+    assert 'value="12:00"' in r.text  # the doctor's input is kept
+    assert 'value="8"' in r.text  # blank cap pre-filled with calc (R13)
+
+
+async def test_a_field_error_is_shown_next_to_the_field(doctor_client, clinic):
+    r = await doctor_client.post(f"{PAGE}/slots", data=slot_form(clinic, weekdays=()))
+    assert r.status_code == 422
+    assert "Choose at least one day." in r.text
+
+
+async def test_urdu_page_is_rtl(doctor_client):
+    r = await doctor_client.get("/ur/doctor/schedule")
+    assert r.status_code == 200
+    assert 'dir="rtl"' in r.text
+    assert "میرا شیڈول" in r.text
