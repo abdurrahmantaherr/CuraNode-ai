@@ -12,7 +12,7 @@ place" with no client state to juggle.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Annotated, Any
 from urllib.parse import urlencode
 
@@ -41,6 +41,7 @@ from ..deps import (
     check_consent_search_rate,
     check_consent_write_rate,
     check_profile_write_rate,
+    check_schedule_write_rate,
     enforce_auth_rate_limit,
 )
 from ..doctor.rows import age_in_years, build_rows, gender_label
@@ -51,6 +52,7 @@ from ..errors import (
     NotEditable,
     NotFound,
     RateLimited,
+    ScheduleConflict,
     Unauthenticated,
     ValidationFailed,
     message_params,
@@ -68,6 +70,9 @@ from ..identity.schemas import (
 from ..paths import TEMPLATES_DIR
 from ..profile import schemas as profile_schemas
 from ..profile import service as profile_service
+from ..schedule import engine as schedule_engine
+from ..schedule import schemas as schedule_schemas
+from ..schedule import service as schedule_service
 from ..settings import settings
 
 OAUTH_STATE_COOKIE = "cn_oauth_state"
@@ -1533,19 +1538,32 @@ async def patient_access_revoke_submit(
 
 
 # ── Doctor passport lookup (D2, BL-07, BL-09, BL-10) ─────────────────────
-def _doctor_nav(loc: str, *, current: str) -> list[dict[str, Any]]:
-    return [
+def _doctor_nav(loc: str, *, current: str, verified: bool = True) -> list[dict[str, Any]]:
+    """A pending doctor gets no passport lookup (FR3); every doctor gets the
+    schedule (D7)."""
+    items = [
         {
             "href": f"/{loc}/doctor",
             "label": translate("nav.dashboard", loc),
             "current": current == "dashboard",
         },
-        {
-            "href": f"/{loc}/doctor/passport-lookup",
-            "label": translate("nav.lookup", loc),
-            "current": current == "lookup",
-        },
     ]
+    if verified:
+        items.append(
+            {
+                "href": f"/{loc}/doctor/passport-lookup",
+                "label": translate("nav.lookup", loc),
+                "current": current == "lookup",
+            }
+        )
+    items.append(
+        {
+            "href": f"/{loc}/doctor/schedule",
+            "label": translate("nav.schedule", loc),
+            "current": current == "schedule",
+        }
+    )
+    return items
 
 
 def _doctor_page_guard(request: Request, locale: str, actor: Actor | None) -> Response | None:
@@ -1665,3 +1683,498 @@ async def doctor_patient_page(
         sections=consent_schemas.SECTIONS,
         shared={**view.sections, "basics": basics},
     )
+
+
+# ── Doctor schedule (D7) ─────────────────────────────────────────────────
+# Any doctor, verified or pending (spec §3, decision 6). The role gate is the
+# guard below plus `DoctorDep` semantics; never `VerifiedDoctorDep`.
+_SCHEDULE_SAVED = (
+    "slot_added",
+    "slot_updated",
+    "slot_removed",
+    "time_off_added",
+    "extra_added",
+    "exception_removed",
+)
+_SLOT_FIELDS = ("clinic_id", "start_time", "end_time", "slot_minutes", "max_tokens")
+_TIME_OFF_FIELDS = ("exception_date", "clinic_id", "start_time", "end_time", "emergency", "reason")
+_EXTRA_FIELDS = ("exception_date", "clinic_id", "start_time", "end_time", "max_tokens", "reason")
+_CLINIC_COLOURS = 4  # .clinic-c0 … .clinic-c3 in app.css, all design tokens
+
+
+def _doctor_schedule_guard(request: Request, locale: str, actor: Actor | None) -> Response | None:
+    """Like `_doctor_page_guard`, but an unverified doctor is let through: the
+    schedule exposes no patient data (spec §3)."""
+    loc = normalise_locale(locale)
+    if actor is None:
+        return RedirectResponse(f"/{loc}/login?next=/{loc}/doctor/schedule", status_code=303)
+    if actor.role != UserRole.DOCTOR.value:
+        return RedirectResponse(f"/{loc}/{_area(actor.role)}", status_code=303)
+    if not actor.onboarding_complete:
+        return RedirectResponse(f"/{loc}/onboarding", status_code=303)
+    return None
+
+
+def _form_values(form: Any, fields: tuple[str, ...]) -> dict[str, str]:
+    """Only the named fields are read; a missing field is "" so the schema
+    reports its own i18n key instead of pydantic's English."""
+    return {f: str(form.get(f, "")) for f in fields}
+
+
+def _week_start(raw: str | None, today: date) -> date:
+    try:
+        anchor = date.fromisoformat(raw) if raw else today
+    except ValueError:
+        anchor = today
+    return anchor - timedelta(days=anchor.weekday())
+
+
+def _weekday_label(loc: str, weekday: int) -> str:
+    return translate(f"weekday.{weekday}", loc)
+
+
+def _hhmm(value: Any) -> str:
+    return value.strftime("%H:%M") if value else ""
+
+
+def _conflict_message(loc: str, exc: ScheduleConflict) -> str:
+    d = exc.details
+    day = _weekday_label(loc, int(d.get("day", 0)))
+    if d.get("date"):
+        day = f"{day} {d['date']}"
+    clinic = d.get("clinic", "")
+    if d.get("clinic_inactive"):
+        clinic = f"{clinic} ({translate('schedule.inactive_clinic', loc)})"
+    return translate(exc.message_key, loc, day=day, start=d["start"], end=d["end"], clinic=clinic)
+
+
+def _slot_prefill(values: dict[str, str]) -> dict[str, str]:
+    """R13: a blank cap is shown as the calculated value after a failed submit."""
+    if values.get("max_tokens", "").strip():
+        return values
+    try:
+        start = schedule_schemas.parse_time(values.get("start_time", ""))
+        end = schedule_schemas.parse_time(values.get("end_time", ""))
+        minutes = schedule_schemas.parse_slot_minutes(values.get("slot_minutes", ""))
+    except PydanticCustomError:
+        return values
+    if end <= start or schedule_schemas.minutes_between(start, end) < minutes:
+        return values
+    return {**values, "max_tokens": str(schedule_schemas.calc_max_tokens(start, end, minutes))}
+
+
+async def _render_schedule(
+    request: Request,
+    loc: str,
+    session: SessionDep,
+    actor: Actor,
+    *,
+    status_code: int = 200,
+    form_state: dict[str, Any] | None = None,
+    saved: str | None = None,
+    page_error: str | None = None,
+    week: str | None = None,
+    clinic: str | None = None,
+    edit: str | None = None,
+) -> Response:
+    doctor = await schedule_service.my_doctor(session, actor)
+    loaded = await schedule_service.load(session, doctor)
+    today = loaded.today
+    week_start = _week_start(week, today)
+    week_end = week_start + timedelta(days=6)
+
+    # Clinics: every affiliated clinic for names and colours; live ones for forms.
+    clinics = sorted(loaded.clinics.values(), key=lambda c: c.name)
+    colour = {c.id: f"clinic-c{i % _CLINIC_COLOURS}" for i, c in enumerate(clinics)}
+    live_clinic_ids = {
+        a.clinic_id for a in loaded.affiliations.values() if loaded.affiliation_live(a)
+    }
+    live_clinics = [c for c in clinics if c.id in live_clinic_ids]
+    clinic_filter = next((c.id for c in clinics if str(c.id) == clinic), None)
+
+    # The week view reads availability only through the service (spec §6).
+    windows: list[schedule_engine.EffectiveWindow] = []
+    if week_end >= today:
+        windows = await schedule_service.get_effective_availability(
+            session, doctor.id, max(week_start, today), week_end, clinic_filter
+        )
+    days = []
+    for offset in range(7):
+        day = week_start + timedelta(days=offset)
+        blocks = [
+            {
+                "clinic": loaded.clinics[w.clinic_id].name,
+                "colour": colour[w.clinic_id],
+                "start": _hhmm(w.start),
+                "end": _hhmm(w.end),
+                "extra": w.is_extra,
+                "capacity": translate(
+                    "schedule.capacity_inherited" if w.inherited else "schedule.capacity",
+                    loc,
+                    count=w.max_tokens,
+                    day=_weekday_label(loc, w.anchor_weekday),
+                ),
+            }
+            for w in windows
+            if w.day == day
+        ]
+        days.append(
+            {
+                "label": _weekday_label(loc, day.weekday()),
+                "date": day.isoformat(),
+                "past": day < today,
+                "today": day == today,
+                "blocks": blocks,
+            }
+        )
+
+    live_slots = sorted(
+        (r for r in loaded.slot_rows.values() if r.status == schedule_service.LIVE),
+        key=lambda r: (r.weekday, r.start_time),
+    )
+    locked = await schedule_service.booked_slot_ids(session, [r.id for r in live_slots])
+    slots = []
+    for row in live_slots:
+        slot_clinic = loaded.clinic_of(row)
+        slots.append(
+            {
+                "id": str(row.id),
+                "day": _weekday_label(loc, row.weekday),
+                "start": _hhmm(row.start_time),
+                "end": _hhmm(row.end_time),
+                "clinic": slot_clinic.name,
+                "colour": colour[slot_clinic.id],
+                "inactive": not loaded.affiliation_live(loaded.affiliations[row.affiliation_id]),
+                "locked": row.id in locked,
+                "meta": translate(
+                    "schedule.slot_meta", loc, minutes=row.slot_minutes, count=row.max_tokens
+                ),
+                "calc": schedule_schemas.calc_max_tokens(
+                    row.start_time, row.end_time, row.slot_minutes
+                ),
+                "values": {
+                    "clinic_id": str(slot_clinic.id),
+                    "weekday": str(row.weekday),
+                    "start_time": _hhmm(row.start_time),
+                    "end_time": _hhmm(row.end_time),
+                    "slot_minutes": str(row.slot_minutes),
+                    "max_tokens": str(row.max_tokens),
+                },
+            }
+        )
+
+    upcoming = sorted(
+        loaded.exception_rows.values(),
+        key=lambda e: (e.exception_date, e.start_time or time.min),
+    )
+    exceptions = []
+    for row in upcoming:
+        anchor = loaded.slot_rows[row.schedule_id]
+        anchor_clinic = loaded.clinic_of(anchor)
+        is_extra = row.kind.value == schedule_engine.EXTRA
+        whole = row.start_time is None
+        entry = {
+            "id": str(row.id),
+            "date": row.exception_date.isoformat(),
+            "day": _weekday_label(loc, row.exception_date.weekday()),
+            "kind": translate(f"schedule.kind.{row.kind.value}", loc),
+            "extra": is_extra,
+            "window": translate("schedule.whole_slot", loc)
+            if whole
+            else f"{_hhmm(row.start_time)}–{_hhmm(row.end_time)}",
+            "clinic": anchor_clinic.name,
+            "colour": colour[anchor_clinic.id],
+            "covers": None
+            if is_extra
+            else translate(
+                "schedule.covers_slot",
+                loc,
+                day=_weekday_label(loc, anchor.weekday),
+                start=_hhmm(anchor.start_time),
+                end=_hhmm(anchor.end_time),
+            ),
+            "reason": row.reason,
+            "capacity": None,
+        }
+        if is_extra:
+            inherited = row.max_tokens is None
+            entry["capacity"] = translate(
+                "schedule.capacity_inherited" if inherited else "schedule.capacity",
+                loc,
+                count=anchor.max_tokens if inherited else row.max_tokens,
+                day=_weekday_label(loc, anchor.weekday),
+            )
+        exceptions.append(entry)
+
+    inherit_hints = []
+    for c in live_clinics:
+        anchor_value = schedule_engine.choose_anchor(c.id, loaded.slots)
+        if anchor_value is not None:
+            hint = translate(
+                "schedule.extra_max_tokens_inherit",
+                loc,
+                count=anchor_value.max_tokens,
+                day=_weekday_label(loc, anchor_value.weekday),
+            )
+            inherit_hints.append(f"{c.name}: {hint}")
+
+    user = await session.get(Profile, actor.user_id)
+    full_name = (user.full_name if user else None) or doctor.full_name
+    week_param = f"&clinic={clinic_filter}" if clinic_filter else ""
+    edit_id = edit if edit and any(s["id"] == edit and not s["locked"] for s in slots) else None
+
+    return _render(
+        request,
+        "doctor/schedule.html",
+        loc,
+        status_code=status_code,
+        nav_items=_doctor_nav(loc, current="schedule", verified=actor.is_verified_doctor),
+        crumb=translate(ROLE_LABEL["doctor"], loc),
+        full_name=full_name,
+        initials=_initials(full_name),
+        role_label=translate(ROLE_LABEL["doctor"], loc),
+        today=today.isoformat(),
+        week_label=translate("schedule.week_of", loc, date=week_start.isoformat()),
+        prev_week=f"/{loc}/doctor/schedule?week={(week_start - timedelta(days=7)).isoformat()}{week_param}",
+        next_week=f"/{loc}/doctor/schedule?week={(week_start + timedelta(days=7)).isoformat()}{week_param}",
+        this_week=f"/{loc}/doctor/schedule?week={today.isoformat()}{week_param}",
+        week_value=week_start.isoformat(),
+        days=days,
+        legend=[{"name": c.name, "colour": colour[c.id]} for c in clinics],
+        clinic_filter=str(clinic_filter) if clinic_filter else "",
+        filter_options=[{"value": str(c.id), "label": c.name} for c in clinics],
+        clinic_options=[{"value": str(c.id), "label": c.name} for c in live_clinics],
+        weekday_options=[{"value": str(i), "label": _weekday_label(loc, i)} for i in range(7)],
+        minutes_options=[
+            {"value": str(m), "label": translate("schedule.minutes_option", loc, n=m)}
+            for m in schedule_schemas.SLOT_MINUTES_CHOICES
+        ],
+        slots=slots,
+        exceptions=exceptions,
+        inherit_hints=inherit_hints,
+        can_add=bool(live_clinics),
+        edit_id=edit_id,
+        form_state=form_state,
+        saved=translate(f"schedule.saved.{saved}", loc) if saved in _SCHEDULE_SAVED else None,
+        page_error=page_error,
+        max_tokens_max=schedule_schemas.MAX_TOKENS_MAX,
+    )
+
+
+async def _schedule_failure(
+    request: Request,
+    loc: str,
+    session: SessionDep,
+    actor: Actor,
+    exc: Exception,
+    *,
+    form: str,
+    values: dict[str, Any],
+) -> Response:
+    """Map a failed schedule write onto the re-rendered page."""
+    await session.rollback()
+
+    def state(errors: dict[str, str], banner: str | None = None) -> dict[str, Any]:
+        if form.startswith("slot"):
+            shown = _slot_prefill({k: v for k, v in values.items() if isinstance(v, str)})
+            shown_values = {**values, **shown}
+        else:
+            shown_values = values
+        return {"form": form, "values": shown_values, "errors": errors, "banner": banner}
+
+    async def page(code: int, **kw: Any) -> Response:
+        edit = (
+            form.removeprefix("slot-") if form.startswith("slot-") and form != "slot-new" else None
+        )
+        return await _render_schedule(
+            request, loc, session, actor, status_code=code, edit=edit, **kw
+        )
+
+    if isinstance(exc, ValidationError):
+        return await page(422, form_state=state(_field_errors(exc, loc)))
+    if isinstance(exc, ValidationFailed):
+        fields = {k: translate(v, loc) for k, v in exc.details.get("fields", {}).items()}
+        banner = fields.pop("__all__", None)
+        return await page(422, form_state=state(fields, banner))
+    if isinstance(exc, ScheduleConflict):
+        return await page(409, form_state=state({}, _conflict_message(loc, exc)))
+    if isinstance(exc, ListFull):
+        banner = translate(exc.message_key, loc, **message_params(exc))
+        return await page(422, form_state=state({}, banner))
+    if isinstance(exc, NotFound):
+        return await page(404, page_error=translate("errors.not_found", loc))
+    if isinstance(exc, RateLimited):
+        return await page(429, page_error=translate("errors.rate_limited", loc))
+    return await page(500, page_error=translate("errors.internal", loc))
+
+
+def _schedule_saved(loc: str, key: str, anchor: str) -> Response:
+    return RedirectResponse(f"/{loc}/doctor/schedule?saved={key}#{anchor}", status_code=303)
+
+
+@router.get("/{locale}/doctor/schedule", response_class=HTMLResponse)
+async def doctor_schedule_page(
+    request: Request,
+    locale: str,
+    session: SessionDep,
+    actor: OptionalActorDep,
+    week: str | None = None,
+    clinic: str | None = None,
+    saved: str | None = None,
+    edit: str | None = None,
+) -> Response:
+    if (redirect := _doctor_schedule_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    return await _render_schedule(
+        request,
+        normalise_locale(locale),
+        session,
+        actor,
+        week=week,
+        clinic=clinic,
+        saved=saved,
+        edit=edit,
+    )
+
+
+@router.post("/{locale}/doctor/schedule/slots")
+async def doctor_schedule_add_slots(
+    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _doctor_schedule_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    form = await request.form()
+    values: dict[str, Any] = {
+        **_form_values(form, _SLOT_FIELDS),
+        "weekdays": [str(v) for v in form.getlist("weekdays")],
+    }
+    try:
+        await check_schedule_write_rate(actor)
+        body = schedule_schemas.SlotCreate.model_validate(values)
+        await schedule_service.add_slots(
+            session, actor, body, user_agent=request.headers.get("user-agent")
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped onto the page
+        return await _schedule_failure(
+            request, loc, session, actor, exc, form="slot-new", values=values
+        )
+    return _schedule_saved(loc, "slot_added", "slots")
+
+
+@router.post("/{locale}/doctor/schedule/slots/{slot_id}")
+async def doctor_schedule_edit_slot(
+    request: Request, locale: str, slot_id: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _doctor_schedule_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    parsed = _parse_entry_id(slot_id)
+    if parsed is None:  # a malformed id is NotFound on the web, not a raw 422
+        return await _schedule_failure(
+            request, loc, session, actor, NotFound(), form="slots", values={}
+        )
+    form = await request.form()
+    values: dict[str, Any] = _form_values(form, (*_SLOT_FIELDS, "weekday"))
+    try:
+        await check_schedule_write_rate(actor)
+        body = schedule_schemas.SlotUpdate.model_validate(values)
+        await schedule_service.update_slot(
+            session, actor, parsed, body, user_agent=request.headers.get("user-agent")
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped onto the page
+        return await _schedule_failure(
+            request, loc, session, actor, exc, form=f"slot-{parsed}", values=values
+        )
+    return _schedule_saved(loc, "slot_updated", "slots")
+
+
+@router.post("/{locale}/doctor/schedule/slots/{slot_id}/remove")
+async def doctor_schedule_remove_slot(
+    request: Request, locale: str, slot_id: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _doctor_schedule_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    parsed = _parse_entry_id(slot_id)
+    try:
+        if parsed is None:
+            raise NotFound()
+        await check_schedule_write_rate(actor)
+        await schedule_service.remove_slot(
+            session, actor, parsed, user_agent=request.headers.get("user-agent")
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped onto the page
+        return await _schedule_failure(request, loc, session, actor, exc, form="slots", values={})
+    return _schedule_saved(loc, "slot_removed", "slots")
+
+
+@router.post("/{locale}/doctor/schedule/time-off")
+async def doctor_schedule_add_time_off(
+    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _doctor_schedule_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    values: dict[str, Any] = _form_values(await request.form(), _TIME_OFF_FIELDS)
+    try:
+        await check_schedule_write_rate(actor)
+        body = schedule_schemas.TimeOffCreate.model_validate(values)
+        await schedule_service.add_time_off(
+            session, actor, body, user_agent=request.headers.get("user-agent")
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped onto the page
+        return await _schedule_failure(
+            request, loc, session, actor, exc, form="time-off", values=values
+        )
+    return _schedule_saved(loc, "time_off_added", "exceptions")
+
+
+@router.post("/{locale}/doctor/schedule/extra")
+async def doctor_schedule_add_extra(
+    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _doctor_schedule_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    values: dict[str, Any] = _form_values(await request.form(), _EXTRA_FIELDS)
+    try:
+        await check_schedule_write_rate(actor)
+        body = schedule_schemas.ExtraCreate.model_validate(values)
+        await schedule_service.add_extra(
+            session, actor, body, user_agent=request.headers.get("user-agent")
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped onto the page
+        return await _schedule_failure(
+            request, loc, session, actor, exc, form="extra", values=values
+        )
+    return _schedule_saved(loc, "extra_added", "exceptions")
+
+
+@router.post("/{locale}/doctor/schedule/exceptions/{exception_id}/remove")
+async def doctor_schedule_remove_exception(
+    request: Request, locale: str, exception_id: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _doctor_schedule_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    parsed = _parse_entry_id(exception_id)
+    try:
+        if parsed is None:
+            raise NotFound()
+        await check_schedule_write_rate(actor)
+        await schedule_service.remove_exception(
+            session, actor, parsed, user_agent=request.headers.get("user-agent")
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped onto the page
+        return await _schedule_failure(
+            request, loc, session, actor, exc, form="exceptions", values={}
+        )
+    return _schedule_saved(loc, "exception_removed", "exceptions")
