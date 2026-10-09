@@ -173,6 +173,23 @@ def test_ac29_placeholder_upgrade_is_noop_and_downgrade_refuses():
             _run(conn, module.downgrade)
 
 
+def test_ac29_e3a52c8d7f14_placeholder_upgrade_is_noop_and_downgrade_refuses():
+    spec = importlib.util.spec_from_file_location(
+        "placeholder_e3a52c8d7f14",
+        ROOT / "alembic" / "versions" / "e3a52c8d7f14_reconstructed_ocr_placeholder.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    assert module.down_revision == "35c4bc13fa37"
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        _run(conn, module.upgrade)  # touches nothing
+        assert sa.inspect(conn).get_table_names() == []
+        with pytest.raises(RuntimeError, match="placeholder"):
+            _run(conn, module.downgrade)
+
+
 async def test_ac29_one_unrevoked_grant_per_grantee_in_the_model(db):
     user = await make_user(db, email="p@x.com", role=UserRole.PATIENT)
     await db.refresh(user, ["patient"])
