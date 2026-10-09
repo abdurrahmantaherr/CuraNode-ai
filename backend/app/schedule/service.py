@@ -39,11 +39,12 @@ from ..db.models import (
     DoctorAffiliation,
     DoctorSchedule,
     ScheduleException,
+    ScheduleExceptionType,
 )
 from ..deps import Actor
 from ..errors import ListFull, NotFound, ScheduleConflict, ValidationFailed
 from . import engine
-from .schemas import SlotCreate, SlotUpdate
+from .schemas import ExtraCreate, SlotCreate, SlotUpdate, TimeOffCreate
 
 ACTOR_ROLE = "doctor"
 LIVE = "active"  # doctor_schedule.status / doctor_affiliation.status / clinic.status
@@ -51,6 +52,7 @@ REMOVED = "inactive"  # what D7 writes when it removes a slot
 MAX_RANGE_DAYS = 30  # R5 / TDD §5
 MAX_SLOTS_PER_WEEKDAY = 10  # R7
 UPCOMING_BOOKED = ("booked", "checked_in")  # R10
+MAX_UPCOMING_EXCEPTIONS = 200  # R7: live rows dated today or later
 
 
 # ── Loaded state ─────────────────────────────────────────────────────────
@@ -506,4 +508,153 @@ async def remove_slot(
             detail={**exception_detail(loaded, exception), "with_slot": True},
             user_agent=user_agent,
         )
+    await session.commit()
+
+
+# ── Writes: exceptions ───────────────────────────────────────────────────
+def check_exception_budget(loaded: Loaded, adding: int) -> None:
+    """R7: at most 200 live exception rows dated today or later. Rows, not
+    entries: one "all clinics" time-off entry can use several."""
+    if len(loaded.exception_rows) + adding > MAX_UPCOMING_EXCEPTIONS:
+        raise ListFull(MAX_UPCOMING_EXCEPTIONS)
+
+
+async def _audit_exception_add(
+    session: AsyncSession,
+    actor: Actor,
+    loaded: Loaded,
+    row: ScheduleException,
+    user_agent: str | None,
+) -> None:
+    await write_audit(
+        session,
+        actor,
+        action=audit.SCHEDULE_EXCEPTION_ADD,
+        resource_type="schedule_exception",
+        resource_id=row.id,
+        detail=exception_detail(loaded, row),
+        user_agent=user_agent,
+    )
+
+
+async def add_time_off(
+    session: AsyncSession, actor: Actor, body: TimeOffCreate, *, user_agent: str | None = None
+) -> list[ScheduleException]:
+    """Time off on one date (spec §4.2): one `leave` (or `emergency`) row per
+    live slot it touches, all or nothing (R9). A whole-day entry stores no
+    times; a window stores its intersection with each slot. It covers only the
+    slots that exist now (known v1 limitation, decision 5)."""
+    loaded = await begin_write(session, actor)
+    if body.clinic_id is not None:
+        resolve_affiliation(loaded, body.clinic_id)
+    planned = engine.time_off_rows(
+        body.exception_date, loaded.slots, body.clinic_id, body.start_time, body.end_time
+    )
+    if not planned:
+        raise invalid("__all__", "errors.schedule_nothing_to_block")
+    check_exception_budget(loaded, len(planned))
+
+    kind = ScheduleExceptionType.EMERGENCY if body.emergency else ScheduleExceptionType.LEAVE
+    created = [
+        ScheduleException(
+            id=dbtypes.uuid7(),
+            schedule_id=item.schedule_id,
+            exception_date=body.exception_date,
+            kind=kind,
+            start_time=item.start,
+            end_time=item.end,
+            reason=body.reason,
+            created_at=dbtypes.utcnow(),
+        )
+        for item in planned
+    ]
+    session.add_all(created)
+    await session.flush()
+    for row in created:
+        await _audit_exception_add(session, actor, loaded, row, user_agent)
+    await session.commit()
+    return created
+
+
+async def add_extra(
+    session: AsyncSession, actor: Actor, body: ExtraCreate, *, user_agent: str | None = None
+) -> ScheduleException:
+    """Extra hours at one clinic on one date, anchored to the earliest live
+    slot there, with an optional cap of its own (NULL = inherit the anchor's,
+    read live). Rejected if it overlaps any effective window that date, at
+    any clinic, the anchor included (R4, decision 17)."""
+    loaded = await begin_write(session, actor)
+    resolve_affiliation(loaded, body.clinic_id)
+    anchor = engine.choose_anchor(body.clinic_id, loaded.slots)
+    if anchor is None:
+        raise invalid("clinic_id", "errors.schedule_extra_needs_slot")
+    raise_first(
+        loaded,
+        engine.extra_conflicts(
+            body.exception_date, body.start_time, body.end_time, loaded.slots, loaded.exceptions
+        ),
+    )
+    check_exception_budget(loaded, 1)
+
+    row = ScheduleException(
+        id=dbtypes.uuid7(),
+        schedule_id=anchor.id,
+        exception_date=body.exception_date,
+        kind=ScheduleExceptionType.EXTRA,
+        start_time=body.start_time,
+        end_time=body.end_time,
+        max_tokens=body.max_tokens,
+        reason=body.reason,
+        created_at=dbtypes.utcnow(),
+    )
+    session.add(row)
+    await session.flush()
+    await _audit_exception_add(session, actor, loaded, row, user_agent)
+    await session.commit()
+    return row
+
+
+async def remove_exception(
+    session: AsyncSession,
+    actor: Actor,
+    exception_id: uuid.UUID,
+    *,
+    user_agent: str | None = None,
+) -> None:
+    """Soft-remove one exception row. A past one cannot be removed (R5);
+    removing time off that would expose a slot under extra hours at any
+    clinic is rejected (R4b)."""
+    loaded = await begin_write(session, actor)
+    row = (
+        await session.execute(
+            select(ScheduleException)
+            .join(DoctorSchedule, DoctorSchedule.id == ScheduleException.schedule_id)
+            .join(DoctorAffiliation, DoctorAffiliation.id == DoctorSchedule.affiliation_id)
+            .where(
+                ScheduleException.id == exception_id,
+                DoctorAffiliation.doctor_id == loaded.doctor.id,
+                ScheduleException.removed_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise NotFound()  # foreign, nonexistent and removed look the same
+    if row.exception_date < loaded.today:
+        raise invalid("__all__", "errors.schedule_past_date")
+    if row.kind is not ScheduleExceptionType.EXTRA:
+        raise_first(
+            loaded, engine.time_off_removal_conflicts(row.id, loaded.slots, loaded.exceptions)
+        )
+
+    row.removed_at = dbtypes.utcnow()
+    await session.flush()
+    await write_audit(
+        session,
+        actor,
+        action=audit.SCHEDULE_EXCEPTION_REMOVE,
+        resource_type="schedule_exception",
+        resource_id=row.id,
+        detail=exception_detail(loaded, row),
+        user_agent=user_agent,
+    )
     await session.commit()

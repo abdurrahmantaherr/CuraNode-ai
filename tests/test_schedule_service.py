@@ -26,7 +26,7 @@ from app.db.models import (
 from app.deps import Actor
 from app.errors import ListFull, NotFound, ScheduleConflict, ValidationFailed
 from app.schedule import service
-from app.schedule.schemas import SlotCreate, SlotUpdate
+from app.schedule.schemas import ExtraCreate, SlotCreate, SlotUpdate, TimeOffCreate
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 
@@ -502,3 +502,250 @@ async def test_ac13_slot_audit_rows_hold_no_patient_and_name_the_row(db, me, cli
         None,
     )
     assert json.loads(entry.detail)["resource_id"] == str(row.id)
+
+
+# ── T8: time off, extra hours, removing exceptions ───────────────────────
+def time_off(day=TODAY, clinic_id=None, start="", end="", **kw) -> TimeOffCreate:
+    return TimeOffCreate(
+        exception_date=day.isoformat(),
+        clinic_id=str(clinic_id) if clinic_id else "",
+        start_time=start,
+        end_time=end,
+        **kw,
+    )
+
+
+def extra_body(clinic_id, start, end, day=TODAY, **kw) -> ExtraCreate:
+    return ExtraCreate(
+        exception_date=day.isoformat(),
+        clinic_id=str(clinic_id),
+        start_time=start,
+        end_time=end,
+        **kw,
+    )
+
+
+@pytest.fixture
+async def s(db, aff_a) -> DoctorSchedule:
+    """Spec §10.1: S = Monday 09:00-13:00 at A."""
+    return await add_slot(db, aff_a)
+
+
+@pytest.fixture
+async def b_anchor(db, aff_b) -> DoctorSchedule:
+    """B's only slot (Wednesday), so extras at B have an anchor."""
+    return await add_slot(db, aff_b, weekday=2, start="10:00", end="12:00", cap=8)
+
+
+async def test_ac6_whole_day_all_clinics_writes_one_row_per_slot(
+    db, me, doc, s, aff_b, second_clinic
+):
+    b_monday = await add_slot(db, aff_b, start="14:00", end="16:00")
+    rows = await service.add_time_off(db, me, time_off(reason="Conference"))
+    assert sorted(r.schedule_id for r in rows) == sorted([s.id, b_monday.id])
+    assert all(r.start_time is None and r.kind is ScheduleExceptionType.LEAVE for r in rows)
+    assert await service.get_effective_availability(db, doc.id, TODAY, TODAY) == []
+    await db.refresh(s)
+    assert (s.start_time, s.end_time, s.status) == (t("09:00"), t("13:00"), "active")
+
+
+async def test_ac6_window_one_clinic_writes_the_intersection(db, me, doc, s, clinic):
+    [row] = await service.add_time_off(
+        db, me, time_off(clinic_id=clinic.id, start="12:00", end="15:00", emergency="on")
+    )
+    assert (row.start_time, row.end_time, row.kind) == (
+        t("12:00"),
+        t("13:00"),
+        ScheduleExceptionType.EMERGENCY,
+    )
+    windows = await service.get_effective_availability(db, doc.id, TODAY, TODAY)
+    assert spans(windows) == [(TODAY, "09:00", "12:00")]
+
+
+async def test_time_off_that_hits_nothing_is_rejected(db, me, s):
+    with pytest.raises(ValidationFailed) as exc:
+        await service.add_time_off(db, me, time_off(start="13:00", end="15:00"))
+    assert exc.value.details["fields"] == {"__all__": "errors.schedule_nothing_to_block"}
+
+
+async def test_ac4_clinic_specific_time_off_needs_an_affiliation(db, me, s):
+    with pytest.raises(ValidationFailed):
+        await service.add_time_off(db, me, time_off(clinic_id=uuid.uuid4()))
+
+
+async def test_ac7_extra_adds_availability_with_its_cap(db, me, doc, s, clinic):
+    row = await service.add_extra(db, me, extra_body(clinic.id, "14:00", "16:00", max_tokens="6"))
+    assert (row.schedule_id, row.max_tokens, row.kind) == (s.id, 6, ScheduleExceptionType.EXTRA)
+    windows = await service.get_effective_availability(db, doc.id, TODAY, TODAY)
+    assert spans(windows) == [(TODAY, "09:00", "13:00"), (TODAY, "14:00", "16:00")]
+    assert (windows[1].max_tokens, windows[1].inherited) == (6, False)
+
+
+async def test_ac7_extra_needs_a_slot_at_that_clinic_to_anchor_to(db, me, s, second_clinic):
+    with pytest.raises(ValidationFailed) as exc:
+        await service.add_extra(db, me, extra_body(second_clinic.id, "14:00", "16:00"))
+    assert exc.value.details["fields"] == {"clinic_id": "errors.schedule_extra_needs_slot"}
+
+
+async def test_ac4_extra_needs_an_active_affiliation(db, me, s):
+    with pytest.raises(ValidationFailed):
+        await service.add_extra(db, me, extra_body(uuid.uuid4(), "14:00", "16:00"))
+
+
+async def test_ac9_a_past_exception_cannot_be_removed(db, me, s):
+    past = await add_exception(db, s, ScheduleExceptionType.LEAVE, day=TODAY - timedelta(days=7))
+    with pytest.raises(ValidationFailed) as exc:
+        await service.remove_exception(db, me, past.id)
+    assert exc.value.details["fields"] == {"__all__": "errors.schedule_past_date"}
+
+
+async def test_removing_an_exception_soft_removes_and_audits(db, me, doc, s):
+    off = await add_exception(db, s, ScheduleExceptionType.LEAVE, day=TODAY)
+    await service.remove_exception(db, me, off.id)
+    await db.refresh(off)
+    assert off.removed_at is not None
+    assert spans(await service.get_effective_availability(db, doc.id, TODAY, TODAY)) == [
+        (TODAY, "09:00", "13:00")
+    ]
+    with pytest.raises(NotFound):  # removing twice looks like a foreign id
+        await service.remove_exception(db, me, off.id)
+
+
+async def test_ac10_foreign_or_unknown_exception_is_not_found(db, me, clinic):
+    other_user = await make_user(
+        db, email="other3@x.com", role=UserRole.DOCTOR, clinic_id=clinic.id
+    )
+    other_slot = await add_slot(
+        db, await affiliation_at(db, (await doctor_of(db, other_user)).id, clinic.id)
+    )
+    foreign = await add_exception(db, other_slot, ScheduleExceptionType.LEAVE)
+    for exception_id in (foreign.id, uuid.uuid4()):
+        with pytest.raises(NotFound):
+            await service.remove_exception(db, me, exception_id)
+
+
+async def test_ac17_time_off_over_several_slots_is_all_or_nothing(db, me, s, monkeypatch):
+    monkeypatch.setattr(service, "MAX_UPCOMING_EXCEPTIONS", 1)
+    await add_slot(
+        db, (await db.get(DoctorAffiliation, s.affiliation_id)), start="14:00", end="15:00"
+    )
+    with pytest.raises(ListFull):
+        await service.add_time_off(db, me, time_off())  # would write 2 rows, only 1 allowed
+    assert (await db.execute(select(ScheduleException))).scalars().all() == []
+
+
+async def test_ac18_the_201st_upcoming_exception_row_is_rejected(db, me, s, clinic):
+    db.add_all(
+        ScheduleException(schedule_id=s.id, exception_date=TODAY, kind=ScheduleExceptionType.LEAVE)
+        for _ in range(200)
+    )
+    await db.commit()
+    with pytest.raises(ListFull) as exc:
+        await service.add_extra(db, me, extra_body(clinic.id, "14:00", "16:00"))
+    assert exc.value.details == {"max": 200}
+
+
+async def test_ac13_exception_audit_records_reason_length_never_the_text(db, me, s, clinic):
+    await service.add_extra(
+        db, me, extra_body(clinic.id, "14:00", "16:00", reason="Private family matter")
+    )
+    [detail] = await audit_rows(db, "schedule.exception.add")
+    assert detail["reason_length"] == len("Private family matter")
+    assert "Private family matter" not in json.dumps(detail)
+
+
+async def test_ac33_a_blank_extra_cap_follows_the_anchor(db, me, doc, s, clinic):
+    row = await service.add_extra(db, me, extra_body(clinic.id, "14:00", "16:00"))
+    assert row.max_tokens is None
+    await service.update_slot(db, me, s.id, update_body(clinic.id, max_tokens="30"))
+    [_, extra] = await service.get_effective_availability(db, doc.id, TODAY, TODAY)
+    assert (extra.max_tokens, extra.inherited) == (30, True)
+    await db.refresh(row)
+    assert row.max_tokens is None
+
+
+async def test_ac12_every_exception_write_takes_the_lock_first(db, me, s, clinic, monkeypatch):
+    calls: list[str] = []
+    real = service.lock_doctor
+
+    async def spy(session, doctor_id):
+        calls.append("lock")
+        await real(session, doctor_id)
+
+    monkeypatch.setattr(service, "lock_doctor", spy)
+    extra = await service.add_extra(db, me, extra_body(clinic.id, "14:00", "16:00"))
+    [off] = await service.add_time_off(db, me, time_off(day=TODAY + timedelta(days=7)))
+    await service.remove_exception(db, me, extra.id)
+    await service.remove_exception(db, me, off.id)
+    assert calls == ["lock"] * 4
+
+
+# Spec §10.1, U1–U10, at service level (the engine-level versions are in
+# tests/test_schedule_engine.py). d = TODAY, a Monday.
+async def test_u1_service_extra_overlapping_its_anchor(db, me, s, clinic):
+    with pytest.raises(ScheduleConflict) as exc:
+        await service.add_extra(db, me, extra_body(clinic.id, "12:00", "14:00"))
+    d = exc.value.details
+    assert (d["clinic"], d["start"], d["end"], d["conflict_id"]) == (
+        clinic.name,
+        "09:00",
+        "13:00",
+        str(s.id),
+    )
+
+
+async def test_u2_service_back_to_back_after(db, me, s, clinic):
+    await service.add_extra(db, me, extra_body(clinic.id, "13:00", "15:00"))
+
+
+async def test_u3_service_back_to_back_before(db, me, s, clinic):
+    await service.add_extra(db, me, extra_body(clinic.id, "07:00", "09:00"))
+
+
+async def test_u4_service_extra_inside_the_anchor(db, me, s, clinic):
+    with pytest.raises(ScheduleConflict):
+        await service.add_extra(db, me, extra_body(clinic.id, "10:00", "11:00"))
+
+
+async def test_u5_service_extra_fills_freed_time(db, me, s, clinic):
+    await service.add_time_off(db, me, time_off(clinic_id=clinic.id, start="11:00", end="13:00"))
+    await service.add_extra(db, me, extra_body(clinic.id, "11:00", "13:00"))
+
+
+async def test_u6_service_removing_that_time_off_is_rejected(db, me, s, clinic):
+    [off] = await service.add_time_off(
+        db, me, time_off(clinic_id=clinic.id, start="11:00", end="13:00")
+    )
+    fill = await service.add_extra(db, me, extra_body(clinic.id, "11:00", "13:00"))
+    with pytest.raises(ScheduleConflict) as exc:
+        await service.remove_exception(db, me, off.id)
+    assert exc.value.details["conflict_id"] == str(fill.id)  # AC-16
+
+
+async def test_u7_service_second_extra_overlapping_the_first(db, me, s, clinic):
+    first = await service.add_extra(db, me, extra_body(clinic.id, "13:00", "15:00"))
+    with pytest.raises(ScheduleConflict) as exc:
+        await service.add_extra(db, me, extra_body(clinic.id, "14:00", "16:00"))
+    assert exc.value.details["conflict_id"] == str(first.id)
+
+
+async def test_u8_service_editing_the_anchor_onto_its_extra(db, me, s, clinic):
+    extra = await service.add_extra(db, me, extra_body(clinic.id, "13:00", "15:00"))
+    with pytest.raises(ScheduleConflict) as exc:
+        await service.update_slot(db, me, s.id, update_body(clinic.id, end="14:00"))
+    assert exc.value.details["conflict_id"] == str(extra.id)
+
+
+async def test_u9_service_availability_keeps_anchor_and_extra_apart(db, me, doc, s, clinic):
+    extra = await service.add_extra(db, me, extra_body(clinic.id, "13:00", "15:00", max_tokens="4"))
+    windows = await service.get_effective_availability(db, doc.id, TODAY, TODAY)
+    assert spans(windows) == [(TODAY, "09:00", "13:00"), (TODAY, "13:00", "15:00")]
+    assert [(w.exception_id, w.max_tokens) for w in windows] == [(None, 16), (extra.id, 4)]
+
+
+async def test_u10_service_extra_at_another_clinic_overlapping_s(
+    db, me, s, b_anchor, second_clinic
+):
+    with pytest.raises(ScheduleConflict) as exc:
+        await service.add_extra(db, me, extra_body(second_clinic.id, "12:00", "14:00"))
+    assert exc.value.details["conflict_id"] == str(s.id)
