@@ -132,6 +132,7 @@
   "errors.not_editable": "This entry was recorded by a clinician and can't be changed here.",
   "errors.duplicate_entry": "This is already on your list.",
   "errors.list_full": "You can list up to {max} entries here.",
+  "errors.schedule_overlap": "This overlaps your {day} {start}–{end} hours at {clinic}.",
   "errors.text_required": "This field is required.",
   "errors.text_too_long": "Keep this under {max} characters.",
   "errors.text_invalid": "Remove unsupported characters.",

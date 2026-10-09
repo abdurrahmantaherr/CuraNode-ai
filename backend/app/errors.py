@@ -124,6 +124,19 @@ class ListFull(AppError):
         super().__init__({"max": max_entries})
 
 
+class ScheduleConflict(AppError):
+    """A doctor's schedule window would overlap another of their windows
+    (D7 R1, R1b, R4, R4b). The pure engine reports conflicts as plain data;
+    the schedule service raises this. Scalar `details` (`clinic`, `day`,
+    `start`, `end`, `conflict_id`) name the conflicting window and fill the
+    message placeholders."""
+
+    code = "SCHEDULE_CONFLICT"
+    http_status = status.HTTP_409_CONFLICT
+    message_key = "errors.schedule_overlap"
+    retryable = False
+
+
 def message_params(exc: AppError) -> dict[str, Any]:
     """Scalar details double as message placeholders (e.g. `{max}`).
     `translate` only substitutes placeholders the template actually contains,

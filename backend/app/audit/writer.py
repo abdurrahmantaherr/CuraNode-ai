@@ -59,6 +59,15 @@ RECORD_READ = "record.read"
 # Emitted by the doctor dashboard (D4). `detail` holds a patient count only.
 DOCTOR_DASHBOARD_VIEW = "doctor.dashboard.view"
 
+# Emitted by the doctor schedule (D7). `detail` holds ids, clinic, weekday or
+# date, type, times and caps; an exception's free-text `reason` is never
+# copied, only `reason_length`.
+SCHEDULE_SLOT_ADD = "schedule.slot.add"
+SCHEDULE_SLOT_UPDATE = "schedule.slot.update"
+SCHEDULE_SLOT_REMOVE = "schedule.slot.remove"
+SCHEDULE_EXCEPTION_ADD = "schedule.exception.add"
+SCHEDULE_EXCEPTION_REMOVE = "schedule.exception.remove"
+
 
 async def write(
     session: AsyncSession,

@@ -109,8 +109,8 @@ Out of scope (do not build, do not stub UI for)
   `DoctorDep` (directly, or through the web guard `_doctor_schedule_guard`,
   which sits beside `_doctor_page_guard` and does **not** redirect an
   unverified doctor). `VerifiedDoctorDep` is never used for schedule routes.
-  No ad-hoc role checks. CLAUDE.md's "four dependencies" line is corrected by
-  plan task T-CLAUDE (§13), not now.
+  No ad-hoc role checks. CLAUDE.md's dependency count changes from four to
+  five in the same commit that adds `DoctorDep` (plan task T3).
 - Ownership: `doctor_id` is never read from the request. The service resolves
   the `Doctor` from `actor.user_id`. Every query on `doctor_schedule` or
   `schedule_exception` reaches it through `doctor_affiliation` and filters
@@ -821,10 +821,11 @@ Each task is its own commit. Nothing here runs against the shared DB.
      revision parents on the output of `alembic heads`; a second head is a
      bug to fix before merging. Upstream revisions found in the shared DB get
      a reconstructed placeholder, as T0 does.
-  4. Correct the dependency count in "Authentication & Session Management"
-     from four to **five** (`ActorDep`, `PatientDep`, `VerifiedDoctorDep`,
-     `DoctorDep`, `ClinicAdminDep`). Wording may land in this task or with
-     the `DoctorDep` commit, but must be in before D7 merges.
+  4. The dependency count in "Authentication & Session Management" stays at
+     four here. It changes to **five** (`ActorDep`, `PatientDep`,
+     `VerifiedDoctorDep`, `DoctorDep`, `ClinicAdminDep`) in the commit that
+     adds `DoctorDep` (plan task T3), so CLAUDE.md never runs ahead of the
+     code.
   5. Remove the stale "P9's `dba968144fb4` is parented on `488dbf2b3915`"
      statement.
   Verified by AC-31.
@@ -832,7 +833,9 @@ Each task is its own commit. Nothing here runs against the shared DB.
   all new columns and CHECKs mirrored); the D7 revision with the "ASK ME
   BEFORE RUNNING" markers (§4.4); AC-27, AC-29, AC-30.
 - **T2, `DoctorDep`** in `deps.py` and the web guard (§3).
-- **T3, service**: overlap and conflicts, slots, time off, extras (with the
+- **T3, service** (in the plan: T6a, a pure engine that owns the single
+  overlap definition and returns conflicts as plain data, then T6b and later,
+  the database-backed service that raises `ScheduleConflict`): overlap and conflicts, slots, time off, extras (with the
   optional cap and live inheritance), effective availability (unmerged, with
   effective caps), locking, audit (§5–§7); unit cases U1–U10 (§10.1).
 - **T4, web**: routes, templates, `schedule.js` pre-fill enhancement,

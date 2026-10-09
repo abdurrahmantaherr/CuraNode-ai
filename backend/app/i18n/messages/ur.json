@@ -132,6 +132,7 @@
   "errors.not_editable": "یہ اندراج کسی معالج نے کیا ہے اور یہاں تبدیل نہیں ہو سکتا۔",
   "errors.duplicate_entry": "یہ پہلے سے آپ کی فہرست میں موجود ہے۔",
   "errors.list_full": "یہاں زیادہ سے زیادہ {max} اندراجات ہو سکتے ہیں۔",
+  "errors.schedule_overlap": "یہ {clinic} میں آپ کے {day} {start}–{end} کے اوقات سے ٹکراتا ہے۔",
   "errors.text_required": "یہ خانہ لازمی ہے۔",
   "errors.text_too_long": "اسے {max} حروف سے کم رکھیں۔",
   "errors.text_invalid": "غیر معاون حروف ہٹا دیں۔",
