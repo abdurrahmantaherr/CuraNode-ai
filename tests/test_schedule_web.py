@@ -181,3 +181,40 @@ async def test_urdu_page_is_rtl(doctor_client):
     assert r.status_code == 200
     assert 'dir="rtl"' in r.text
     assert "میرا شیڈول" in r.text
+
+
+# ── Dashboard links and nav (T12, AC-24) ─────────────────────────────────
+async def test_pending_dashboard_has_only_the_schedule_link(doctor_client):
+    r = await doctor_client.get("/en/doctor")
+    body = r.text
+    assert r.status_code == 200
+    assert 'href="/en/doctor/schedule"' in body
+    assert "Manage schedule" in body
+    assert "passport-lookup" not in body  # FR3: no patient-data affordance
+    assert "This area arrives with a later feature" in body  # still the placeholder page
+
+
+async def test_verified_dashboard_has_lookup_and_schedule_links(client, db, clinic):
+    admin = await make_user(
+        db, email="verifier@x.com", role=UserRole.CLINIC_ADMIN, clinic_id=clinic.id
+    )
+    await make_user(
+        db,
+        email="verified@x.com",
+        role=UserRole.DOCTOR,
+        clinic_id=clinic.id,
+        is_verified=True,
+        verifier_id=admin.id,
+    )
+    await login(client, "verified@x.com")
+    body = (await client.get("/en/doctor")).text
+    assert 'href="/en/doctor/passport-lookup"' in body
+    assert 'href="/en/doctor/schedule"' in body
+    schedule = (await client.get(PAGE)).text
+    assert 'href="/en/doctor/passport-lookup"' in schedule  # a verified doctor's nav keeps lookup
+
+
+async def test_pending_schedule_nav_has_no_lookup(doctor_client):
+    body = (await doctor_client.get(PAGE)).text
+    assert 'aria-current="page"' in body
+    assert "passport-lookup" not in body

@@ -670,7 +670,8 @@ async def _guarded(
         # FR3 — an unverified doctor gets no patient-data affordance at all.
         nav_items = _doctor_nav(loc, current="dashboard")
         links = [
-            {"href": f"/{loc}/doctor/passport-lookup", "label": translate("lookup.open_link", loc)}
+            {"href": f"/{loc}/doctor/passport-lookup", "label": translate("lookup.open_link", loc)},
+            {"href": f"/{loc}/doctor/schedule", "label": translate("schedule.open_link", loc)},
         ]
         # D4 — who is listed is decided in the consent service, live, on every load.
         granted = await consent_service.list_patients_for_doctor(session, actor)
@@ -686,6 +687,11 @@ async def _guarded(
             detail={"patient_count": len(patients)},
         )
         await session.commit()
+    elif actor.role == UserRole.DOCTOR.value:
+        # A pending doctor: no patient-data affordance at all (FR3), but the
+        # schedule exposes none, so it is their one link (D7 decision 6).
+        nav_items = _doctor_nav(loc, current="dashboard", verified=False)
+        links = [{"href": f"/{loc}/doctor/schedule", "label": translate("schedule.open_link", loc)}]
     else:
         nav_items, links = [], []
 
