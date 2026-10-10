@@ -14,6 +14,8 @@ creates or drops them; nor does it own the shared `allergy`/
 owned outright by this codebase, plus a handful of additive columns on
 `user_profile`/`doctor`/`allergy`/`chronic_condition` that the shared schema
 didn't have yet (see the Alembic migrations for exactly what was added).
+The medical-document feature reuses the shared `document` / `ocr_job` /
+`ocr_extraction` tables the same way (additive columns only).
 """
 
 from __future__ import annotations
@@ -21,14 +23,17 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     Uuid,
@@ -36,6 +41,7 @@ from sqlalchemy import (
 from sqlalchemy import (
     Enum as SAEnum,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from .types import utcnow, uuid7
@@ -333,6 +339,151 @@ class PatientMedication(Base):
     removed_at: Mapped[datetime | None] = _ts(nullable=True)
 
     __table_args__ = (Index("idx_patient_medication_patient_id", "patient_id"),)
+
+
+# ── Medical documents (FR10–FR13) ────────────────────────────────────────
+class DocumentStatus(str, enum.Enum):
+    """The one lifecycle every document type shares.
+
+    Only `FINALIZED` is a medical record. Everything before it is a temporary,
+    reviewable upload that no screen lists as a record.
+    """
+
+    UPLOADED = "uploaded"  # stored, not yet read
+    PROCESSING = "processing"  # OCR / extraction running
+    AWAITING_REVIEW = "awaiting_review"  # extracted; the patient has not confirmed
+    FINALIZED = "finalized"  # patient clicked Confirm & Save
+    FAILED = "failed"  # OCR / extraction failed; retry or cancel
+    CANCELLED = "cancelled"  # patient discarded it
+
+
+IN_PROGRESS_STATUSES = (
+    DocumentStatus.UPLOADED,
+    DocumentStatus.PROCESSING,
+    DocumentStatus.AWAITING_REVIEW,
+    DocumentStatus.FAILED,
+)
+
+# `document.doc_type` values. The shared schema allowed rx / lab / scan / other;
+# this feature's migration adds `vaccine` (the column is varchar(10), so the
+# short form is deliberate).
+DOC_TYPE_RX = "rx"
+DOC_TYPE_LAB = "lab"
+DOC_TYPE_VACCINE = "vaccine"
+DOC_TYPE_OTHER = "other"
+DOC_TYPES = (DOC_TYPE_RX, DOC_TYPE_LAB, DOC_TYPE_VACCINE, DOC_TYPE_OTHER)
+
+# `document.ocr_mode`. Only printed documents are read now (Tesseract); the
+# column and its CHECK constraint belong to the shared schema and still allow
+# 'handwritten', which this app no longer writes or offers.
+OCR_MODE_PRINTED = "printed"
+
+
+class Document(Base):
+    """One uploaded medical document — the single table for all four types.
+
+    Shared, pre-existing table. This repo added `original_filename`, `status`,
+    `failure_code`, `ocr_text`, `document_date`, `finalized_at`, `ocr_mode`. `status`
+    defaults to `finalized` at the database level only so rows that predate
+    the column read as records; this app always writes it explicitly.
+    `object_key` points into the private `medical-documents` bucket; the file
+    is never moved or copied, finalizing only changes `status`.
+    `encounter_id` exists in the shared table but is never written here.
+    """
+
+    __tablename__ = "document"
+
+    id: Mapped[uuid.UUID] = mapped_column("document_id", Uuid, primary_key=True, default=uuid7)
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient.patient_id", ondelete="CASCADE"), nullable=False
+    )
+    doc_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    object_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    uploaded_by: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("user_profile.user_id"), nullable=False
+    )
+    uploaded_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
+    original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=DocumentStatus.UPLOADED.value
+    )
+    failure_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    ocr_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    document_date: Mapped[date | None] = mapped_column(nullable=True)
+    finalized_at: Mapped[datetime | None] = _ts(nullable=True)
+    ocr_mode: Mapped[str] = mapped_column(String(12), nullable=False, default=OCR_MODE_PRINTED)
+
+    __table_args__ = (
+        CheckConstraint(
+            "doc_type IN ('rx', 'lab', 'scan', 'other', 'vaccine')",
+            name="document_doc_type_check",
+        ),
+        CheckConstraint(
+            "status IN ('uploaded', 'processing', 'awaiting_review', "
+            "'finalized', 'failed', 'cancelled')",
+            name="document_status_check",
+        ),
+        CheckConstraint("ocr_mode IN ('printed', 'handwritten')", name="document_ocr_mode_check"),
+        Index("idx_document_patient_status", "patient_id", "status"),
+    )
+
+
+class OcrJob(Base):
+    """One OCR run per document (`document_id` is UNIQUE in the shared schema,
+    so a retry resets this row rather than adding another)."""
+
+    __tablename__ = "ocr_job"
+
+    id: Mapped[uuid.UUID] = mapped_column("job_id", Uuid, primary_key=True, default=uuid7)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("document.document_id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    engine: Mapped[str] = mapped_column(String(20), nullable=False)
+    overall_confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3), nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    started_at: Mapped[datetime | None] = _ts(nullable=True)
+    finished_at: Mapped[datetime | None] = _ts(nullable=True)
+    # This repo's additive column: the document's SECTIONS (facility, patient,
+    # doctor, dates, advice) as read by the AI layer and validated against the
+    # OCR text (`documents/ai_sections.py`). NULL = none stored (AI off, failed,
+    # or a document that predates this column) — the saved-record page then
+    # shows the deterministic sections exactly as before. Reset on every retry.
+    ai_sections: Mapped[dict | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True
+    )
+
+
+class OcrExtraction(Base):
+    """One proposed field value, and what the patient made of it.
+
+    `extracted_value` is what the engine proposed and is never overwritten;
+    `corrected_value` is the patient's reviewed value (NULL = accepted as
+    proposed, '' = cleared). `row_index` groups the fields of one medicine or
+    one lab result — this repo's additive column. The shared `item_id` link to
+    `prescription_item` is left untouched (a patient upload has no encounter or
+    prescribing doctor, both NOT NULL on `prescription`).
+    """
+
+    __tablename__ = "ocr_extraction"
+
+    id: Mapped[uuid.UUID] = mapped_column("extraction_id", Uuid, primary_key=True, default=uuid7)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("ocr_job.job_id", ondelete="CASCADE"), nullable=False
+    )
+    field_name: Mapped[str] = mapped_column(String(20), nullable=False)
+    extracted_value: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3), nullable=True)
+    corrected_value: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("user_profile.user_id"), nullable=True
+    )
+    reviewed_at: Mapped[datetime | None] = _ts(nullable=True)
+    row_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (Index("idx_ocr_extraction_job", "job_id"),)
 
 
 class AuditLog(Base):

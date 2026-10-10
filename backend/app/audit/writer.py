@@ -50,6 +50,17 @@ PROFILE_MEDICATION_ADD = "profile.medication.add"
 PROFILE_MEDICATION_UPDATE = "profile.medication.update"
 PROFILE_MEDICATION_REMOVE = "profile.medication.remove"
 
+# Actions emitted by medical-document processing (FR10–FR13). `detail` carries
+# counts and the document type only — never OCR text or extracted values,
+# which are clinical free text that may hold identity PII.
+DOCUMENT_UPLOAD = "document.upload"
+DOCUMENT_PROCESS = "document.process"
+DOCUMENT_CONFIRM = "document.confirm"
+DOCUMENT_CANCEL = "document.cancel"
+# A patient deleting a document (any status). `detail` carries the id, the type and the
+# status it had — never the file name, text or values.
+DOCUMENT_DELETE = "document.delete"
+
 
 async def write(
     session: AsyncSession,

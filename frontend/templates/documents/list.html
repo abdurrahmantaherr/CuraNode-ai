@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{#- Medical documents: the patient's FINALIZED records, plus any uploads still
+    awaiting review. Only `records` (status == finalized) are records; the
+    in-progress list is deliberately separate and never presented as one.
+
+    The page is searchable and filterable: file name / document type, type (the tabs),
+    status and a date range, all at once. Every control is a plain GET form or link, so
+    it works without JavaScript; the filters live in the address, so a result can be
+    bookmarked and a reload (the page follows a document being read) keeps them.
+
+    Context (web/documents.py::_render_list):
+      records       [DocumentDetailOut] finalized, newest document first
+      in_progress   [DocumentOut] uploaded / processing / awaiting_review / failed
+      selected      active type filter key, or ''
+      values        {q, type, status, date_from, date_to} as they are applied
+      filters_active  True when any filter narrows the list
+      result_count  how many documents the filters left (all pages)
+      page, pages, page_href(n)   the records' page, how many there are, and a page's address
+      in_progress_total   how many uploads in progress the filters left (the list shows the newest)
+      ignored       [message] filters that were not valid and were left out
+      type_options / status_options  [{value, label}]
+      tab_href(type)  the list's address for a type tab, other filters kept
+      reset_href    the unfiltered list
+      auto_refresh  True while a document is being read
+      page_error    error banner text, or None
+      notice        success banner text, or None -#}
+{% import "partials/form_field.html" as f %}
+{% import "partials/doc_steps.html" as d with context %}
+{% import "partials/doc_delete.html" as dd with context %}
+
+{% block title %}{{ t('documents.title') }} · {{ t('app.name') }}{% endblock %}
+
+{#- What a patient can do with one document from the list. Each control is shown only when
+    the server says the action is valid (`can_*`), and the server checks it again. -#}
+{% macro manage(item, saved) %}
+  {% set base = '/' ~ locale ~ '/patient/documents/' ~ item.id %}
+  <div class="entry-row__actions">
+    <a class="btn btn--secondary btn--sm" href="{{ base }}">{{ t('documents.action.view' if saved else 'documents.action.resume') }}</a>
+    {% if item.can_retry %}
+      <form method="post" action="{{ base }}/process">
+        <button class="btn btn--primary btn--sm" type="submit"
+                data-label="{{ t('documents.action.retry') }}">{{ t('documents.action.retry') }}</button>
+      </form>
+    {% endif %}
+    {% if item.can_download %}
+      <a class="btn btn--secondary btn--sm" href="{{ base }}/file" target="_blank" rel="noopener">{{ t('documents.action.open') }}</a>
+      <a class="btn btn--secondary btn--sm" href="{{ base }}/file?download=1">{{ t('documents.action.download') }}</a>
+    {% endif %}
+    {% if item.can_delete %}{{ dd.trigger(item) }}{% endif %}
+  </div>
+{% endmacro %}
+
+{% block body %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content" {% if auto_refresh %}data-autorefresh="5000"{% endif %}>
+    {{ f.form_banner(page_error) }}
+    {% if notice %}
+      <div class="banner banner--ok" role="status"><span>{{ notice }}</span></div>
+    {% endif %}
+    {% if ignored %}
+      <div class="banner banner--warn" role="status">
+        <span aria-hidden="true">!</span>
+        <div>
+          <div class="banner__title">{{ t('documents.filter.ignored') }}</div>
+          <div class="banner__body">{% for message in ignored %}{{ message }}{% if not loop.last %} {% endif %}{% endfor %}</div>
+        </div>
+      </div>
+    {% endif %}
+
+    <div class="rowline">
+      <p class="lead">{{ t('documents.subtitle') }}</p>
+      <a class="btn btn--primary" href="/{{ locale }}/patient/documents/new{% if selected %}?type={{ selected }}{% endif %}">
+        {{ t('documents.action.upload') }}
+      </a>
+    </div>
+
+    <form class="panel stack filter-form" method="get" action="/{{ locale }}/patient/documents"
+          role="search" aria-label="{{ t('documents.filter.title') }}">
+      {#- the type is chosen with the tabs below; it travels with the search -#}
+      {% if values.type %}<input type="hidden" name="type" value="{{ values.type }}">{% endif %}
+      <div class="grid-2">
+        <label class="field" for="f-q">
+          <span class="field-label">{{ t('documents.filter.search') }}</span>
+          <input class="input" id="f-q" name="q" type="search" value="{{ values.q }}"
+                 maxlength="100" placeholder="{{ t('documents.filter.search_placeholder') }}">
+        </label>
+        {{ f.select('status', t('documents.filter.status'), status_options, value=values.status,
+                    placeholder=t('documents.filter.any_status')) }}
+        {{ f.field('date_from', t('documents.filter.date_from'), type='date', value=values.date_from, dir='ltr') }}
+        {{ f.field('date_to', t('documents.filter.date_to'), type='date', value=values.date_to, dir='ltr') }}
+      </div>
+      <p class="field-help">{{ t('documents.filter.date_help') }}</p>
+      <div class="btn-row">
+        <button class="btn btn--primary" type="submit"
+                data-label="{{ t('documents.filter.apply') }}">{{ t('documents.filter.apply') }}</button>
+        {% if filters_active %}
+          <a class="btn btn--secondary" href="{{ reset_href }}">{{ t('documents.filter.reset') }}</a>
+          <span class="field-help" role="status">{{ t('documents.filter.count', count=result_count) }}</span>
+        {% endif %}
+      </div>
+    </form>
+
+    {% if in_progress %}
+      <section class="panel stack" aria-labelledby="inprogress-h">
+        <h2 id="inprogress-h" class="panel__label">{{ t('documents.section.in_progress') }}</h2>
+        <ul class="entry-list">
+          {% for item in in_progress %}
+            <li class="entry-row">
+              <div class="entry-row__main">
+                <div class="entry-row__title">{{ item.original_filename or t('documents.detail.title') }}</div>
+                <div class="mono">{{ type_label(item.document_type) }} · {{ local_date(item.uploaded_at) }}</div>
+                {% if item.status == 'failed' %}
+                  <div class="field-help" role="status">{{ failure_text(item.failure_code) }}</div>
+                {% endif %}
+              </div>
+              {{ d.state_chip(item.status) }}
+              {{ manage(item, false) }}
+            </li>
+          {% endfor %}
+        </ul>
+        {% if in_progress_total > in_progress | length %}
+          <p class="field-help" role="status">
+            {{ t('documents.pager.more_in_progress', count=in_progress | length, total=in_progress_total) }}
+          </p>
+        {% endif %}
+      </section>
+    {% endif %}
+
+    {#- With a filter on, a section that has nothing to show stays out of the way — unless
+        nothing matched at all, which is said once, here. -#}
+    {% if records or not filters_active or not in_progress %}
+      <section class="panel stack" aria-labelledby="records-h">
+        <h2 id="records-h" class="panel__label">{{ t('documents.section.records') }}</h2>
+
+        <nav class="topnav" aria-label="{{ t('documents.section.records') }}">
+          <a class="topnav__link" href="{{ tab_href('') }}"
+             {% if not selected %}aria-current="page"{% endif %}>{{ t('documents.filter.all') }}</a>
+          {% for opt in type_options %}
+            <a class="topnav__link" href="{{ tab_href(opt.value) }}"
+               {% if selected == opt.value %}aria-current="page"{% endif %}>{{ opt.label }}</a>
+          {% endfor %}
+        </nav>
+
+        {% if records %}
+          <ul class="entry-list">
+            {% for rec in records %}
+              <li class="entry-row">
+                <div class="entry-row__main">
+                  <div class="entry-row__title">{{ rec.original_filename or t('documents.detail.title') }}</div>
+                  <div class="mono">
+                    {{ rec.document_date.isoformat() if rec.document_date else local_date(rec.finalized_at) }}
+                    {% if rec.rows %} · {{ t('documents.record.items', count=rec.rows|length) }}{% endif %}
+                  </div>
+                </div>
+                <span class="badge badge--neutral">{{ type_label(rec.document_type) }}</span>
+                {{ d.state_chip('finalized') }}
+                {{ manage(rec, true) }}
+              </li>
+            {% endfor %}
+          </ul>
+          {% if pages > 1 %}
+            <nav class="pager" aria-label="{{ t('documents.pager.label') }}">
+              {% if page > 1 %}
+                <a class="btn btn--secondary btn--sm" rel="prev" href="{{ page_href(page - 1) }}">{{ t('documents.pager.prev') }}</a>
+              {% endif %}
+              <span class="pager__status" aria-current="page">{{ t('documents.pager.page', page=page, pages=pages) }}</span>
+              {% if page < pages %}
+                <a class="btn btn--secondary btn--sm" rel="next" href="{{ page_href(page + 1) }}">{{ t('documents.pager.next') }}</a>
+              {% endif %}
+            </nav>
+          {% endif %}
+        {% elif filters_active %}
+          <div class="empty-state" role="status">
+            <p>{{ t('documents.empty.filtered') }}</p>
+            <p class="field-help">{{ t('documents.empty.filtered_hint') }}
+              <a class="linkish" href="{{ reset_href }}">{{ t('documents.filter.reset') }}</a></p>
+          </div>
+        {% else %}
+          <p class="empty-state">{{ t('documents.empty.records') }}</p>
+        {% endif %}
+      </section>
+    {% endif %}
+  </main>
+</div>
+{{ dd.dialog() }}
+<script src="/static/js/documents.js" defer></script>
+{% endblock %}

@@ -1,0 +1,176 @@
+{#- The layout of a document's review step and saved record, by document type.
+
+    A prescription keeps the compact layout of detail.html (hospital, doctor, patient, dates,
+    medicines, advice, clinical tables). The other three types are laid out here, because what
+    a lab report, a vaccination card and a discharge summary hold has little in common:
+
+      lab report   laboratory / hospital, patient, referring doctor, report information (title,
+                   collection and received dates, the REPORT date, the upload day), then every
+                   test with its result, unit, reference range and flag, then the report's
+                   interpretation notes. No medicines, no advice.
+      vaccination  facility, patient, document information, then every dose (vaccine, dose,
+                   date given, batch, site, next due). No tests, no medicines, no advice.
+      other        who / what it is, then whatever it actually contains: its headed passages
+                   (findings, procedure...), its advice or recommendations, and only those of
+                   the medicines / diagnosis / symptoms / vital signs / allergies tables that
+                   have something in them — the empty ones wait behind "Add details the reader
+                   did not find".
+
+    Only what the reader FOUND is shown: an item a document does not carry is not listed (the
+    prescription layout is the one that says "Not specified"). The day the file was uploaded
+    ("Uploaded on", the system's) is always apart from the date written on the document.
+
+    Import with context:  {% import "partials/doc_layouts.html" as L with context %}
+
+      L.review_lab(doc)   L.review_vaccine(doc)   L.review_other(doc)    the review form's body
+      L.saved_lab(doc)    L.saved_vaccine(doc)    L.saved_other(doc)      the saved record's body
+
+    Context used (web/documents.py::_render_detail): review_groups, date_value, errors, today,
+    locale. -#}
+{% import "partials/form_field.html" as f %}
+{% import "partials/doc_sections.html" as ds with context %}
+{% import "partials/doc_groups.html" as dg with context %}
+
+{#- The document's own date, as an editable field. `label_key` says what kind of date it is. -#}
+{% macro _date_input(label_key) %}
+  <div class="grid-2">
+    {{ f.field('document_date', t(label_key), type='date', value=date_value,
+               errors=errors, min='1900-01-01', max=today, dir='ltr',
+               help=t('documents.review.date_help')) }}
+  </div>
+{% endmacro %}
+
+{#- The saved record's "when" rows: the date written on the document, the day it was uploaded,
+    and the original file. -#}
+{% macro _saved_dates(doc, label_key) %}
+  {% set base = '/' ~ locale ~ '/patient/documents/' ~ doc.id %}
+  {% if doc.document_date %}
+    <dt>{{ t(label_key) }}</dt>
+    <dd><span dir="ltr">{{ doc.document_date.isoformat() }}</span></dd>
+  {% endif %}
+  {{ ds.upload_row(doc) }}
+  {% if doc.original_filename %}
+    <dt>{{ t('documents.record.original_file') }}</dt>
+    <dd><a href="{{ base }}/file" target="_blank" rel="noopener">{{ doc.original_filename }}</a></dd>
+  {% endif %}
+{% endmacro %}
+
+{#- ── lab report ─────────────────────────────────────────────────────── -#}
+{% macro _lab_who(doc) %}
+  {% set s = doc.sections %}
+  {% if s %}
+    {{ ds.block('documents.section.lab', s.facility) }}
+    {{ ds.block('documents.section.patient', s.patient) }}
+    {{ ds.block('documents.section.provider', s.provider) }}
+  {% endif %}
+{% endmacro %}
+
+{% macro review_lab(doc) %}
+  {% set s = doc.sections %}
+  {% set skip = ('report_date', 'prescription_date') if doc.document_date else () %}
+  {{ _lab_who(doc) }}
+  <section class="stack doc-details" aria-labelledby="det-h">
+    <h3 id="det-h" class="panel__label">{{ t('documents.section.report_lab') }}</h3>
+    {% if s %}{{ ds.fields(s.report, skip) }}{% endif %}
+    {{ _date_input('documents.review.date_lab') }}
+    <dl class="readonly-list">{{ ds.upload_row(doc) }}</dl>
+  </section>
+  {% if s %}{{ ds.block('documents.section.clinical', s.clinical) }}{% endif %}
+  {% for g in review_groups %}{{ dg.review_group(g, doc) }}{% endfor %}
+  <p class="field-help">{{ t('documents.review.add_hint') }}</p>
+  {{ ds.notes(doc) }}
+{% endmacro %}
+
+{% macro saved_lab(doc) %}
+  {% set s = doc.sections %}
+  {% set skip = ('report_date', 'prescription_date') if doc.document_date else () %}
+  {{ _lab_who(doc) }}
+  <div class="stack doc-details">
+    <h3 class="panel__label">{{ t('documents.section.report_lab') }}</h3>
+    <dl class="readonly-list">
+      {% if s %}{{ ds.rows(s.report, skip) }}{% endif %}
+      {{ _saved_dates(doc, 'documents.review.date_lab') }}
+    </dl>
+  </div>
+  {% if s %}{{ ds.block('documents.section.clinical', s.clinical) }}{% endif %}
+  {% for g in doc.groups %}{{ dg.saved_group(g, doc) }}{% endfor %}
+  {{ ds.notes(doc) }}
+{% endmacro %}
+
+{#- ── vaccination record ─────────────────────────────────────────────── -#}
+{% macro _vaccine_who(doc) %}
+  {% set s = doc.sections %}
+  {% if s %}
+    {{ ds.block('documents.section.hospital', s.facility) }}
+    {{ ds.block('documents.section.patient', s.patient) }}
+    {{ ds.block('documents.section.provider', s.provider) }}
+  {% endif %}
+{% endmacro %}
+
+{% macro review_vaccine(doc) %}
+  {% set s = doc.sections %}
+  {% set skip = ('report_date', 'prescription_date') if doc.document_date else () %}
+  {{ _vaccine_who(doc) }}
+  <section class="stack doc-details" aria-labelledby="det-h">
+    <h3 id="det-h" class="panel__label">{{ t('documents.section.report_other') }}</h3>
+    {% if s %}{{ ds.fields(s.report, skip) }}{% endif %}
+    {{ _date_input('documents.review.date') }}
+    <dl class="readonly-list">{{ ds.upload_row(doc) }}</dl>
+  </section>
+  {% if s %}{{ ds.block('documents.section.clinical', s.clinical) }}{% endif %}
+  {% for g in review_groups %}{{ dg.review_group(g, doc) }}{% endfor %}
+  <p class="field-help">{{ t('documents.review.add_hint') }}</p>
+{% endmacro %}
+
+{% macro saved_vaccine(doc) %}
+  {% set s = doc.sections %}
+  {% set skip = ('report_date', 'prescription_date') if doc.document_date else () %}
+  {{ _vaccine_who(doc) }}
+  <div class="stack doc-details">
+    <h3 class="panel__label">{{ t('documents.section.report_other') }}</h3>
+    <dl class="readonly-list">
+      {% if s %}{{ ds.rows(s.report, skip) }}{% endif %}
+      {{ _saved_dates(doc, 'documents.review.date') }}
+    </dl>
+  </div>
+  {% if s %}{{ ds.block('documents.section.clinical', s.clinical) }}{% endif %}
+  {% for g in doc.groups %}{{ dg.saved_group(g, doc) }}{% endfor %}
+  {#- A card whose doses could not be told apart still shows what was found, as before. -#}
+  {{ ds.vaccines(doc) }}
+{% endmacro %}
+
+{#- ── any other medical document ─────────────────────────────────────── -#}
+{% macro review_other(doc) %}
+  {% set filled = review_groups | selectattr('has_content') | list %}
+  {% set empty = review_groups | rejectattr('has_content') | list %}
+  <section class="stack doc-details" aria-labelledby="det-h">
+    <h3 id="det-h" class="panel__label">{{ t('documents.section.details') }}</h3>
+    <dl class="readonly-list">{{ ds.other_rows(doc) }}</dl>
+    {{ _date_input('documents.review.date') }}
+    <dl class="readonly-list">{{ ds.upload_row(doc) }}</dl>
+  </section>
+  {{ ds.topics(doc) }}
+  {{ ds.notes(doc, 'documents.section.advice_other') }}
+  {{ ds.fallback(doc) }}
+  {% for g in filled %}{{ dg.review_group(g, doc) }}{% endfor %}
+  {% if filled %}<p class="field-help">{{ t('documents.review.add_hint') }}</p>{% endif %}
+  {% if empty %}
+    <details class="add-more">
+      <summary class="linkish">{{ t('documents.review.add_more') }}</summary>
+      {% for g in empty %}{{ dg.review_group(g, doc) }}{% endfor %}
+      <p class="field-help">{{ t('documents.review.add_hint') }}</p>
+    </details>
+  {% endif %}
+{% endmacro %}
+
+{% macro saved_other(doc) %}
+  <h3 class="panel__label">{{ t('documents.section.details') }}</h3>
+  <dl class="readonly-list">
+    {{ ds.other_rows(doc) }}
+    {{ _saved_dates(doc, 'documents.review.date') }}
+  </dl>
+  {{ ds.topics(doc) }}
+  {{ ds.notes(doc, 'documents.section.advice_other') }}
+  {{ ds.fallback(doc) }}
+  {% for g in doc.groups %}{{ dg.saved_group(g, doc) }}{% endfor %}
+{% endmacro %}

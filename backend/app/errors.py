@@ -117,6 +117,99 @@ class ListFull(AppError):
         super().__init__({"max": max_entries})
 
 
+class UnsupportedFileType(AppError):
+    """Not a PDF, JPEG or PNG — judged by the file's own bytes, not its name."""
+
+    code = "UNSUPPORTED_FILE_TYPE"
+    http_status = status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
+    message_key = "errors.file_type_unsupported"
+    retryable = False
+
+
+class FileTooLarge(AppError):
+    code = "FILE_TOO_LARGE"
+    http_status = status.HTTP_413_CONTENT_TOO_LARGE
+    message_key = "errors.file_too_large"
+    retryable = False
+
+    def __init__(self, max_mb: int) -> None:
+        super().__init__({"max_mb": max_mb})
+
+
+class EmptyFile(AppError):
+    code = "FILE_EMPTY"
+    http_status = status.HTTP_422_UNPROCESSABLE_CONTENT
+    message_key = "errors.file_empty"
+    retryable = False
+
+
+class StorageUnavailable(AppError):
+    """The object store refused or lost the file. Nothing was recorded."""
+
+    code = "STORAGE_UNAVAILABLE"
+    http_status = status.HTTP_502_BAD_GATEWAY
+    message_key = "errors.upload_failed"
+    retryable = True
+
+
+class FileUnavailable(AppError):
+    """The original file exists as far as we know but the store would not give it back (an
+    outage, a timeout). Different from `NotFound`, which says it is not there."""
+
+    code = "FILE_UNAVAILABLE"
+    http_status = status.HTTP_502_BAD_GATEWAY
+    message_key = "errors.file_unavailable"
+    retryable = True
+
+
+class ServiceUnavailable(AppError):
+    """The database could not be reached (a timeout, a refused or dropped connection). Nothing
+    was changed and the same request will probably work in a moment, so it is `retryable` — and
+    it is 503, not the opaque 500 that means "a bug on our side"."""
+
+    code = "SERVICE_UNAVAILABLE"
+    http_status = status.HTTP_503_SERVICE_UNAVAILABLE
+    message_key = "errors.service_unavailable"
+    retryable = True
+
+
+class DeleteFailed(AppError):
+    """A deletion that did not complete. Nothing is reported as deleted; the patient may retry."""
+
+    code = "DELETE_FAILED"
+    http_status = status.HTTP_502_BAD_GATEWAY
+    message_key = "errors.document_delete_failed"
+    retryable = True
+
+
+class DocumentNotDeletable(AppError):
+    """The document is the patient's but may not be deleted by them: it was written by a
+    clinician, or saved records are configured not to be deletable. Same reasoning as
+    `NotEditable` for profile entries — a patient can never erase what a clinician recorded."""
+
+    code = "DOCUMENT_NOT_DELETABLE"
+    http_status = status.HTTP_403_FORBIDDEN
+    message_key = "errors.document_not_deletable"
+    retryable = False
+
+
+class InvalidDocumentState(AppError):
+    """The document is not in a state that allows this action (e.g. cancelling
+    a finalized record, confirming one that was cancelled)."""
+
+    code = "INVALID_DOCUMENT_STATE"
+    http_status = status.HTTP_409_CONFLICT
+    message_key = "errors.document_state"
+    retryable = False
+
+
+class ProcessingInProgress(AppError):
+    code = "PROCESSING_IN_PROGRESS"
+    http_status = status.HTTP_409_CONFLICT
+    message_key = "errors.document_processing"
+    retryable = True
+
+
 def message_params(exc: AppError) -> dict[str, Any]:
     """Scalar details double as message placeholders (e.g. `{max}`).
     `translate` only substitutes placeholders the template actually contains,

@@ -1,0 +1,36 @@
+{#- "Please take a clearer picture": advice shown on a document that is awaiting review or has
+    failed, when the photo or scan looks hard to read (see `ocr.assess_quality`).
+
+    It is ADVICE, never a gate: the patient can still review, correct and save what was read,
+    or upload a clearer photo of the same kind of document. It names what is wrong with THIS
+    photo (blurry, very faint, small, blank) and how to fix it, and says nothing when the
+    photo looks fine or could not be measured.
+
+    Import with context:  {% import "partials/doc_quality.html" as dq with context %}
+
+      dq.advice(doc, reviewing=false)   `doc.quality` is the QualityOut the server attached;
+                                        `reviewing` adds "you can still review what was read" -#}
+{% macro advice(doc, reviewing=false) %}
+  {% set quality = doc.quality %}
+  {% if quality and quality.issues %}
+    <div class="banner banner--warn" role="status" data-quality="{{ quality.issues | join(' ') }}">
+      <span aria-hidden="true">!</span>
+      <div class="stack">
+        <div>
+          <div class="banner__title">{{ t('documents.quality.title') }}</div>
+          <div class="banner__body">{{ t('documents.quality.lead') }}</div>
+        </div>
+        <ul class="notes-list">
+          {% for issue in quality.issues %}
+            <li>{{ t('documents.quality.issue.' ~ issue) }} {{ t('documents.quality.tip.' ~ issue) }}</li>
+          {% endfor %}
+        </ul>
+        {% if reviewing %}<div class="field-help">{{ t('documents.quality.keep_going') }}</div>{% endif %}
+        <div class="btn-row">
+          <a class="btn btn--primary btn--sm"
+             href="/{{ locale }}/patient/documents/new?type={{ doc.document_type }}">{{ t('documents.quality.action') }}</a>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+{% endmacro %}

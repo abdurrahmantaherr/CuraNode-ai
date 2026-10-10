@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{#- "Delete this document?" — the confirmation step, as a page so it works without JavaScript.
+
+    Context (web/documents.py::_render_delete):
+      doc      DocumentOut (can_delete is true — the handler checked)
+      banner   error text, or None   (a deletion that failed says so here; nothing was deleted)
+      errors   {confirm: message}    (a saved record needs the box ticked) -#}
+{% import "partials/form_field.html" as f %}
+{% import "partials/doc_steps.html" as d with context %}
+
+{% block title %}{{ t('documents.delete.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+{% set base = '/' ~ locale ~ '/patient/documents/' ~ doc.id %}
+{% set saved = doc.status == 'finalized' %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    <div class="rowline">
+      <a class="linkish" href="{{ base }}">← {{ doc.original_filename or t('documents.detail.title') }}</a>
+    </div>
+
+    {{ f.form_banner(banner) }}
+
+    <section class="panel stack" aria-labelledby="del-h">
+      <h2 id="del-h" class="panel__label">{{ t('documents.delete.title') }}</h2>
+
+      <div class="identity">
+        <div class="identity__main">
+          <div class="entry-row__title">{{ doc.original_filename or t('documents.detail.title') }}</div>
+          <div class="mono">
+            {{ type_label(doc.document_type) }}
+            · {{ t('documents.record.uploaded') }} {{ local_date(doc.uploaded_at) }}
+          </div>
+        </div>
+        {{ d.state_chip(doc.status) }}
+      </div>
+
+      <p class="lead">{{ t('documents.delete.body_saved' if saved else 'documents.delete.body_unsaved') }}</p>
+      {% if saved %}<p class="field-help">{{ t('documents.delete.profile_note') }}</p>{% endif %}
+      <p class="field-help">{{ t('documents.delete.audit_note') }}</p>
+
+      <form method="post" action="{{ base }}/delete" class="stack">
+        {% if saved %}
+          <label class="checkline">
+            <input type="checkbox" name="confirm" value="1" required
+                   {% if errors.confirm %}aria-invalid="true" aria-describedby="e-confirm"{% endif %}>
+            <span>{{ t('documents.delete.checkbox') }}</span>
+          </label>
+          {% if errors.confirm %}
+            <span class="field-error" id="e-confirm" role="alert"><span aria-hidden="true">!</span>{{ errors.confirm }}</span>
+          {% endif %}
+        {% else %}
+          <input type="hidden" name="confirm" value="1">
+        {% endif %}
+        <div class="btn-row">
+          <button class="btn btn--danger" type="submit"
+                  data-label="{{ t('documents.action.delete_confirm') }}">{{ t('documents.action.delete_confirm') }}</button>
+          <a class="btn btn--secondary" href="{{ base }}">{{ t('documents.action.keep') }}</a>
+        </div>
+      </form>
+    </section>
+  </main>
+</div>
+<script src="/static/js/documents.js" defer></script>
+{% endblock %}

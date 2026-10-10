@@ -23,6 +23,14 @@ dependencies = [
     "jinja2>=3.1",
     # Observability (TDD 7.8)
     "structlog>=25.1",
+    "pytesseract>=0.3.13",
+    "pillow>=12.3.0",
+    "pypdfium2>=5.13.0",
+    "numpy>=2.5.3",
+    "google-genai>=2.25.0",
+    # AI fallback providers (Groq / OpenRouter) — see documents/ai_providers.py.
+    # Was already installed transitively (supabase); declared because we now import it.
+    "httpx>=0.28",
 ]
 
 [dependency-groups]
