@@ -6,7 +6,7 @@
 | **PRD requirement** | **D2** (a doctor without a grant sees nothing — not the record, not the fact it exists), **NFR16** (consent is the only basis for access), **NFR17** (audit rows cannot be edited or deleted), **FR21** (a doctor consuming a granted record) |
 | **Builds on** | `.claude/specs/medical_passport_spec.md` (grants, BL-07/BL-09/BL-10 live-checked access and identical `NotFound`) |
 | **Branch** | `feature/D2-patient-history-access` |
-| **Status** | Draft — **§1 (summary), §3 (acceptance criteria), §8 (business rules) and §9 (out of scope)**, describing what is built in `consent/gateway.py` and `clinical/schemas.py`. The page/route layer is **not yet built**; ACs for it are marked *(page — not yet built)*. Where this spec is silent, stop and ask; do not invent a column, endpoint, or behaviour. |
+| **Status** | **Complete** — gateway (`consent/gateway.py`), typed output (`clinical/schemas.py`), the doctor page and the "What changed" panel (`doctor/what_changed.py`) are implemented and tested. Where this spec is silent, stop and ask; do not invent a column, endpoint, or behaviour. Full suite: 257 tests (`uv run pytest -q`); page tests are in `tests/test_doctor_patient.py`. |
 | **Decisions already taken (do not revisit)** | (1) Live Supabase clinical tables are mapped directly (Branch A) — no migration, no writes. (2) Doctor-only grants count in this version. (3) "What Changed" uses the prior `record.read` audit row as its anchor. |
 
 > **Read before writing code.** The clinical tables (`encounter`, `diagnosis`, `vital_sign`, `prescription`, `prescription_item`, `medicine`, `lab_report`, `lab_result`) belong to the wider CuraNode-AI schema and are **read-only** here; their models are in `db/models.py`. The app connects as `postgres` with `BYPASSRLS`, so RLS does not protect these queries — scoping is application code.
@@ -60,9 +60,13 @@ It checks the doctor's grant live (via `consent.service.patient_and_grant_for_do
 | **AC-09** | **Lab report order.** Lab reports are returned newest `report_date` first, each with its results. | *(test to be added)* |
 | **AC-10** | **Patient scoping.** Another patient's encounters, prescriptions, lab reports and entries never appear in the result. | *(test to be added)* |
 | **AC-11** | **Revocation is immediate.** The first read after a revoke raises `NotFound`; nothing is cached. | *(test to be added)* |
-| **AC-12** | **Doctor page.** *(page — not yet built)* The record is shown on `/{locale}/doctor/patient/{patient_id}`; a denial renders the same not-found page as an unissued id, never a 403. |
-| **AC-13** | **No sensitive values in logs or audit.** *(page — not yet built)* No passport number, PMDC number or clinic name appears in logs, URLs or audit detail. |
-| **AC-14** | **Translations.** *(page — not yet built)* Every new user-facing string exists in `en.json` and `ur.json`. |
+| **AC-12** | **Doctor page.** Implemented and tested. The record (name, allergies, conditions, medications, visit history, lab reports) is shown on `/{locale}/doctor/patient/{patient_id}`; a denial renders the same not-found page as an unissued id, never a 403. | `test_ac12_page_shows_every_section`, `test_ac12_empty_record_shows_empty_states` |
+| **AC-13** | **No sensitive values in logs or audit.** Implemented and tested. No passport number or PMDC number appears in logs or audit detail during a page view; the URL carries the patient id only. | `test_ac18_no_passport_no_in_logs_or_audit` |
+| **AC-14** | **Translations.** Implemented and tested. Every new user-facing string exists in `en.json` and `ur.json`; the Urdu page renders RTL. | `test_ac14_urdu_page_renders_rtl` |
+| **AC-15** | **Revoke is immediate on the page.** After a revoke the next page request is a 404 and shows none of the patient's data. | `test_ac15_revoked_grant_is_404_on_next_request` |
+| **AC-16** | **No grant is indistinguishable from no patient.** A doctor with no grant gets a 404 byte-identical to a nonexistent patient's, and no `record.read` row is written. | `test_ac16_no_grant_matches_nonexistent_patient` |
+| **AC-17** | **One audit row per view.** Every successful page view writes exactly one `record.read` row with the §3 AC-03 detail keys. | `test_ac17_each_view_writes_one_audit_row` |
+| **AC-18** | **What changed.** The first view shows "first time seeing this patient"; later views list allergies, conditions and medications added since this doctor's previous `record.read` row (and removals/resolutions), or "no changes". Deterministic, no LLM. | `test_ac13_first_view_then_changes`, `test_ac13_no_changes_message` |
 
 ---
 
@@ -90,8 +94,7 @@ It checks the doctor's grant live (via `consent.service.patient_and_grant_for_do
 ## 9. Out of Scope
 
 - **Clinic grants unlocking affiliated doctors.** What a clinic grant allows for that clinic's doctors is not specified (BL-07).
-- **LLM narrative for "What Changed".** `encounter.what_changed_diff` and `ai_summary` are returned as stored; nothing generates or edits them. The diff anchor (the prior `record.read` audit row) is decided but not implemented.
+- **LLM narrative for "What Changed".** `encounter.what_changed_diff` and `ai_summary` are returned as stored; nothing generates or edits them. The page's "What changed" panel is a deterministic diff anchored on the doctor's prior `record.read` audit row (AC-18).
 - **Writing encounters, diagnoses, vitals, prescriptions or lab data** from this feature, and patient-facing access to those tables.
-- **The doctor page and route** for the record (AC-12 to AC-14).
 - **Partial scoping** by `scope_sections`, and timed expiry UI — grants stay all-or-nothing and "until revoked".
 - **The patient's view of who read their record** (FR5).

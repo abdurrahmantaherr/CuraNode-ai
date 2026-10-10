@@ -22,7 +22,7 @@ uv run backend/app/main.py                 # Start the development server
 
 ### Testing
 ```bash
-uv run pytest -q                           # Run all tests (244 tests)
+uv run pytest -q                           # Run all tests (257 tests)
 uv run pytest tests/test_auth.py -v        # Run authentication tests with verbose output
 uv run pytest tests/test_web.py -v         # Run web interface tests
 uv run pytest tests/test_oauth.py -v       # Run Google OAuth flow tests
@@ -30,6 +30,7 @@ uv run pytest tests/test_profile.py -v     # Run patient profile (FR2) tests
 uv run pytest tests/test_consent.py -v     # Run Medical Passport consent (FR4) API tests
 uv run pytest tests/test_passport_web.py -v   # Run passport / access / doctor-lookup page tests
 uv run pytest tests/test_doctor_dashboard.py tests/test_doctor_rows.py -v   # Run doctor dashboard (D4) tests
+uv run pytest tests/test_doctor_patient.py -v   # Run doctor patient-record page (D2) tests
 ```
 
 Tests run against an in-memory SQLite database and `tests/fakes.py`'s `FakeSupabaseAuth` (a stand-in for Supabase Auth — real JWTs, HS256-signed with a test-only secret). No test makes a network call; production verifies ES256 tokens against Supabase's real JWKS instead.
@@ -68,7 +69,8 @@ backend/
     audit/                     # Append-only audit writer (audit_log — owned by this repo)
     profile/                   # Patient profile (FR2): basics, allergies, conditions, medications — JSON API + service
     consent/                   # Medical Passport consent (FR4/D2): grant, list, revoke, doctor-side lookups — JSON API + service
-    doctor/                    # Doctor dashboard (D4 v1): pure display-row builder for consented patients
+    doctor/                    # Doctor dashboard (D4 v1): pure display-row builder; what_changed.py (D2 diff panel)
+    clinical/                  # Typed read-only output of the clinical record (D2): schemas.py
     i18n/                      # English/Urdu message catalogues
     web/                       # Server-rendered page routes and form handling (incl. OAuth + onboarding)
 alembic/                       # Database migrations (additive-only, hand-written — see above)
@@ -79,7 +81,8 @@ frontend/
   static/                      # CSS (design tokens + app) and minimal JS
 tests/                         # Test suite (authentication, web interface, OAuth flow, settings)
                                #   test_consent.py, test_passport_web.py,
-                               #   test_doctor_rows.py, test_doctor_dashboard.py
+                               #   test_doctor_rows.py, test_doctor_dashboard.py,
+                               #   test_doctor_patient.py
 docs/                          # Product requirements, technical design, design system, docs/prompts/ (OAuth plan)
   superpowers/                 # D4 doctor-dashboard design spec (specs/) and implementation plan (plans/)
 .claude/specs/                 # Feature specs: patient_profile_spec.md, medical_passport_spec.md, oauth.md, oauth-exec.md, SPEC_patient_profile_plan.md
@@ -156,7 +159,15 @@ docs/                          # Product requirements, technical design, design 
 10. **Doctor dashboard (D4 v1)**
    - A verified doctor's home page (`/{locale}/doctor`) lists the patients with an active grant naming them. Who may be seen is decided only in `consent/service.py` (`list_patients_for_doctor`, the same live-checked rules as the lookup); `doctor/rows.py` is pure formatting (`build_rows`, `age_in_years`) with no database access and no consent decisions. Gender is shown as its translated label, with a legacy stored value shown as-is.
    - Doctor pages: `/{locale}/doctor/passport-lookup` (GET/POST) and `/{locale}/doctor/patient/{patient_id}`, guarded by `_doctor_page_guard` in `web/router.py`. Viewing the dashboard writes a `doctor.dashboard.view` audit row.
-   - Templates: `frontend/templates/doctor/` (`_patient_list.html`, `lookup.html`, `patient.html`) and `frontend/templates/patient/` (`passport.html`, `access.html`, `profile.html`). The design spec and implementation plan are in `docs/superpowers/specs/` and `docs/superpowers/plans/`.
+   - Templates: `frontend/templates/doctor/` (`_patient_list.html`, `lookup.html`, `patient.html` — the D2 record page) and `frontend/templates/patient/` (`passport.html`, `access.html`, `profile.html`). The design spec and implementation plan are in `docs/superpowers/specs/` and `docs/superpowers/plans/`.
+
+11. **Patient history access (D2)**
+   - `backend/app/consent/gateway.py` is the **only** read path for the doctor-owned clinical tables. `load_patient_for_doctor` checks the grant live (via `consent.service.patient_and_grant_for_doctor`), loads the record, writes one `record.read` audit row and commits both in one transaction — if the audit write fails the read is rolled back. Every denial is the same `NotFound`; every query filters by `patient_id` in application code (BYPASSRLS). Reads run sequentially on one `AsyncSession`.
+   - `backend/app/clinical/schemas.py` holds the typed, read-only output (`PatientRecordOut` and its parts). Nothing in it is accepted as input.
+   - The 8 clinical models in `db/models.py` — `Encounter`, `Diagnosis`, `VitalSign`, `Medicine`, `Prescription`, `PrescriptionItem`, `LabReport`, `LabResult` — map the wider product's live tables. They are read-only here: no migration, no writes.
+   - An AST guard, `tests/test_consent.py::test_no_direct_clinical_queries`, fails the build if any file under `backend/` other than `consent/gateway.py` calls `select(...)` on the guarded clinical models.
+   - `backend/app/doctor/what_changed.py` builds the page's "What changed" panel: a deterministic diff (no LLM) of allergies, conditions and medications added/removed/resolved since the doctor's previous `record.read` audit row for that patient. The handler calls `last_read_at` **before** the gateway read, because the read writes its own `record.read` row.
+   - The page is `/{locale}/doctor/patient/{patient_id}` (`doctor_patient_page` in `web/router.py`, template `doctor/patient.html`); the URL carries the patient id, never the passport number. Page tests live in `tests/test_doctor_patient.py`. Rules and acceptance criteria are in `.claude/specs/d2_patient_history_spec.md` (BL-01…BL-14, AC-01…AC-18).
 
 ### Important Files to Understand First
 
@@ -178,6 +189,7 @@ docs/                          # Product requirements, technical design, design 
 - **Patient profile changes**: Read `.claude/specs/patient_profile_spec.md` first — it wins over `docs/TDD.md` wherever they disagree. Put every business rule in `profile/service.py` so the API and the web page stay in sync; never perform a query on `allergy`/`chronic_condition`/`patient_medication` without filtering by the caller's own `patient_id` (BYPASSRLS means the database will not catch a missed scope). Never let a patient edit an entry whose `recorded_by` isn't their own `user_id`.
 - **Medical Passport changes**: Read `.claude/specs/medical_passport_spec.md` first. Put every consent rule in `consent/service.py`; filter every grant lookup by the caller's own `patient_id`; never make a doctor-side denial distinguishable from "no such patient" (always the same `NotFound`); never put a passport number in a URL, log line, or audit row.
 - **Doctor dashboard changes**: Keep `doctor/rows.py` pure — consent decisions belong in `consent/service.py`.
+- **Patient history (D2) changes**: Read `.claude/specs/d2_patient_history_spec.md` first. Query clinical tables only in `consent/gateway.py` (the AST guard enforces it); never make a denial distinguishable from "no such patient".
 - **UI changes**: Work with Jinja2 templates in `frontend/templates/` and `web/router.py`
 - **Database changes**: Modify `db/models.py` to match the *real* shared schema (verify against `information_schema` first) and write an additive Alembic migration by hand — never autogenerate
 - **Configuration**: Update `settings.py` with appropriate validation guards
