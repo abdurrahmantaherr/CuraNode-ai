@@ -181,8 +181,6 @@
   "lookup.not_found": "No patient with that passport number has given you access.",
   "lookup.open_link": "Find a patient by passport number",
   "doctor_patient.title": "Patient",
-  "doctor_patient.access_confirmed": "This patient has given you access to their record.",
-  "doctor_patient.record_pending": "The record view arrives with a later feature.",
   "doctor_patient.back": "Find another patient",
   "doctor_patient.section.patient": "Patient",
   "doctor_patient.section.visits": "Visit history",

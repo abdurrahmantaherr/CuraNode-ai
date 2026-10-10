@@ -181,8 +181,6 @@
   "lookup.not_found": "اس پاسپورٹ نمبر والے کسی مریض نے آپ کو رسائی نہیں دی۔",
   "lookup.open_link": "پاسپورٹ نمبر سے مریض تلاش کریں",
   "doctor_patient.title": "مریض",
-  "doctor_patient.access_confirmed": "اس مریض نے آپ کو اپنے ریکارڈ تک رسائی دی ہے۔",
-  "doctor_patient.record_pending": "ریکارڈ کا منظر بعد کی خصوصیت کے ساتھ آئے گا۔",
   "doctor_patient.back": "کوئی اور مریض تلاش کریں",
   "doctor_patient.section.patient": "مریض",
   "doctor_patient.section.visits": "معائنوں کی تاریخ",
