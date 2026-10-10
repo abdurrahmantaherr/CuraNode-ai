@@ -425,3 +425,95 @@ async def test_t14_write_rate_limit(client, db, patient_user, second_patient, ve
     assert (
         await client.post(URL, json={"pmdc_number": verified_doctor.pmdc_number})
     ).status_code == 201
+
+
+# ── Rule 1: the consent gateway is the only reader of clinical tables ───
+def test_no_direct_clinical_queries():
+    import ast
+    from pathlib import Path
+
+    guarded = {"Encounter", "Diagnosis", "Prescription", "LabReport", "LabResult"}
+    backend = Path(__file__).resolve().parent.parent / "backend"
+    offenders = []
+    for path in backend.rglob("*.py"):
+        if path.name == "gateway.py" and path.parent.name == "consent":
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "select"
+            ):
+                for sub in ast.walk(node):
+                    name = sub.id if isinstance(sub, ast.Name) else getattr(sub, "attr", None)
+                    if name in guarded:
+                        offenders.append(f"{path}:{node.lineno} select({name})")
+    assert not offenders, "clinical tables queried outside consent/gateway.py: " + "; ".join(
+        offenders
+    )
+
+
+# ── Consent gateway (D2) ────────────────────────────────────────────────
+async def _gateway_setup(db, clinic, verified_doctor):
+    from app.db.models import Encounter
+
+    user = await make_user(db, email="gwpat@x.com", role=UserRole.PATIENT)
+    patient = await patient_of(db, user)
+    await grant_row(db, patient.id, grantee_type="doctor", grantee_id=verified_doctor.id)
+    for days in (5, 1):
+        db.add(
+            Encounter(
+                id=uuid7(),
+                patient_id=patient.id,
+                doctor_id=verified_doctor.id,
+                clinic_id=clinic.id,
+                visit_datetime=utcnow() - timedelta(days=days),
+            )
+        )
+    await db.commit()
+    from app.deps import Actor
+
+    return patient, Actor(user_id=verified_doctor.user_id, role="doctor", is_verified_doctor=True)
+
+
+async def test_gateway_returns_record_and_one_audit_row(db, clinic, verified_doctor):
+    from app.consent import gateway
+
+    patient, actor = await _gateway_setup(db, clinic, verified_doctor)
+    record = await gateway.load_patient_for_doctor(db, actor, patient.id)
+    assert record.patient.id == patient.id
+    dates = [e.visit_datetime for e in record.encounters]
+    assert len(dates) == 2 and dates == sorted(dates, reverse=True)
+    rows = await audit_rows(db, "record.")
+    assert len(rows) == 1 and rows[0].action == "record.read"
+    detail = json.loads(rows[0].detail)
+    assert set(detail) == {"patient_id", "doctor_id", "grant_id", "purpose"}
+    assert detail["doctor_id"] == str(verified_doctor.id)
+
+
+async def test_gateway_denial_is_not_found_and_writes_nothing(db, clinic, verified_doctor):
+    from app.consent import gateway
+    from app.errors import NotFound
+
+    _patient, actor = await _gateway_setup(db, clinic, verified_doctor)
+    with pytest.raises(NotFound):
+        await gateway.load_patient_for_doctor(db, actor, uuid7())
+    stranger = await make_user(db, email="nogrant@x.com", role=UserRole.PATIENT)
+    with pytest.raises(NotFound):
+        await gateway.load_patient_for_doctor(db, actor, (await patient_of(db, stranger)).id)
+    assert await audit_rows(db, "record.") == []
+
+
+async def test_gateway_audit_failure_rolls_back(db, clinic, verified_doctor, monkeypatch):
+    from app.audit import writer
+    from app.consent import gateway
+
+    patient, actor = await _gateway_setup(db, clinic, verified_doctor)
+
+    async def boom(*a, **k):
+        raise RuntimeError("audit down")
+
+    monkeypatch.setattr(writer, "write", boom)
+    with pytest.raises(RuntimeError):
+        await gateway.load_patient_for_doctor(db, actor, patient.id)
+    assert await audit_rows(db, "record.") == []

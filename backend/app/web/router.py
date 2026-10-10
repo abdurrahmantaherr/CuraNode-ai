@@ -27,6 +27,7 @@ from supabase_auth.errors import AuthApiError
 
 from ..audit import writer as audit
 from ..cache import cache, oauth_state_key
+from ..consent import gateway
 from ..consent import schemas as consent_schemas
 from ..consent import service as consent_service
 from ..db import types as dbtypes
@@ -39,7 +40,8 @@ from ..deps import (
     check_profile_write_rate,
     enforce_auth_rate_limit,
 )
-from ..doctor.rows import build_rows
+from ..doctor import what_changed
+from ..doctor.rows import _gender_label, age_in_years, build_rows
 from ..errors import (
     AppError,
     DuplicateEntry,
@@ -1495,10 +1497,29 @@ async def doctor_patient_page(
             raise NotFound()
         # Re-checked on every view: a revoke takes effect on the next request (BL-07).
         patient = await consent_service.patient_for_doctor(session, actor, parsed_id)
+        # Plain values: the gateway commits, which expires ORM instances.
+        header = {
+            "passport_no": patient.passport_no,
+            "emergency_contact": patient.emergency_contact,
+        }
+        # Before the read: the gateway writes this request's own record.read row.
+        since = await what_changed.last_read_at(session, actor.user_id, parsed_id)
+        record = await gateway.load_patient_for_doctor(
+            session, actor, parsed_id, user_agent=request.headers.get("user-agent")
+        )
     except NotFound:
         return _render_lookup(
             request, loc, status_code=404, error=translate("lookup.not_found", loc)
         )
+    changes = None if since is None else await what_changed.changes_since(session, parsed_id, since)
+    clinic_ids = {e.clinic_id for e in record.encounters}
+    clinic_names: dict[uuid.UUID, str] = {}
+    if clinic_ids:
+        rows = await session.execute(
+            select(Clinic.id, Clinic.name).where(Clinic.id.in_(clinic_ids))
+        )
+        clinic_names = {cid: name for cid, name in rows.all()}
+    age = age_in_years(record.patient.date_of_birth, dbtypes.today_pk())
     return _render(
         request,
         "doctor/patient.html",
@@ -1506,5 +1527,13 @@ async def doctor_patient_page(
         crumb=translate("auth.role.doctor", loc),
         page_title=translate("doctor_patient.title", loc),
         nav_items=_doctor_nav(loc, current="lookup"),
-        passport_no=patient.passport_no,
+        record=record,
+        passport_no=header["passport_no"],
+        emergency_contact=header["emergency_contact"],
+        age=age,
+        gender_label=_gender_label(record.patient.gender, loc),
+        changes=changes,
+        clinic_names=clinic_names,
+        severity_badge=lambda s: _SEVERITY_BADGE.get(s, "badge--neutral"),
+        severity_label=_severity_label(loc),
     )

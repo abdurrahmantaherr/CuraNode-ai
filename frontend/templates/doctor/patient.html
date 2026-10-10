@@ -1,27 +1,238 @@
 {% extends "base.html" %}
-{#- A consented patient, as a verified doctor sees them. Deliberately a stub:
-    what the record shows is FR21, out of this feature's scope — this page
-    only proves the lookup succeeded. The grant is re-checked on every view
-    (BL-07), so it 404s the moment the patient revokes.
+{#- A consented patient's record, as a verified doctor sees it (D2). Read-only
+    and JavaScript-free. The grant is re-checked on every view (BL-07), so
+    this 404s the moment the patient revokes. Autoescaped throughout; never
+    use |safe on clinical text.
 
     Context (built in web/router.py::doctor_patient_page):
-      passport_no   the consenting patient's passport number -#}
+      record            PatientRecordOut (consent/gateway.py)
+      passport_no       shown for reference only
+      emergency_contact free text or None
+      age               whole years or None
+      gender_label      translated gender or the stored legacy value
+      changes           None on a first view, else [(kind, name), ...]
+      clinic_names      {clinic_id: name}
+      severity_badge / severity_label   helpers shared with the profile page -#}
 
 {% block title %}{{ t('doctor_patient.title') }} · {{ t('app.name') }}{% endblock %}
 
 {% block body %}
+{%- set p = record.patient -%}
+{%- set dash = t('option.not_set') -%}
 <div class="shell">
   {% include "partials/topbar.html" %}
 
   <main class="content">
+    {#- What changed since this doctor last opened the record -#}
+    <section class="panel stack" aria-labelledby="changed-h">
+      <h2 id="changed-h" class="panel__label">{{ t('doctor_patient.changed.title') }}</h2>
+      {% if changes is none %}
+        <p class="empty-state">{{ t('doctor_patient.changed.first_visit') }}</p>
+      {% elif changes %}
+        <ul class="entry-list">
+          {% for kind, name in changes %}
+            <li class="entry-row"><div class="entry-row__main">{{ t('doctor_patient.changed.' ~ kind, name=name) }}</div></li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty-state">{{ t('doctor_patient.changed.none') }}</p>
+      {% endif %}
+    </section>
+
+    {#- 1. Patient header -#}
     <section class="panel stack" aria-labelledby="patient-h">
-      <h2 id="patient-h" class="panel__label">{{ t('lookup.field.passport') }}</h2>
-      <div class="passport__number" dir="ltr">{{ passport_no }}</div>
-      <div class="banner banner--ok" role="status"><span>{{ t('doctor_patient.access_confirmed') }}</span></div>
-      <p class="lead">{{ t('doctor_patient.record_pending') }}</p>
+      <h2 id="patient-h" class="panel__label">{{ t('doctor_patient.section.patient') }}</h2>
+      <div class="entry-row__title">{{ p.full_name }}</div>
+      <dl class="readonly-list">
+        <dt>{{ t('field.age') }}</dt>
+        <dd>{% if age is not none %}{{ t('profile.age_years', years=age) }}{% else %}{{ dash }}{% endif %}</dd>
+        <dt>{{ t('field.gender') }}</dt>
+        <dd>{{ gender_label }}</dd>
+        <dt>{{ t('field.blood_group') }}</dt>
+        <dd><span dir="ltr">{{ p.blood_group or dash }}</span></dd>
+        <dt>{{ t('field.emergency_contact') }}</dt>
+        <dd>{{ emergency_contact or dash }}</dd>
+        <dt>{{ t('lookup.field.passport') }}</dt>
+        <dd><span class="mono" dir="ltr">{{ passport_no }}</span></dd>
+      </dl>
       <div>
-        <a class="btn btn--secondary" href="/{{ locale }}/doctor/passport-lookup">{{ t('doctor_patient.back') }}</a>
+        <a class="btn btn--secondary btn--sm" href="/{{ locale }}/doctor/passport-lookup">{{ t('doctor_patient.back') }}</a>
       </div>
+    </section>
+
+    {#- 2. Allergies, first: safety -#}
+    <section id="allergies" class="panel stack" aria-labelledby="allergies-h">
+      <h2 id="allergies-h" class="panel__label">{{ t('profile.section.allergies') }}</h2>
+      {% if record.allergies %}
+        <ul class="entry-list">
+          {% for a in record.allergies %}
+            <li class="entry-row{% if a.severity == 'severe' %} entry-row--severe{% endif %}">
+              <div class="entry-row__main">
+                <div class="entry-row__title">{{ a.substance }}</div>
+                {% if a.reaction %}<div class="mono">{{ a.reaction }}</div>{% endif %}
+              </div>
+              {% if a.severity %}
+                <span class="badge {{ severity_badge(a.severity) }}">{{ severity_label(a.severity) }}</span>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="banner banner--ok" role="status"><span>{{ t('doctor_patient.no_allergies') }}</span></div>
+      {% endif %}
+    </section>
+
+    {#- 3. Conditions and medications -#}
+    <div class="grid-2">
+      <section id="conditions" class="panel stack" aria-labelledby="conditions-h">
+        <h2 id="conditions-h" class="panel__label">{{ t('profile.section.conditions') }}</h2>
+        {% if record.conditions %}
+          <ul class="entry-list">
+            {% for c in record.conditions %}
+              <li class="entry-row">
+                <div class="entry-row__main">
+                  <div class="entry-row__title">{{ c.name }}</div>
+                  {% if c.onset_date %}<div class="mono">{{ t('field.onset_date') }} {{ c.onset_date }}</div>{% endif %}
+                </div>
+                {% if c.risk_level %}
+                  <span class="badge badge--neutral">{{ t('doctor_patient.risk') }}: {{ severity_label(c.risk_level) }}</span>
+                {% endif %}
+                {% if c.status != 'active' %}<span class="badge badge--neutral">{{ c.status }}</span>{% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="empty-state">{{ t('profile.empty.conditions') }}</p>
+        {% endif %}
+      </section>
+
+      <section id="medications" class="panel stack" aria-labelledby="medications-h">
+        <h2 id="medications-h" class="panel__label">{{ t('profile.section.medications') }}</h2>
+        {% if record.medications %}
+          <ul class="entry-list">
+            {% for m in record.medications %}
+              <li class="entry-row">
+                <div class="entry-row__main">
+                  <div class="entry-row__title">{{ m.name }}</div>
+                  {% set parts = [m.strength, m.frequency, (t('field.started_on') ~ ' ' ~ m.started_on) if m.started_on else none] | select | list %}
+                  {% if parts %}<div class="mono">{{ parts | join(' · ') }}</div>{% endif %}
+                </div>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="empty-state">{{ t('profile.empty.medications') }}</p>
+        {% endif %}
+      </section>
+    </div>
+
+    {#- 4. Visit history, newest first -#}
+    <section id="visits" class="panel stack" aria-labelledby="visits-h">
+      <h2 id="visits-h" class="panel__label">{{ t('doctor_patient.section.visits') }}</h2>
+      {% if record.encounters %}
+        {% for e in record.encounters %}
+          <article class="panel stack" aria-label="{{ e.visit_datetime.date() }}">
+            <div class="entry-row__title">
+              <span dir="ltr">{{ e.visit_datetime.date() }}</span>
+              {% if clinic_names.get(e.clinic_id) %} · {{ clinic_names[e.clinic_id] }}{% endif %}
+            </div>
+            <div>
+              <span class="field-help">{{ t('doctor_patient.chief_complaint') }}</span>
+              <div>{{ e.chief_complaint or dash }}</div>
+            </div>
+            {% if e.diagnoses %}
+              <div>
+                <span class="field-help">{{ t('doctor_patient.diagnoses') }}</span>
+                <ul class="entry-list">
+                  {% for d in e.diagnoses %}
+                    <li class="entry-row">
+                      <div class="entry-row__main">
+                        {{ d.description or d.icd10_code or dash }}
+                        {% if d.icd10_code and d.description %}<span class="mono" dir="ltr">{{ d.icd10_code }}</span>{% endif %}
+                      </div>
+                      {% if d.is_chronic %}<span class="chip">{{ t('doctor_patient.chronic') }}</span>{% endif %}
+                      {% if d.severity %}<span class="badge badge--neutral">{{ severity_label(d.severity) }}</span>{% endif %}
+                    </li>
+                  {% endfor %}
+                </ul>
+              </div>
+            {% endif %}
+            {% for v in e.vitals %}
+              {% set vparts = [
+                (t('doctor_patient.vital.bp') ~ ' ' ~ v.bp_systolic ~ '/' ~ v.bp_diastolic) if v.bp_systolic is not none and v.bp_diastolic is not none else none,
+                (t('doctor_patient.vital.pulse') ~ ' ' ~ v.pulse_bpm) if v.pulse_bpm is not none else none,
+                (t('doctor_patient.vital.temperature') ~ ' ' ~ ('%g'|format(v.temperature_c))) if v.temperature_c is not none else none,
+                (t('doctor_patient.vital.spo2') ~ ' ' ~ v.spo2 ~ '%') if v.spo2 is not none else none,
+                (t('doctor_patient.vital.weight') ~ ' ' ~ ('%g'|format(v.weight_kg))) if v.weight_kg is not none else none,
+                (t('doctor_patient.vital.height') ~ ' ' ~ ('%g'|format(v.height_cm))) if v.height_cm is not none else none
+              ] | select | list %}
+              {% if loop.first %}<span class="field-help">{{ t('doctor_patient.vitals') }}</span>{% endif %}
+              {% if vparts %}<div class="mono" dir="ltr">{{ vparts | join(' · ') }}</div>{% endif %}
+            {% endfor %}
+            {% for rx in e.prescriptions %}
+              {% if loop.first %}<span class="field-help">{{ t('doctor_patient.prescriptions') }}</span>{% endif %}
+              <ul class="entry-list">
+                {% for item in rx.items %}
+                  <li class="entry-row">
+                    <div class="entry-row__main">
+                      <div class="entry-row__title">
+                        {% if item.medicine %}{{ item.medicine.generic_name }}{% if item.medicine.brand_name %} ({{ item.medicine.brand_name }}){% endif %}{% else %}{{ dash }}{% endif %}
+                      </div>
+                      {% set iparts = [item.dosage, item.frequency, (item.duration_days ~ ' ' ~ t('doctor_patient.days')) if item.duration_days else none, item.instructions] | select | list %}
+                      {% if iparts %}<div class="mono">{{ iparts | join(' · ') }}</div>{% endif %}
+                    </div>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% endfor %}
+          </article>
+        {% endfor %}
+      {% else %}
+        <p class="empty-state">{{ t('doctor_patient.empty.visits') }}</p>
+      {% endif %}
+    </section>
+
+    {#- 5. Lab reports, newest first -#}
+    <section id="labs" class="panel stack" aria-labelledby="labs-h">
+      <h2 id="labs-h" class="panel__label">{{ t('doctor_patient.section.labs') }}</h2>
+      {% if record.lab_reports %}
+        {% for rep in record.lab_reports %}
+          <article class="panel stack" aria-label="{{ rep.lab_name or dash }}">
+            <div class="entry-row__title">
+              {{ rep.lab_name or dash }}
+              {% if rep.report_date %} · <span dir="ltr">{{ rep.report_date }}</span>{% endif %}
+              <span class="badge badge--neutral">{{ rep.status }}</span>
+            </div>
+            {% if rep.results %}
+              <ul class="entry-list">
+                {% for r in rep.results %}
+                  {% set flag = (r.flag or '')|lower %}
+                  {% set abnormal = flag != '' and flag not in ['n', 'normal'] %}
+                  <li class="entry-row{% if abnormal %} entry-row--severe{% endif %}">
+                    <div class="entry-row__main">
+                      <div class="entry-row__title">{{ r.test_name }}</div>
+                      <div class="mono" dir="ltr">
+                        {% if r.value is not none %}{{ '%g'|format(r.value) }}{% else %}{{ dash }}{% endif %}{% if r.unit %} {{ r.unit }}{% endif %}
+                        {% if r.ref_range_low is not none or r.ref_range_high is not none %}
+                          · {{ t('doctor_patient.ref_range') }}
+                          {{ '%g'|format(r.ref_range_low) if r.ref_range_low is not none else '' }}–{{ '%g'|format(r.ref_range_high) if r.ref_range_high is not none else '' }}
+                        {% endif %}
+                      </div>
+                    </div>
+                    {% if abnormal %}
+                      <span class="badge badge--err">{{ r.flag }}</span>
+                    {% endif %}
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <p class="empty-state">{{ t('doctor_patient.empty.results') }}</p>
+            {% endif %}
+          </article>
+        {% endfor %}
+      {% else %}
+        <p class="empty-state">{{ t('doctor_patient.empty.labs') }}</p>
+      {% endif %}
     </section>
   </main>
 </div>
