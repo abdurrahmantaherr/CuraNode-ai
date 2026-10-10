@@ -151,8 +151,9 @@ def test_ac29_revision_chain_is_single_and_unbroken():
     assert chain == [
         "291c06a2b86f",  # D7
         "dba968144fb4",
-        "e3a52c8d7f14",
-        "35c4bc13fa37",
+        "e3a52c8d7f14",  # the OCR codebase's real file
+        "b7e24c19a053",  # reconstructed placeholder
+        "35c4bc13fa37",  # reconstructed placeholder
         "488dbf2b3915",
         "6feacefae2d0",
     ]
@@ -174,21 +175,35 @@ def test_ac29_placeholder_upgrade_is_noop_and_downgrade_refuses():
             _run(conn, module.downgrade)
 
 
-def test_ac29_e3a52c8d7f14_placeholder_upgrade_is_noop_and_downgrade_refuses():
-    spec = importlib.util.spec_from_file_location(
-        "placeholder_e3a52c8d7f14",
-        ROOT / "alembic" / "versions" / "e3a52c8d7f14_reconstructed_ocr_placeholder.py",
-    )
+def _load_revision(filename: str):
+    spec = importlib.util.spec_from_file_location(filename, ROOT / "alembic" / "versions" / filename)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
-    assert module.down_revision == "35c4bc13fa37"
+    return module
+
+
+def test_ac29_b7e24c19a053_placeholder_upgrade_is_noop_and_downgrade_refuses():
+    module = _load_revision("b7e24c19a053_reconstructed_ocr_placeholder.py")
+    assert (module.revision, module.down_revision) == ("b7e24c19a053", "35c4bc13fa37")
     engine = sa.create_engine("sqlite://")
     with engine.begin() as conn:
         _run(conn, module.upgrade)  # touches nothing
         assert sa.inspect(conn).get_table_names() == []
         with pytest.raises(RuntimeError, match="placeholder"):
             _run(conn, module.downgrade)
+
+
+def test_ac29_real_e3a52c8d7f14_follows_the_placeholder_and_is_postgres_only():
+    """The OCR codebase's own file, unchanged: it widens a CHECK on its
+    `ocr_extraction` table on Postgres and does nothing on SQLite."""
+    module = _load_revision("e3a52c8d7f14_ocr_extraction_more_field_names.py")
+    assert (module.revision, module.down_revision) == ("e3a52c8d7f14", "b7e24c19a053")
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        _run(conn, module.upgrade)
+        _run(conn, module.downgrade)
+        assert sa.inspect(conn).get_table_names() == []
 
 
 async def test_ac29_one_unrevoked_grant_per_grantee_in_the_model(db):

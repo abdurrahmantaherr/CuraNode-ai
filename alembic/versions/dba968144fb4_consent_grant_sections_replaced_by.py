@@ -16,10 +16,11 @@ the shared CuraNode-AI schema, not this repo). It:
 
 `access_log` needs no DDL: the shared table already has every column P9 uses.
 
-Parent: `e3a52c8d7f14`, a reconstructed placeholder for the document/OCR
-codebase's revision that the shared database is at (see that file; it follows
-the earlier placeholder `35c4bc13fa37`). Applying this to the shared database
-still needs the schema owner's OK.
+Parent: `e3a52c8d7f14`, the document/OCR codebase's own revision (its real
+file, `e3a52c8d7f14_ocr_extraction_more_field_names.py`), which the shared
+database is at. It follows the reconstructed placeholders `35c4bc13fa37` and
+`b7e24c19a053`. Applying this to the shared database still needs the schema
+owner's OK.
 
 Revision ID: dba968144fb4
 Revises: e3a52c8d7f14

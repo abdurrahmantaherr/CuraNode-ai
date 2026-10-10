@@ -209,6 +209,20 @@ implementing D7.
 
 *Phase A (repo only; no DB connection):*
 
+> **Update 2026-10-10 (real file supplied).** The schema owner supplied the OCR
+> codebase's real `e3a52c8d7f14_ocr_extraction_more_field_names.py`. It only
+> widens `ocr_extraction_field_name_check`, and its `down_revision` is
+> `b7e24c19a053`, a revision with no file anywhere in this repo or its remotes.
+> So the placeholder for `e3a52c8d7f14` was replaced by the real file
+> (unchanged), and `b7e24c19a053` is now the reconstructed placeholder
+> (`ocr_job.ai_sections`; parent `35c4bc13fa37`, consistent with exactly two
+> version updates after it). Chain: `… 35c4bc13fa37 → b7e24c19a053 →
+> e3a52c8d7f14 → dba968144fb4 (P9) → 291c06a2b86f (D7)`. Phase B is unchanged:
+> the shared DB is at `e3a52c8d7f14`, so B2/B3 start after it. A downgrade below
+> `e3a52c8d7f14` would run the real file's own downgrade, then stop at the
+> `b7e24c19a053` placeholder (one transaction, so nothing is left half-done).
+
+
 Commit structure (decision 19): adding the placeholder alone would give the
 chain two heads (it and P9 would both be children of `35c4bc13fa37`), and
 `test_ac29` asserts a single head. So the placeholder, P9's re-parent, and the
