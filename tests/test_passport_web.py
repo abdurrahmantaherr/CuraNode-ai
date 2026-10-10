@@ -221,7 +221,7 @@ async def test_t11_lookup_with_grant_redirects_without_passport_no(
     page = await client.get(location)
     assert page.status_code == 200
     assert patient.passport_no in page.text
-    assert in_html("doctor_patient.access_confirmed") in page.text
+    assert in_html("doctor_patient.changed.first_visit") in page.text
 
 
 async def test_t11_revoke_takes_effect_on_next_request(client, db, patient_user, verified_doctor):
