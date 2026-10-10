@@ -1728,11 +1728,13 @@ def _form_values(form: Any, fields: tuple[str, ...]) -> dict[str, str]:
 
 
 def _week_start(raw: str | None, today: date) -> date:
+    """The first of the seven days shown. By default the view starts TODAY and
+    runs a week forward, so late in a calendar week it still shows the coming
+    days instead of a row of past ones. `?week=` starts it on that date."""
     try:
-        anchor = date.fromisoformat(raw) if raw else today
+        return date.fromisoformat(raw) if raw else today
     except ValueError:
-        anchor = today
-    return anchor - timedelta(days=anchor.weekday())
+        return today
 
 
 def _weekday_label(loc: str, weekday: int) -> str:

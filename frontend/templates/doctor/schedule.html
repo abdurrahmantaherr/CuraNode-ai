@@ -195,6 +195,7 @@
         {% set ae = form_state['errors'] if add_failed else {} %}
         <form class="stack" method="post" action="/{{ locale }}/doctor/schedule/slots" novalidate>
           <h3 class="panel__label">{{ t('schedule.add_slot_title') }}</h3>
+          <p class="field-help">{{ t('schedule.clinics_linked_note', count=clinic_options|length) }}</p>
           {{ form_banner('slot-new') }}
           <fieldset class="field">
             <legend class="field-label">{{ t('schedule.weekdays') }}</legend>

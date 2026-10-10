@@ -628,8 +628,10 @@ Entry points (decision 6: the Schedule link appears on **both** doctor dashboard
   adds one).
 
 Schedule page (`frontend/templates/doctor/schedule.html`)
-- Week view (Mon–Sun) from `get_effective_availability`; days before today
-  are greyed. Blocks are coloured per clinic with design-system tokens, plus a
+- Week view: seven days from `get_effective_availability`, starting **today**
+  by default (changed 2026-10-11: a Mon–Sun calendar week showed only past
+  days late in the week); `?week=<date>` starts it on that date, and
+  Previous/Next move seven days. Days before today are greyed. Blocks are coloured per clinic with design-system tokens, plus a
   legend. Each block shows its session's effective cap; an extra's block is
   marked as extra hours, and as inherited when its cap is.
 - Weekly slot list, with inactive-clinic badges, edit and remove.
@@ -637,7 +639,8 @@ Schedule page (`frontend/templates/doctor/schedule.html`)
   and window, with remove. Extras also show their effective cap, marked when
   inherited (R13, decision 18).
 - Clinic filter (All / one active clinic).
-- Add slot: clinic (active affiliations only), weekday checkboxes, start, end,
+- Add slot: clinic (active affiliations only; a note says hours go only at
+  linked clinics and another hospital's admin must add the doctor there), weekday checkboxes, start, end,
   minutes per patient (a `<select>` of 5, 10, …, 60, default 15), and
   patients per session (`<input type="number" min="1">`, pre-filled per R13,
   with the help text `schedule.max_tokens_help`). The edit form shows the same

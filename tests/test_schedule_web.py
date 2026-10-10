@@ -441,3 +441,22 @@ async def test_week_and_clinic_filter(doctor_client, clinic, second_clinic):
 
 async def _user(db, email: str):
     return (await db.execute(select(Profile).where(Profile.email == email))).scalar_one()
+
+
+# ── The view starts today (regression: on a Sunday the calendar week was all past)
+async def test_on_a_sunday_the_default_view_shows_the_coming_week(
+    doctor_client, clinic, monkeypatch
+):
+    await _add_slot_via_page(doctor_client, clinic)  # Monday 09:00-13:00
+    monkeypatch.setattr(dbtypes, "today_pk", lambda: date(2026, 10, 18))  # a Sunday
+    body = (await doctor_client.get(PAGE)).text
+    assert "Week of 2026-10-18" in body
+    assert body.count('class="slot-block ') == 1  # tomorrow, Monday 2026-10-19
+    assert "09:00–13:00" in body
+    assert "week__day--past" not in body
+
+
+async def test_the_add_form_says_hours_go_only_at_linked_clinics(doctor_client):
+    body = (await doctor_client.get(PAGE)).text
+    assert "You are linked to 2 clinic(s)." in body  # schedule_doctor: two clinics
+    assert "ask that hospital&#39;s admin to add you" in body

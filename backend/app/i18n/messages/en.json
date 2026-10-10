@@ -324,5 +324,6 @@
   "errors.schedule_has_appointments": "These hours have upcoming bookings, so they can't be changed yet.",
   "errors.schedule_slot_minutes_invalid": "Choose 5 to 60 minutes, in steps of 5.",
   "errors.schedule_too_short": "These hours are shorter than the minutes per patient.",
-  "errors.schedule_max_tokens_invalid": "Enter a whole number from 1 to 200."
+  "errors.schedule_max_tokens_invalid": "Enter a whole number from 1 to 200.",
+  "schedule.clinics_linked_note": "You are linked to {count} clinic(s). You can add hours only at clinics you are linked to; to work at another hospital, ask that hospital's admin to add you."
 }

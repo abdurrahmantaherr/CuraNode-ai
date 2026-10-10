@@ -324,5 +324,6 @@
   "errors.schedule_has_appointments": "ان اوقات میں آنے والی بکنگز ہیں، اس لیے ابھی انہیں تبدیل نہیں کیا جا سکتا۔",
   "errors.schedule_slot_minutes_invalid": "5 سے 60 منٹ کے درمیان، 5 کے وقفے سے منتخب کریں۔",
   "errors.schedule_too_short": "یہ اوقات فی مریض منٹ سے کم ہیں۔",
-  "errors.schedule_max_tokens_invalid": "1 سے 200 تک پورا عدد درج کریں۔"
+  "errors.schedule_max_tokens_invalid": "1 سے 200 تک پورا عدد درج کریں۔",
+  "schedule.clinics_linked_note": "آپ {count} کلینک سے منسلک ہیں۔ آپ صرف اُن کلینکس میں اوقات شامل کر سکتے ہیں جن سے آپ منسلک ہیں؛ کسی اور ہسپتال میں کام کے لیے اُس ہسپتال کے ایڈمن سے کہیں کہ آپ کو شامل کرے۔"
 }
