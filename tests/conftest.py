@@ -75,6 +75,24 @@ def fresh_cache(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_ai_providers(monkeypatch):
+    """No test may reach a real AI provider: `Settings` reads `.env` even
+    under test, so a developer's real Gemini/Groq/OpenRouter keys would
+    otherwise turn on live network calls (and burn free-tier quota) in any
+    test that runs the document pipeline. Tests that exercise a provider set
+    their own fake key. The cooldown ledger is process-wide, so it is also
+    cleared — one test's simulated 429 must not skip a provider in the next."""
+    from app.documents import ai_providers
+    from app.settings import settings as app_settings
+
+    for field in ("gemini_api_key", "groq_api_key", "openrouter_api_key"):
+        monkeypatch.setattr(app_settings, field, "")
+    ai_providers.reset_state()
+    yield
+    ai_providers.reset_state()
+
+
+@pytest.fixture(autouse=True)
 def fake_supabase(monkeypatch):
     """Every test gets its own isolated Supabase Auth double — no network,
     no shared state between tests, and no real JWKS fetch."""

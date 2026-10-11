@@ -1,0 +1,133 @@
+{#- The TABLES of a document — medicines, diagnosis, symptoms, vital signs, allergies, lab
+    results, vaccine doses (documents/groups.py) — for the review step (editable) and the
+    saved record (read-only), so the two never drift apart.
+
+    Import with context:  {% import "partials/doc_groups.html" as dg with context %}
+
+      dg.review_group(g, doc)   an editable table (or, for the vital signs, a labelled list).
+                                `g` is a review view-model from web/documents.py::_review_groups.
+      dg.saved_group(g, doc)    the confirmed rows, read-only. `g` is a GroupOut.
+
+    Input names are `row-<index>-<field>` — one scheme for every table, parsed by
+    web/documents.py::_parse_review_form. A removed row is `remove_row=<index>`. -#}
+{% import "partials/doc_sections.html" as ds with context %}
+
+{#- One editable input and what travels with it. -#}
+{% macro _input(r, fld, doc, list_item=false) %}
+  <input class="input" type="text" maxlength="255"
+         name="row-{{ r.index }}-{{ fld.name }}"
+         value="{{ fld.value }}" aria-label="{{ fld.label }}"
+         {% if not r.blank and not fld.value and not list_item %}placeholder="{{ t('documents.review.not_available') }}"{% endif %}>
+  {% set badge = confidence_badge(fld.confidence) %}
+  {% if badge %}<span class="badge {{ badge.class }}">{{ badge.label }}</span>{% endif %}
+  {#- A lab result's flag: read-only and never stored — worked out from the row (see
+      documents/lab_flags.py), so it is not an input. -#}
+  {% if fld.name == 'result' and doc.document_type == 'lab_report' and not r.blank %}
+    <div class="flag-cell">{{ ds.flag(r.flag, r.flag_source) }}</div>
+  {% endif %}
+  {#- Suggestions only: a possible reading shown beside the patient's own editable text,
+      never instead of it and never auto-filled. -#}
+  {% if fld.suggestions %}
+    <p class="field-help">
+      {{ t('documents.review.suggestion_hint') }}
+      {{ fld.suggestions | join(', ') }}
+    </p>
+  {% endif %}
+{% endmacro %}
+
+{% macro review_group(g, doc) %}
+  <section class="stack doc-table" aria-labelledby="grp-{{ g.key }}-h" data-group="{{ g.key }}">
+    <h3 id="grp-{{ g.key }}-h" class="panel__label">{{ g.label }}</h3>
+    {% if g.hint %}<p class="field-help">{{ g.hint }}</p>{% endif %}
+
+    {% if g.layout == 'list' %}
+      {#- One row, every field always shown: any of them can be filled in. -#}
+      {% set r = g.list_row %}
+      <div class="field-grid">
+        {% for fld in r.fields %}
+          <label class="field-grid__item">
+            <span class="field-grid__label">{{ fld.label }}</span>
+            {{ _input(r, fld, doc, true) }}
+          </label>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="data-table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              {% for n in g.field_names %}<th scope="col">{{ t('documents.field.' ~ n) }}</th>{% endfor %}
+              <th scope="col">{{ t('documents.review.remove') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in g.rows + [g.blank_row] %}
+              <tr>
+                {% for fld in r.fields %}
+                  <td>{{ _input(r, fld, doc) }}</td>
+                {% endfor %}
+                <td>
+                  {% if not r.blank %}
+                    <label class="checkline">
+                      <input type="checkbox" name="remove_row" value="{{ r.index }}"
+                             {% if r.removed %}checked{% endif %}>
+                      <span>{{ t('documents.review.remove') }}</span>
+                    </label>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </section>
+{% endmacro %}
+
+{% macro saved_group(g, doc) %}
+  {% if g.rows %}
+    <div class="stack doc-table" data-group="{{ g.key }}">
+      <h3 class="panel__label">{{ t('documents.group.' ~ g.key) }}</h3>
+      {% if g.layout == 'list' %}
+        {#- The vital signs: only the ones the patient kept. -#}
+        <dl class="readonly-list">
+          {% for fld in g.rows[0].fields if fld.value %}
+            <dt>{{ t('documents.field.' ~ fld.name) }}</dt>
+            <dd>{{ fld.value }}</dd>
+          {% endfor %}
+        </dl>
+      {% else %}
+        <div class="data-table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                {% for n in g.field_names %}<th scope="col">{{ t('documents.field.' ~ n) }}</th>{% endfor %}
+                {% if doc.document_type == 'lab_report' %}<th scope="col">{{ t('documents.field.flag') }}</th>{% endif %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in g.rows %}
+                <tr>
+                  {% for fld in r.fields %}
+                    <td>
+                      {{ fld.value if fld.value else t('documents.record.not_specified') }}
+                      {% if fld.corrected_value is not none and fld.corrected_value != (fld.extracted_value or '') %}
+                        <span class="badge badge--neutral">{{ t('documents.record.edited') }}</span>
+                      {% else %}
+                        {% set badge = confidence_badge(fld.confidence) %}
+                        {% if badge %}<span class="badge {{ badge.class }}">{{ badge.label }}</span>{% endif %}
+                      {% endif %}
+                    </td>
+                  {% endfor %}
+                  {% if doc.document_type == 'lab_report' %}
+                    <td class="flag-cell">{{ ds.flag(r.flag, r.flag_source) }}</td>
+                  {% endif %}
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+    </div>
+  {% endif %}
+{% endmacro %}

@@ -11,13 +11,14 @@ place" with no client state to juggle.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Annotated, Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import segno
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
@@ -130,12 +131,58 @@ def _initials(name: str) -> str:
     return "".join(p[0].upper() for p in parts[:2]) or "?"
 
 
+# ── Where to go after signing in ─────────────────────────────────────────
+# A signed-out visitor sent to the sign-in page from a deep link carries the address they wanted
+# (`?next=`); once signed in they are taken there. The value arrives from the address bar, so it is
+# honoured only if it is one of OUR pages — a path inside the signed-in areas — and never an
+# address that could lead anywhere else (`//host`, `https://host`, a backslash, control characters).
+_NEXT_ALLOWED = re.compile(r"^/(?:en|ur)/(?:patient|doctor|admin)(?:[/?]\S*)?$")
+
+
+def safe_next(value: object) -> str | None:
+    """`value` if it is a page inside a signed-in area of this site, else `None`."""
+    if not isinstance(value, str) or not value or len(value) > 512:
+        return None
+    if value.startswith("//") or "\\" in value:
+        return None
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        return None
+    return value if _NEXT_ALLOWED.match(value) else None
+
+
+def login_redirect(loc: str, request: Request) -> RedirectResponse:
+    """Send a signed-out visitor to sign in, remembering the page they asked for — a page they
+    could simply open (GET), query string and all. A form submission has nowhere to come back to."""
+    target = None
+    if request.method == "GET":
+        path = quote(request.url.path, safe="/")
+        target = safe_next(path + (f"?{request.url.query}" if request.url.query else ""))
+    suffix = f"?next={quote(target, safe='/')}" if target else ""
+    return RedirectResponse(f"/{loc}/login{suffix}", status_code=303)
+
+
 # ── Login ────────────────────────────────────────────────────────────────
 @router.get("/{locale}/login", response_class=HTMLResponse)
-async def login_page(request: Request, locale: str, actor: OptionalActorDep) -> Response:
+async def login_page(
+    request: Request,
+    locale: str,
+    actor: OptionalActorDep,
+    next_url: Annotated[str, Query(alias="next")] = "",
+) -> Response:
+    destination = safe_next(next_url)
     if actor is not None:
-        return RedirectResponse(f"/{normalise_locale(locale)}/{_area(actor.role)}", status_code=303)
-    return _render(request, "auth/login.html", locale, role="patient", values={}, errors={})
+        return RedirectResponse(
+            destination or f"/{normalise_locale(locale)}/{_area(actor.role)}", status_code=303
+        )
+    return _render(
+        request,
+        "auth/login.html",
+        locale,
+        role="patient",
+        values={},
+        errors={},
+        next_path=destination,
+    )
 
 
 @router.post("/{locale}/login")
@@ -146,9 +193,11 @@ async def login_submit(
     email: Annotated[str, Form()] = "",
     password: Annotated[str, Form()] = "",
     role: Annotated[str, Form()] = "",
+    next_url: Annotated[str, Form(alias="next")] = "",
 ) -> Response:
     loc = normalise_locale(locale)
     selected = role if role in ("patient", "doctor") else ""
+    destination = safe_next(next_url)
 
     def fail(message_key: str, code: int = 400, **params: object) -> Response:
         return _render(
@@ -156,6 +205,7 @@ async def login_submit(
             "auth/login.html",
             loc,
             status_code=code,
+            next_path=destination,
             # Keep the toggle where the user left it, so the error makes sense.
             role=selected or "patient",
             values={"email": email},
@@ -195,7 +245,7 @@ async def login_submit(
             selected=translate(f"auth.role.{selected}", loc),
         )
 
-    response = RedirectResponse(f"/{loc}/{_area(out.role)}", status_code=303)
+    response = RedirectResponse(destination or f"/{loc}/{_area(out.role)}", status_code=303)
     set_session_cookies(response, pair)
     return response
 
@@ -649,7 +699,7 @@ async def _guarded(
 
     if actor is None:
         # Preserve the destination so the user returns after signing in.
-        return RedirectResponse(f"/{loc}/login?next={request.url.path}", status_code=303)
+        return login_redirect(loc, request)
 
     if actor.role != required_role:
         # Cross-role deep link: send them to their own area rather than a raw
@@ -784,6 +834,11 @@ def _patient_nav(loc: str, *, current: str) -> list[dict[str, Any]]:
             "href": f"/{loc}/patient/access",
             "label": translate("nav.access", loc),
             "current": current == "access",
+        },
+        {
+            "href": f"/{loc}/patient/documents",
+            "label": translate("nav.documents", loc),
+            "current": current == "documents",
         },
     ]
 

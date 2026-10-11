@@ -39,6 +39,14 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def pk_date(value: datetime) -> date:
+    """The calendar date in Pakistan of a timestamp (a naive one is taken as UTC, which is
+    how every timestamp is stored). What a patient means by "the day I uploaded it"."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(PKT).date()
+
+
 def today_pk() -> date:
     """Today's calendar date in Pakistan — the reference for age and for
     "not in the future" date checks. Call it as `types.today_pk()` (module
