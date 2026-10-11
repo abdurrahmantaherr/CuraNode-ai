@@ -68,7 +68,7 @@
                         <input type="checkbox" name="checked_licence">
                         {{ t('verify.check.licence') }}
                       </label>
-                      {{ f.textarea('note', t('field.note'), rows=2, placeholder=t('field.note_placeholder'),
+                      {{ f.textarea('note', t('field.note'), rows=2, placeholder=t('field.note_placeholder'), maxlength=500,
                                     id_prefix=d.id|string ~ '-approve-') }}
                       <button class="btn btn--primary btn--sm" type="submit"
                               data-label="{{ t('verify.action.confirm_approve') }}">{{ t('verify.action.confirm_approve') }}</button>
@@ -89,7 +89,7 @@
                           {% endfor %}
                         </select>
                       </label>
-                      {{ f.textarea('note', t('field.note'), rows=2, placeholder=t('field.note_placeholder'),
+                      {{ f.textarea('note', t('field.note'), rows=2, placeholder=t('field.note_placeholder'), maxlength=500,
                                     id_prefix=d.id|string ~ '-reject-') }}
                       <button class="btn btn--danger btn--sm" type="submit"
                               data-label="{{ t('verify.action.confirm_reject') }}">{{ t('verify.action.confirm_reject') }}</button>
@@ -110,7 +110,7 @@
                           {% endfor %}
                         </select>
                       </label>
-                      {{ f.textarea('note', t('field.note'), rows=2, placeholder=t('field.note_placeholder'),
+                      {{ f.textarea('note', t('field.note'), rows=2, placeholder=t('field.note_placeholder'), maxlength=500,
                                     id_prefix=d.id|string ~ '-revoke-') }}
                       <button class="btn btn--danger btn--sm" type="submit"
                               data-label="{{ t('verify.action.confirm_revoke') }}">{{ t('verify.action.confirm_revoke') }}</button>

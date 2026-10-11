@@ -210,3 +210,40 @@ async def test_admin_register_submit_with_wrong_code_shows_an_error(client, db, 
 
 def test_catalogue_has_every_new_key_in_both_languages():
     assert missing_keys() == {"ur": []}
+
+
+async def test_wrong_code_gives_the_same_refusal_whether_or_not_the_email_exists(db, clinic):
+    # Important finding 1 — checking email before the invite code lets anyone
+    # learn whether an email has an account, for free (no valid code needed).
+    await set_code(db, clinic.id, "RIGHT-CODE-0001")
+    existing = await make_user(
+        db, email="taken@x.com", role=UserRole.CLINIC_ADMIN, clinic_id=clinic.id
+    )
+
+    body_existing = AdminRegisterRequest(
+        full_name="Someone",
+        email="taken@x.com",
+        password="CorrectHorseBattery1",
+        clinic_id=clinic.id,
+        invite_code="WRONG-CODE-0001",
+    )
+    with pytest.raises(ValidationFailed):
+        await admin_service.register_admin(db, body_existing)
+
+    body_new = AdminRegisterRequest(
+        full_name="Someone",
+        email="never-seen@x.com",
+        password="CorrectHorseBattery1",
+        clinic_id=clinic.id,
+        invite_code="WRONG-CODE-0001",
+    )
+    with pytest.raises(ValidationFailed):
+        await admin_service.register_admin(db, body_new)
+
+    # Neither attempt created a second account for the existing email.
+    count = (
+        (await db.execute(select(ClinicStaff).where(ClinicStaff.user_id == existing.id)))
+        .scalars()
+        .all()
+    )
+    assert len(count) == 1

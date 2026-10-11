@@ -38,9 +38,18 @@ _TAB_STATUS = {
 }
 
 
+_NOTE_MAX = 500
+
+
 def _require_admin(actor: Actor) -> None:
     if actor.role != UserRole.CLINIC_ADMIN.value:
         raise NotFound()
+
+
+def _check_note_length(note: str | None) -> None:
+    """Spec §3.1 — the admin's private note is capped at 500 characters."""
+    if note is not None and len(note) > _NOTE_MAX:
+        raise ValidationFailed({"fields": {"note": "errors.text_too_long"}})
 
 
 async def _doctor_in_clinic(session: AsyncSession, actor: Actor, doctor_id: uuid.UUID) -> Doctor:
@@ -55,6 +64,9 @@ async def _doctor_in_clinic(session: AsyncSession, actor: Actor, doctor_id: uuid
                 DoctorAffiliation.clinic_id.in_(actor.clinic_ids),
                 DoctorAffiliation.status == "active",
             )
+            # An admin of two clinics, a doctor active at both: that join
+            # matches two affiliation rows for one doctor (finding 3).
+            .distinct()
         )
     ).scalar_one_or_none()
     if doctor is None:
@@ -142,6 +154,7 @@ async def approve(
     _require_admin(actor)
     if not (checked_number and checked_name and checked_licence):
         raise ValidationFailed({"fields": {"checklist": "errors.checklist_required"}})
+    _check_note_length(note)
     doctor = await _doctor_in_clinic(session, actor, doctor_id)
     doctor.verification_status = VerificationStatus.VERIFIED
     doctor.verified_by = actor.user_id
@@ -176,6 +189,7 @@ async def _reject_or_revoke(
         raise ValidationFailed({"fields": {"reason": "errors.choice_invalid"}})
     if reason == "other" and not (note or "").strip():
         raise ValidationFailed({"fields": {"note": "errors.text_required"}})
+    _check_note_length(note)
     doctor = await _doctor_in_clinic(session, actor, doctor_id)
     doctor.verification_status = VerificationStatus.REJECTED
     doctor.verified_by = None

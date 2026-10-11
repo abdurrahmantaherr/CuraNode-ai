@@ -487,3 +487,83 @@ async def test_a_patient_or_doctor_cannot_reach_the_admin_dashboard(client, db):
     await login(client, "pat@x.com")
     r = await client.get(ADMIN_URL)
     assert r.status_code == 303 and r.headers["location"] == "/en/patient"
+
+
+async def test_approve_note_over_500_chars_is_refused(db, admin, pending_doctor):
+    # Important finding 2 — spec §3.1 caps the note at 500 characters.
+    with pytest.raises(ValidationFailed):
+        await verification_service.approve(
+            db,
+            admin,
+            pending_doctor.id,
+            checked_number=True,
+            checked_name=True,
+            checked_licence=True,
+            note="x" * 501,
+        )
+
+
+async def test_reject_note_over_500_chars_is_refused(db, admin, pending_doctor):
+    with pytest.raises(ValidationFailed):
+        await verification_service.reject(
+            db,
+            admin,
+            pending_doctor.id,
+            reason="other",
+            note="x" * 501,
+        )
+
+
+async def test_note_of_exactly_500_chars_is_accepted(db, admin, pending_doctor):
+    await verification_service.approve(
+        db,
+        admin,
+        pending_doctor.id,
+        checked_number=True,
+        checked_name=True,
+        checked_licence=True,
+        note="x" * 500,
+    )
+
+
+async def test_admin_of_two_clinics_can_act_on_a_doctor_shared_by_both(
+    db, pending_doctor, clinic, other_clinic
+):
+    # Important finding 3 — _doctor_in_clinic used scalar_one_or_none(),
+    # which raises MultipleResultsFound when the join matches two affiliation
+    # rows (an admin of two clinics, a doctor active at both).
+    from app.db.models import DoctorAffiliation
+
+    user = await make_user(
+        db, email="multi-admin@x.com", role=UserRole.CLINIC_ADMIN, clinic_id=clinic.id
+    )
+    db.add(
+        DoctorAffiliation(
+            id=uuid7(),
+            doctor_id=pending_doctor.id,
+            clinic_id=other_clinic.id,
+            start_date=utcnow().date(),
+            status="active",
+        )
+    )
+    await db.commit()
+    multi_admin = as_admin(user, [clinic.id, other_clinic.id])
+
+    await verification_service.approve(
+        db,
+        multi_admin,
+        pending_doctor.id,
+        checked_number=True,
+        checked_name=True,
+        checked_licence=True,
+        note=None,
+    )
+
+    row = (
+        await db.execute(
+            select(Doctor)
+            .where(Doctor.id == pending_doctor.id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    assert row.verification_status == VerificationStatus.VERIFIED

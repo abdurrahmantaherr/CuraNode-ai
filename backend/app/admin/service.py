@@ -63,10 +63,26 @@ async def register_admin(
     ip: str | None = None,
     user_agent: str | None = None,
 ) -> tuple[SessionOut, security.TokenPair | None]:
+    # The invite code is checked BEFORE the duplicate-email lookup. Unlike
+    # patient/doctor self-registration, this gate costs an attacker nothing
+    # to probe (no account creation needed), so a wrong code must refuse
+    # identically whether or not the email has an account — otherwise the
+    # duplicate-email shape below becomes a free email-enumeration oracle.
+    invite = (
+        await session.execute(
+            select(ClinicInviteCode).where(
+                ClinicInviteCode.clinic_id == body.clinic_id, ClinicInviteCode.is_active.is_(True)
+            )
+        )
+    ).scalar_one_or_none()
+    if invite is None or not verify_code(body.invite_code, invite.code_hash):
+        raise ValidationFailed({"fields": {"invite_code": "errors.invite_code_invalid"}})
+
     existing = await _user_by_email(session, body.email)
     if existing is not None:
         # Same enumeration guard as identity/service.py::register — identical
-        # shape, no row, no cookies, Supabase never called.
+        # shape, no row, no cookies, Supabase never called. Reached only with
+        # a valid code, so it costs an attacker a real clinic's code to probe.
         return (
             SessionOut(
                 user_id=uuid7(),
@@ -79,16 +95,6 @@ async def register_admin(
             ),
             None,
         )
-
-    invite = (
-        await session.execute(
-            select(ClinicInviteCode).where(
-                ClinicInviteCode.clinic_id == body.clinic_id, ClinicInviteCode.is_active.is_(True)
-            )
-        )
-    ).scalar_one_or_none()
-    if invite is None or not verify_code(body.invite_code, invite.code_hash):
-        raise ValidationFailed({"fields": {"invite_code": "errors.invite_code_invalid"}})
 
     client = await security.get_supabase_client()
     created = await client.auth.admin.create_user(
