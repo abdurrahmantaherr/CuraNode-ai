@@ -146,9 +146,10 @@ def test_ac29_revision_chain_is_single_and_unbroken():
     config = Config()
     config.set_main_option("script_location", str(ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["291c06a2b86f"]
+    assert script.get_heads() == ["a7d3c89106f9"]
     chain = [rev.revision for rev in script.walk_revisions("base", "heads")]
     assert chain == [
+        "a7d3c89106f9",  # D-VERIFY v1
         "291c06a2b86f",  # D7
         "dba968144fb4",
         "e3a52c8d7f14",  # the OCR codebase's real file
@@ -176,7 +177,9 @@ def test_ac29_placeholder_upgrade_is_noop_and_downgrade_refuses():
 
 
 def _load_revision(filename: str):
-    spec = importlib.util.spec_from_file_location(filename, ROOT / "alembic" / "versions" / filename)
+    spec = importlib.util.spec_from_file_location(
+        filename, ROOT / "alembic" / "versions" / filename
+    )
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
