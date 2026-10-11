@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.db.models import UserRole
-from app.i18n.catalogue import translate
+from app.i18n.catalogue import missing_keys, translate
 from markupsafe import escape
 
 from tests.conftest import TEST_PASSWORD, make_user
@@ -206,3 +206,7 @@ async def test_admin_register_submit_with_wrong_code_shows_an_error(client, db, 
     )
     assert r.status_code == 422
     assert "cn_access" not in r.cookies
+
+
+def test_catalogue_has_every_new_key_in_both_languages():
+    assert missing_keys() == {"ur": []}
