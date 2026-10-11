@@ -1,6 +1,6 @@
 """Actor resolution and role gates (TDD 7.2).
 
-Exactly four dependencies exist, and **no endpoint anywhere may perform an
+Exactly five dependencies exist, and **no endpoint anywhere may perform an
 ad-hoc role check**. Centralising it here is what makes the authorisation model
 reviewable in one place instead of twenty.
 
@@ -157,11 +157,16 @@ async def require_verified_doctor(
 # cache resolves it once even when a route and its rate-limit dependency both
 # ask for a patient.
 _require_patient = require_role("patient")
+# Any doctor, verified or pending (D7). Only for features that expose no
+# patient data — the doctor's own schedule. Everything clinical stays behind
+# `VerifiedDoctorDep`.
+_require_doctor = require_role("doctor")
 
 ActorDep = Annotated[Actor, Depends(current_actor)]
 OptionalActorDep = Annotated[Actor | None, Depends(optional_actor)]
 PatientDep = Annotated[Actor, Depends(_require_patient)]
 VerifiedDoctorDep = Annotated[Actor, Depends(require_verified_doctor)]
+DoctorDep = Annotated[Actor, Depends(_require_doctor)]
 ClinicAdminDep = Annotated[Actor, Depends(require_role("admin"))]
 
 
@@ -208,3 +213,28 @@ async def enforce_consent_write_rate_limit(actor: PatientDep) -> None:
 
 
 ConsentWriteRateLimit = Depends(enforce_consent_write_rate_limit)
+
+
+# ── Grantee search budget (P9) ───────────────────────────────────────────
+async def check_consent_search_rate(actor: Actor) -> None:
+    """Counts one grantee search. Shared by the API and the access page."""
+    count = await cache.incr(ratelimit_key("consent_search", str(actor.user_id)), 60)
+    if count > settings.consent_search_rate_limit_per_minute:
+        raise RateLimited(retry_after_s=60)
+
+
+async def enforce_consent_search_rate_limit(actor: PatientDep) -> None:
+    """Depends on PatientDep so 401/403 surface before 429."""
+    await check_consent_search_rate(actor)
+
+
+ConsentSearchRateLimit = Depends(enforce_consent_search_rate_limit)
+
+
+# ── Doctor schedule write budget (D7) ────────────────────────────────────
+async def check_schedule_write_rate(actor: Actor) -> None:
+    """Counts one schedule write attempt by a doctor. Called by every schedule
+    POST handler (D7 has no JSON API, so there is no dependency wrapper)."""
+    count = await cache.incr(ratelimit_key("schedule_write", str(actor.user_id)), 60)
+    if count > settings.schedule_write_rate_limit_per_minute:
+        raise RateLimited(retry_after_s=60)

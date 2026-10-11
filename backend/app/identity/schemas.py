@@ -15,13 +15,14 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 Role = Literal["patient", "doctor", "admin"]
 Locale = Literal["en", "ur"]
 
 PASSWORD_MIN = 10
 PASSWORD_MAX = 128
+MAX_CLINICS = 10  # hospitals/clinics a doctor can pick when creating their profile
 
 
 def _normalise_email(value: str) -> str:
@@ -54,13 +55,37 @@ class PatientRegisterRequest(_RegisterBase):
     role: Literal["patient"] = "patient"
 
 
-class DoctorRegisterRequest(_RegisterBase):
+class _DoctorClinics(BaseModel):
+    """The hospitals/clinics a new doctor works at: one affiliation each.
+
+    `clinic_ids` is the list (the web forms send it). `primary_clinic_id` is
+    kept for API callers written before a doctor could pick more than one; the
+    two are combined, de-duplicated in order, and must give 1 to MAX_CLINICS.
+    """
+
+    primary_clinic_id: uuid.UUID | None = None
+    clinic_ids: list[uuid.UUID] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _at_least_one_clinic(self) -> _DoctorClinics:
+        if not self.all_clinic_ids:
+            raise ValueError("errors.doctor_fields_required")
+        if len(self.all_clinic_ids) > MAX_CLINICS:
+            raise ValueError("errors.too_many_clinics")
+        return self
+
+    @property
+    def all_clinic_ids(self) -> list[uuid.UUID]:
+        first = [self.primary_clinic_id] if self.primary_clinic_id else []
+        return list(dict.fromkeys(first + list(self.clinic_ids)))
+
+
+class DoctorRegisterRequest(_DoctorClinics, _RegisterBase):
     """FR3 — creates the account only. Verification is a clinic admin's act."""
 
     role: Literal["doctor"]
     pmdc_number: str = Field(min_length=3, max_length=32)
     specialty: str = Field(min_length=2, max_length=80)
-    primary_clinic_id: uuid.UUID
 
 
 RegisterRequest = Annotated[
@@ -87,11 +112,10 @@ class PatientOnboardingRequest(_OnboardingBase):
     role: Literal["patient"] = "patient"
 
 
-class DoctorOnboardingRequest(_OnboardingBase):
+class DoctorOnboardingRequest(_DoctorClinics, _OnboardingBase):
     role: Literal["doctor"]
     pmdc_number: str = Field(min_length=3, max_length=32)
     specialty: str = Field(min_length=2, max_length=80)
-    primary_clinic_id: uuid.UUID
 
 
 OnboardingRequest = Annotated[

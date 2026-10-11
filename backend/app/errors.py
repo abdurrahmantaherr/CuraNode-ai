@@ -89,6 +89,13 @@ class NotFound(AppError):
     retryable = False
 
 
+class ConsentDenied(NotFound):
+    """The consent gateway's refusal (P9 BL-16). A `NotFound` in every way the
+    caller can observe (same code, status and envelope), so a doctor can't
+    tell "not shared with you" from "no such patient" (D2). The subclass
+    exists only so code and tests can name the reason."""
+
+
 class NotEditable(AppError):
     """The caller owns the patient record but not this entry — it was recorded
     by someone else (a clinician, or a legacy row). Kept separate from
@@ -115,6 +122,19 @@ class ListFull(AppError):
 
     def __init__(self, max_entries: int) -> None:
         super().__init__({"max": max_entries})
+
+
+class ScheduleConflict(AppError):
+    """A doctor's schedule window would overlap another of their windows
+    (D7 R1, R1b, R4, R4b). The pure engine reports conflicts as plain data;
+    the schedule service raises this. Scalar `details` (`clinic`, `day`,
+    `start`, `end`, `conflict_id`) name the conflicting window and fill the
+    message placeholders."""
+
+    code = "SCHEDULE_CONFLICT"
+    http_status = status.HTTP_409_CONFLICT
+    message_key = "errors.schedule_overlap"
+    retryable = False
 
 
 def message_params(exc: AppError) -> dict[str, Any]:

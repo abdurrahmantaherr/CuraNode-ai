@@ -25,7 +25,7 @@ import uuid
 from datetime import timedelta
 
 import pytest
-from app.db.models import AuditLog, ConsentGrant, Doctor, Patient, Profile, UserRole
+from app.db.models import AuditLog, Clinic, ConsentGrant, Doctor, Patient, Profile, UserRole
 from app.db.types import utcnow, uuid7
 from app.settings import settings
 from sqlalchemy import select
@@ -33,6 +33,8 @@ from sqlalchemy import select
 from tests.conftest import TEST_PASSWORD, make_user
 
 URL = "/api/v1/me/consents"
+# P9: every grant names at least one section.
+SEC = {"sections": ["allergies", "basics"]}
 ENDPOINTS = [("GET", URL), ("POST", URL), ("DELETE", f"{URL}/{uuid.uuid4()}")]
 WRITES = [("POST", URL), ("DELETE", f"{URL}/{uuid.uuid4()}")]
 
@@ -141,15 +143,17 @@ async def test_t1_profile_shows_passport_no(client, db, patient_user):
 # ── T2 — grant by PMDC number ────────────────────────────────────────────
 async def test_t2_grant_by_pmdc(client, db, patient_user, verified_doctor):
     patient = await patient_of(db, patient_user)
-    r = await client.post(URL, json={"pmdc_number": f"  {verified_doctor.pmdc_number} "})
+    r = await client.post(URL, json={**SEC, "pmdc_number": f"  {verified_doctor.pmdc_number} "})
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["grantee_type"] == "doctor"
     assert body["grantee_id"] == str(verified_doctor.id)
     assert body["grantee_name"] == verified_doctor.full_name
     assert body["patient_id"] == str(patient.id)
-    assert body["scope_sections"] == []
-    assert body["expires_at"] is None and body["revoked_at"] is None
+    # P9: the sections chosen, in canonical order; 30 days by default.
+    assert body["scope_sections"] == body["sections"] == ["basics", "allergies"]
+    assert body["expires_at"] is not None and body["revoked_at"] is None
+    assert body["active"] is True
 
     row = await fresh(db, ConsentGrant, uuid.UUID(body["id"]))
     assert row.patient_id == patient.id and row.revoked_at is None
@@ -164,6 +168,8 @@ async def test_t2_grant_by_pmdc(client, db, patient_user, verified_doctor):
         "resource_id": body["id"],
         "grantee_type": "doctor",
         "grantee_id": str(verified_doctor.id),
+        "sections": ["basics", "allergies"],
+        "expires_at": body["expires_at"].replace("Z", "+00:00"),
     }
 
 
@@ -174,13 +180,13 @@ async def test_t2_no_grant_detail_in_logs(
 
     patient = await patient_of(db, patient_user)
     with structlog.testing.capture_logs() as captured:
-        gid = (await client.post(URL, json={"pmdc_number": verified_doctor.pmdc_number})).json()[
-            "id"
-        ]
-        await client.post(URL, json={"clinic_name": clinic.name})
+        gid = (
+            await client.post(URL, json={**SEC, "pmdc_number": verified_doctor.pmdc_number})
+        ).json()["id"]
+        await client.post(URL, json={**SEC, "clinic_name": clinic.name})
         await client.get(URL)
         await client.delete(f"{URL}/{gid}")
-        await client.post(URL, json={"pmdc_number": "ZZ-UNKNOWN-PMDC"})
+        await client.post(URL, json={**SEC, "pmdc_number": "ZZ-UNKNOWN-PMDC"})
     dumped = json.dumps(captured, default=str) + caplog.text
     for v in (verified_doctor.pmdc_number, clinic.name, patient.passport_no, "ZZ-UNKNOWN-PMDC"):
         assert v not in dumped
@@ -192,7 +198,7 @@ async def test_t2_no_grant_detail_in_logs(
 
 # ── T3 — grant by clinic name ────────────────────────────────────────────
 async def test_t3_grant_by_clinic_name(client, db, patient_user, clinic):
-    r = await client.post(URL, json={"clinic_name": clinic.name.upper()})
+    r = await client.post(URL, json={**SEC, "clinic_name": clinic.name.upper()})
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["grantee_type"] == "clinic"
@@ -200,14 +206,19 @@ async def test_t3_grant_by_clinic_name(client, db, patient_user, clinic):
     assert body["grantee_name"] == clinic.name
     assert len(await audit_rows(db, "consent.grant")) == 1
 
-    missing = await client.post(URL, json={"clinic_name": "No Such Clinic"})
+    missing = await client.post(URL, json={**SEC, "clinic_name": "No Such Clinic"})
     assert missing.status_code == 404
     assert len(await audit_rows(db)) == 1
 
 
 @pytest.mark.parametrize(
     "body",
-    [{}, {"pmdc_number": "x", "clinic_name": "y"}, {"pmdc_number": "   "}, {"grantee_id": "x"}],
+    [
+        SEC,
+        {**SEC, "pmdc_number": "x", "clinic_name": "y"},
+        {**SEC, "pmdc_number": "   "},
+        {**SEC, "grantee_id": "x"},
+    ],
 )
 async def test_t3_grant_body_needs_exactly_one_grantee(client, db, patient_user, body):
     r = await client.post(URL, json=body)
@@ -245,11 +256,16 @@ async def test_t4_list_active_grants(
         grantee_id=verified_doctor.id,
         revoked_at=now - timedelta(hours=1),
     )
+    # P9: one unrevoked grant per grantee is now a DB constraint, so the
+    # expired grant names a second clinic.
+    lapsed_clinic = Clinic(id=uuid7(), name="Lapsed Clinic", type="clinic")
+    db.add(lapsed_clinic)
+    await db.commit()
     await grant_row(
         db,
         patient.id,
         grantee_type="clinic",
-        grantee_id=clinic.id,
+        grantee_id=lapsed_clinic.id,
         expires_at=now - timedelta(hours=1),
     )
     await grant_row(db, other.id, grantee_type="clinic", grantee_id=clinic.id)
@@ -269,7 +285,9 @@ async def test_t4_list_empty(client, db, patient_user):
 
 # ── T5 — revoke ──────────────────────────────────────────────────────────
 async def test_t5_revoke_grant(client, db, patient_user, verified_doctor):
-    gid = (await client.post(URL, json={"pmdc_number": verified_doctor.pmdc_number})).json()["id"]
+    gid = (await client.post(URL, json={**SEC, "pmdc_number": verified_doctor.pmdc_number})).json()[
+        "id"
+    ]
     r = await client.delete(f"{URL}/{gid}")
     assert r.status_code == 204
     assert r.content == b""
@@ -284,7 +302,7 @@ async def test_t5_revoke_grant(client, db, patient_user, verified_doctor):
     assert json.loads(revoke.detail)["resource_id"] == gid
 
     # Re-granting after a revoke creates a new row; it doesn't resurrect the old one.
-    again = await client.post(URL, json={"pmdc_number": verified_doctor.pmdc_number})
+    again = await client.post(URL, json={**SEC, "pmdc_number": verified_doctor.pmdc_number})
     assert again.status_code == 201
     assert again.json()["id"] != gid
     assert (await fresh(db, ConsentGrant, uuid.UUID(gid))).revoked_at is not None
@@ -292,7 +310,9 @@ async def test_t5_revoke_grant(client, db, patient_user, verified_doctor):
 
 # ── T6 — repeat revoke is a no-op ────────────────────────────────────────
 async def test_t6_revoke_twice_is_idempotent(client, db, patient_user, verified_doctor):
-    gid = (await client.post(URL, json={"pmdc_number": verified_doctor.pmdc_number})).json()["id"]
+    gid = (await client.post(URL, json={**SEC, "pmdc_number": verified_doctor.pmdc_number})).json()[
+        "id"
+    ]
     assert (await client.delete(f"{URL}/{gid}")).status_code == 204
     first = (await fresh(db, ConsentGrant, uuid.UUID(gid))).revoked_at
 
@@ -325,11 +345,17 @@ async def test_t8_non_patient_gets_403(
 
 # ── T9 — one active grant per grantee ────────────────────────────────────
 async def test_t9_duplicate_active_grant(client, db, patient_user, verified_doctor, clinic):
-    for body in ({"pmdc_number": verified_doctor.pmdc_number}, {"clinic_name": clinic.name}):
-        assert (await client.post(URL, json=body)).status_code == 201
-        dup = await client.post(URL, json=body)
-        assert dup.status_code == 409
-        assert dup.json()["error"]["code"] == "DUPLICATE_ENTRY"
+    # P9 BL-05: a repeat grant returns the existing one, unchanged (was 409).
+    for body in (
+        {**SEC, "pmdc_number": verified_doctor.pmdc_number},
+        {**SEC, "clinic_name": clinic.name},
+    ):
+        first = await client.post(URL, json=body)
+        assert first.status_code == 201
+        dup = await client.post(URL, json={**body, "sections": ["visits"]})
+        assert dup.status_code == 200
+        assert dup.json()["id"] == first.json()["id"]
+        assert dup.json()["sections"] == first.json()["sections"]  # not ["visits"]
 
     rows = await db.execute(select(ConsentGrant).execution_options(populate_existing=True))
     assert len(rows.scalars().all()) == 2
@@ -338,20 +364,26 @@ async def test_t9_duplicate_active_grant(client, db, patient_user, verified_doct
 
 async def test_t9_expired_grant_does_not_block(client, db, patient_user, verified_doctor):
     patient = await patient_of(db, patient_user)
-    await grant_row(
-        db,
-        patient.id,
-        grantee_type="doctor",
-        grantee_id=verified_doctor.id,
-        expires_at=utcnow() - timedelta(minutes=1),
-    )
-    r = await client.post(URL, json={"pmdc_number": verified_doctor.pmdc_number})
+    lapsed_id = (
+        await grant_row(
+            db,
+            patient.id,
+            grantee_type="doctor",
+            grantee_id=verified_doctor.id,
+            expires_at=utcnow() - timedelta(minutes=1),
+        )
+    ).id
+    r = await client.post(URL, json={**SEC, "pmdc_number": verified_doctor.pmdc_number})
     assert r.status_code == 201
+    # P9 BL-06: the lapsed grant is closed and points at its successor.
+    lapsed = await fresh(db, ConsentGrant, lapsed_id)
+    assert lapsed.revoked_at is not None
+    assert str(lapsed.replaced_by) == r.json()["id"]
 
 
 # ── T10 — unknown PMDC ───────────────────────────────────────────────────
 async def test_t10_unknown_pmdc_is_404(client, db, patient_user):
-    r = await client.post(URL, json={"pmdc_number": "NO-SUCH-PMDC"})
+    r = await client.post(URL, json={**SEC, "pmdc_number": "NO-SUCH-PMDC"})
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "NOT_FOUND"
     assert await audit_rows(db) == []
@@ -359,8 +391,8 @@ async def test_t10_unknown_pmdc_is_404(client, db, patient_user):
 
 # ── T11 — unverified PMDC ≡ unknown PMDC ─────────────────────────────────
 async def test_t11_unverified_pmdc_indistinguishable(client, db, patient_user, unverified_doctor):
-    unverified = await client.post(URL, json={"pmdc_number": unverified_doctor.pmdc_number})
-    unknown = await client.post(URL, json={"pmdc_number": "NO-SUCH-PMDC"})
+    unverified = await client.post(URL, json={**SEC, "pmdc_number": unverified_doctor.pmdc_number})
+    unknown = await client.post(URL, json={**SEC, "pmdc_number": "NO-SUCH-PMDC"})
     assert unverified.status_code == unknown.status_code == 404
     assert body_without_request_id(unverified) == body_without_request_id(unknown)
     assert await audit_rows(db) == []
@@ -409,10 +441,12 @@ async def test_t13_malformed_grant_id_is_422(client, db, patient_user):
 # ── T14 — write rate limit ───────────────────────────────────────────────
 async def test_t14_write_rate_limit(client, db, patient_user, second_patient, verified_doctor):
     assert settings.consent_write_rate_limit_per_minute == 10
-    gid = (await client.post(URL, json={"pmdc_number": verified_doctor.pmdc_number})).json()["id"]
+    gid = (await client.post(URL, json={**SEC, "pmdc_number": verified_doctor.pmdc_number})).json()[
+        "id"
+    ]
     for _ in range(9):
         assert (await client.delete(f"{URL}/{gid}")).status_code == 204
-    r = await client.post(URL, json={"pmdc_number": verified_doctor.pmdc_number})
+    r = await client.post(URL, json={**SEC, "pmdc_number": verified_doctor.pmdc_number})
     assert r.status_code == 429
     assert r.json()["error"]["code"] == "RATE_LIMITED"
     assert r.headers["retry-after"] == "60"
@@ -423,5 +457,5 @@ async def test_t14_write_rate_limit(client, db, patient_user, second_patient, ve
     assert (await client.patch("/api/v1/me/profile", json={"blood_group": "O+"})).status_code == 200
     await login(client, "other@x.com")
     assert (
-        await client.post(URL, json={"pmdc_number": verified_doctor.pmdc_number})
+        await client.post(URL, json={**SEC, "pmdc_number": verified_doctor.pmdc_number})
     ).status_code == 201

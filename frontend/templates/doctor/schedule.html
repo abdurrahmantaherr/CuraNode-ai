@@ -1,0 +1,383 @@
+{% extends "base.html" %}
+{#- Doctor schedule (D7). Any doctor, verified or pending. Every control works
+    without JavaScript: forms post and redirect (PRG), Edit is a link, Remove
+    is a two-step <details> confirmation. schedule.js only pre-fills the
+    patients-per-session field and adds the submitting-state guard.
+
+    Context (built in web/router.py::_render_schedule):
+      days           seven {label, date, past, today, blocks[]} for the week
+      legend         [{name, colour}] every affiliated clinic
+      slots          weekly slots with display strings, `locked`, `inactive`
+      exceptions     upcoming time off and extra hours, effective caps
+      form_state     the form that failed, or None: {form, values, errors, banner}
+      saved          success banner text, or None
+      edit_id        the slot in edit mode, or None
+      can_add        False when the doctor has no live clinic -#}
+{% import "partials/form_field.html" as f %}
+
+{% block title %}{{ t('schedule.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+{%- macro failed(key) -%}{{ 'yes' if form_state and form_state.form == key else '' }}{%- endmacro -%}
+
+{%- macro form_banner(key) -%}
+  {% if form_state and form_state.form == key and form_state.banner %}
+    <div class="banner banner--error" role="alert">
+      <span aria-hidden="true">!</span><span>{{ form_state.banner }}</span>
+    </div>
+  {% endif %}
+{%- endmacro -%}
+
+{#- Clinic, times, minutes per patient and patients per session: shared by the
+    add form and the edit form. -#}
+{%- macro slot_fields(values, errors, prefix, calc=None) -%}
+  {{ f.select('clinic_id', t('schedule.clinic'), clinic_options,
+              value=values.get('clinic_id', ''), errors=errors, id_prefix=prefix) }}
+  {{ f.field('start_time', t('schedule.start'), type='time', value=values.get('start_time', ''),
+             errors=errors, required=True, dir='ltr', id_prefix=prefix) }}
+  {{ f.field('end_time', t('schedule.end'), type='time', value=values.get('end_time', ''),
+             errors=errors, required=True, dir='ltr', id_prefix=prefix) }}
+  {{ f.select('slot_minutes', t('schedule.slot_minutes'), minutes_options,
+              value=values.get('slot_minutes', '15') or '15', errors=errors, id_prefix=prefix) }}
+  <label class="field" for="{{ prefix }}f-max_tokens">
+    <span class="field-label">{{ t('schedule.max_tokens') }}</span>
+    <input class="input" id="{{ prefix }}f-max_tokens" name="max_tokens" type="number"
+           min="1" max="{{ max_tokens_max }}" inputmode="numeric" dir="ltr"
+           value="{{ values.get('max_tokens', '') }}" data-max-tokens
+           {% if errors.get('max_tokens') %}aria-invalid="true" aria-describedby="{{ prefix }}e-max_tokens"{% endif %}>
+    <span class="field-help">{{ t('schedule.max_tokens_help') }} {{ t('schedule.max_tokens_blank_help') }}</span>
+    {% if calc is not none %}
+      <span class="field-help">{{ t('schedule.max_tokens_calc', count=calc) }}</span>
+    {% endif %}
+    {% if errors.get('max_tokens') %}
+      <span class="field-error" id="{{ prefix }}e-max_tokens" role="alert">
+        <span aria-hidden="true">!</span>{{ errors.get('max_tokens') }}
+      </span>
+    {% endif %}
+  </label>
+{%- endmacro -%}
+
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    {% if page_error %}
+      <div class="banner banner--error" role="alert">
+        <span aria-hidden="true">!</span><span>{{ page_error }}</span>
+      </div>
+    {% endif %}
+    {% if saved %}
+      <div class="banner banner--ok" role="status"><span>{{ saved }}</span></div>
+    {% endif %}
+
+    {#- The week -#}
+    <section class="panel stack" id="week" aria-labelledby="week-h">
+      <div class="identity">
+        <div class="avatar" aria-hidden="true">{{ initials }}</div>
+        <div class="identity__main">
+          <h1 id="week-h" class="entry-row__title">{{ week_label }}</h1>
+          <p class="lead">{{ t('schedule.subtitle') }}</p>
+        </div>
+      </div>
+
+      <div class="week-tools">
+        <nav class="week-nav" aria-label="{{ week_label }}">
+          <a class="btn btn--secondary btn--sm" href="{{ prev_week }}">{{ t('schedule.prev_week') }}</a>
+          <a class="btn btn--secondary btn--sm" href="{{ this_week }}">{{ t('schedule.this_week') }}</a>
+          <a class="btn btn--secondary btn--sm" href="{{ next_week }}">{{ t('schedule.next_week') }}</a>
+        </nav>
+        <form class="week-filter" method="get" action="/{{ locale }}/doctor/schedule">
+          <input type="hidden" name="week" value="{{ week_value }}">
+          {{ f.select('clinic', t('schedule.filter_label'), filter_options, value=clinic_filter,
+                      placeholder=t('schedule.filter_all'), id_prefix='filter-') }}
+          <button class="btn btn--secondary btn--sm" type="submit">{{ t('schedule.filter_apply') }}</button>
+        </form>
+      </div>
+
+      {% if legend %}
+        <ul class="legend" aria-label="{{ t('schedule.legend') }}">
+          {% for c in legend %}
+            <li class="legend__item {{ c.colour }}"><span class="legend__dot" aria-hidden="true"></span>{{ c.name }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+
+      <ol class="week">
+        {% for d in days %}
+          <li class="week__day{% if d.past %} week__day--past{% endif %}{% if d.today %} week__day--today{% endif %}">
+            <div class="week__head">
+              <span class="week__name">{{ d.label }}</span>
+              <span class="mono" dir="ltr">{{ d.date }}</span>
+            </div>
+            {% if d.past %}
+              <p class="week__empty">{{ t('schedule.day_past') }}</p>
+            {% elif d.blocks %}
+              {% for b in d.blocks %}
+                <div class="slot-block {{ b.colour }}">
+                  <div class="slot-block__time" dir="ltr">{{ b.start }}–{{ b.end }}</div>
+                  <div class="slot-block__clinic">{{ b.clinic }}</div>
+                  <div class="slot-block__cap">{{ b.capacity }}</div>
+                  {% if b.extra %}<span class="badge badge--neutral">{{ t('schedule.extra_badge') }}</span>{% endif %}
+                </div>
+              {% endfor %}
+            {% else %}
+              <p class="week__empty">{{ t('schedule.day_off') }}</p>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ol>
+    </section>
+
+    {#- Your hospitals: every link, and adding more (active at once, exactly
+        like the hospitals picked at sign-up). -#}
+    <section class="panel stack" id="hospitals" aria-labelledby="hospitals-h">
+      <h2 id="hospitals-h" class="panel__label">{{ t('schedule.hospitals_title') }}</h2>
+      {% if hospitals %}
+        <ul class="legend" aria-label="{{ t('schedule.hospitals_title') }}">
+          {% for h in hospitals %}
+            <li class="legend__item {{ h.colour }}">
+              <span class="legend__dot" aria-hidden="true"></span>{{ h.name }}
+              {% if h.state == 'linked' %}<span class="badge badge--ok">{{ t('schedule.hospital_linked') }}</span>
+              {% else %}<span class="badge badge--neutral">{{ t('schedule.hospital_ended') }}</span>{% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+
+      {% set hosp_failed = failed('hospitals') %}
+      {% set hv = form_state['values'] if hosp_failed else {} %}
+      {% set he = form_state['errors'] if hosp_failed else {} %}
+      {% if hospital_options %}
+        <form class="stack" method="post" action="/{{ locale }}/doctor/schedule/hospitals" novalidate>
+          <fieldset class="field">
+            <legend class="field-label">{{ t('schedule.add_hospitals_title') }}</legend>
+            <span class="field-help">{{ t('schedule.add_hospitals_help') }}</span>
+            <div class="section-checks">
+              {% for c in hospital_options %}
+                <label class="section-check">
+                  <input type="checkbox" name="clinic_ids" value="{{ c.value }}"
+                         {% if c.value in (hv.get('clinic_ids') or []) %}checked{% endif %}>
+                  <span>{{ c.label }}</span>
+                </label>
+              {% endfor %}
+            </div>
+            {% if he.get('clinic_ids') %}
+              <span class="field-error" role="alert"><span aria-hidden="true">!</span>{{ he.get('clinic_ids') }}</span>
+            {% endif %}
+          </fieldset>
+          <div>
+            <button class="btn btn--primary btn--sm" type="submit"
+                    data-label="{{ t('schedule.add_hospitals_submit') }}">{{ t('schedule.add_hospitals_submit') }}</button>
+          </div>
+        </form>
+      {% else %}
+        {% if he.get('clinic_ids') %}
+          <span class="field-error" role="alert"><span aria-hidden="true">!</span>{{ he.get('clinic_ids') }}</span>
+        {% endif %}
+        <p class="muted-note">{{ t('schedule.add_hospitals_none') }}</p>
+      {% endif %}
+    </section>
+
+    {#- Weekly hours -#}
+    <section class="panel stack" id="slots" aria-labelledby="slots-h">
+      <h2 id="slots-h" class="panel__label">{{ t('schedule.slots_title') }}</h2>
+      {{ form_banner('slots') }}
+
+      {% if slots %}
+        <ul class="entry-list">
+          {% for s in slots %}
+            {% set key = 'slot-' ~ s.id %}
+            {% if edit_id == s.id or failed(key) %}
+              {% set vals = form_state['values'] if failed(key) else s['values'] %}
+              {% set errs = form_state['errors'] if failed(key) else {} %}
+              <li class="entry-row {{ s.colour }}">
+                <form class="entry-form stack" method="post"
+                      action="/{{ locale }}/doctor/schedule/slots/{{ s.id }}" novalidate>
+                  {{ form_banner(key) }}
+                  <div class="grid-2">
+                    {{ f.select('weekday', t('schedule.weekday'), weekday_options,
+                                value=vals.get('weekday', ''), errors=errs, id_prefix=key ~ '-') }}
+                    {{ slot_fields(vals, errs, key ~ '-', calc=s.calc) }}
+                  </div>
+                  <div class="entry-row__actions">
+                    <button class="btn btn--primary btn--sm" type="submit"
+                            data-label="{{ t('schedule.save') }}">{{ t('schedule.save') }}</button>
+                    <a class="btn btn--secondary btn--sm" href="/{{ locale }}/doctor/schedule#slots">{{ t('schedule.cancel') }}</a>
+                  </div>
+                </form>
+              </li>
+            {% else %}
+              <li class="entry-row {{ s.colour }}">
+                <div class="entry-row__main">
+                  <div class="entry-row__title"><span>{{ s.day }}</span> <span dir="ltr">{{ s.start }}–{{ s.end }}</span></div>
+                  <div class="mono">{{ s.clinic }} · {{ s.meta }}</div>
+                </div>
+                {% if s.inactive %}<span class="badge badge--warn">{{ t('schedule.inactive_clinic') }}</span>{% endif %}
+                {% if s.locked %}
+                  <span class="chip">{{ t('schedule.locked_by_bookings') }}</span>
+                {% else %}
+                  <div class="entry-row__actions">
+                    {% if not s.inactive %}
+                      <a class="btn btn--secondary btn--sm"
+                         href="/{{ locale }}/doctor/schedule?edit={{ s.id }}#slots">{{ t('schedule.edit') }}</a>
+                    {% endif %}
+                    <details class="confirm">
+                      <summary class="btn btn--secondary btn--sm">{{ t('schedule.remove') }}</summary>
+                      <form method="post" action="/{{ locale }}/doctor/schedule/slots/{{ s.id }}/remove">
+                        <p class="field-help">{{ t('schedule.remove_slot_hint') }}</p>
+                        <button class="btn btn--danger btn--sm" type="submit"
+                                data-label="{{ t('schedule.confirm_remove') }}">{{ t('schedule.confirm_remove') }}</button>
+                      </form>
+                    </details>
+                  </div>
+                {% endif %}
+              </li>
+            {% endif %}
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty-state">{{ t('schedule.empty') }}</p>
+      {% endif %}
+
+      {% if can_add %}
+        {% set add_failed = failed('slot-new') %}
+        {% set av = form_state['values'] if add_failed else {} %}
+        {% set ae = form_state['errors'] if add_failed else {} %}
+        <form class="stack" method="post" action="/{{ locale }}/doctor/schedule/slots" novalidate>
+          <h3 class="panel__label">{{ t('schedule.add_slot_title') }}</h3>
+          <p class="field-help">{{ t('schedule.clinics_linked_note', count=clinic_options|length) }}</p>
+          {{ form_banner('slot-new') }}
+          <fieldset class="field">
+            <legend class="field-label">{{ t('schedule.weekdays') }}</legend>
+            <div class="section-checks">
+              {% for w in weekday_options %}
+                <label class="section-check">
+                  <input type="checkbox" name="weekdays" value="{{ w.value }}"
+                         {% if w.value in (av.get('weekdays') or []) %}checked{% endif %}>
+                  <span>{{ w.label }}</span>
+                </label>
+              {% endfor %}
+            </div>
+            {% if ae.get('weekdays') %}
+              <span class="field-error" role="alert"><span aria-hidden="true">!</span>{{ ae.get('weekdays') }}</span>
+            {% endif %}
+          </fieldset>
+          <div class="grid-2">{{ slot_fields(av, ae, 'slot-new-') }}</div>
+          <div>
+            <button class="btn btn--primary btn--sm" type="submit"
+                    data-label="{{ t('schedule.add_slot_submit') }}">{{ t('schedule.add_slot_submit') }}</button>
+          </div>
+        </form>
+      {% else %}
+        <p class="muted-note">{{ t('schedule.no_affiliation') }}</p>
+      {% endif %}
+    </section>
+
+    {#- Time off and extra hours -#}
+    <section class="panel stack" id="exceptions" aria-labelledby="exceptions-h">
+      <h2 id="exceptions-h" class="panel__label">{{ t('schedule.exceptions_title') }}</h2>
+      {{ form_banner('exceptions') }}
+
+      {% if exceptions %}
+        <ul class="entry-list">
+          {% for e in exceptions %}
+            <li class="entry-row {{ e.colour }}">
+              <div class="entry-row__main">
+                <div class="entry-row__title">
+                  <span>{{ e.day }}</span> <span class="mono" dir="ltr">{{ e.date }}</span> · {{ e.kind }}
+                </div>
+                <div class="mono"><span dir="ltr">{{ e.window }}</span> · {{ e.clinic }}</div>
+                {% if e.covers %}<div class="field-help">{{ e.covers }}</div>{% endif %}
+                {% if e.capacity %}<div class="field-help">{{ e.capacity }}</div>{% endif %}
+                {% if e.reason %}<div class="field-help">{{ e.reason }}</div>{% endif %}
+              </div>
+              {% if e.extra %}<span class="badge badge--neutral">{{ t('schedule.extra_badge') }}</span>{% endif %}
+              <details class="confirm">
+                <summary class="btn btn--secondary btn--sm">{{ t('schedule.remove') }}</summary>
+                <form method="post" action="/{{ locale }}/doctor/schedule/exceptions/{{ e.id }}/remove">
+                  <button class="btn btn--danger btn--sm" type="submit"
+                          data-label="{{ t('schedule.confirm_remove') }}">{{ t('schedule.confirm_remove') }}</button>
+                </form>
+              </details>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty-state">{{ t('schedule.exceptions_empty') }}</p>
+      {% endif %}
+
+      {% if can_add %}
+        <div class="grid-2 exception-forms">
+          {% set off_failed = failed('time-off') %}
+          {% set ov = form_state['values'] if off_failed else {} %}
+          {% set oe = form_state['errors'] if off_failed else {} %}
+          <form class="stack" method="post" action="/{{ locale }}/doctor/schedule/time-off" novalidate>
+            <h3 class="panel__label">{{ t('schedule.time_off_title') }}</h3>
+            {{ form_banner('time-off') }}
+            {{ f.field('exception_date', t('schedule.date'), type='date', value=ov.get('exception_date', ''),
+                       errors=oe, required=True, min=today, dir='ltr', id_prefix='off-') }}
+            {{ f.select('clinic_id', t('schedule.clinic'), clinic_options, value=ov.get('clinic_id', ''),
+                        errors=oe, placeholder=t('schedule.all_clinics'), id_prefix='off-') }}
+            <div class="grid-2">
+              {{ f.field('start_time', t('schedule.start'), type='time', value=ov.get('start_time', ''),
+                         errors=oe, dir='ltr', id_prefix='off-') }}
+              {{ f.field('end_time', t('schedule.end'), type='time', value=ov.get('end_time', ''),
+                         errors=oe, dir='ltr', id_prefix='off-') }}
+            </div>
+            <p class="field-help">{{ t('schedule.window_help') }}</p>
+            <label class="checkline">
+              <input type="checkbox" name="emergency" value="on" {% if ov.get('emergency') %}checked{% endif %}>
+              <span>{{ t('schedule.emergency') }}</span>
+            </label>
+            {{ f.field('reason', t('schedule.reason'), value=ov.get('reason', ''), errors=oe,
+                       maxlength=200, id_prefix='off-') }}
+            <p class="banner banner--warn" role="note">{{ t('schedule.time_off_note') }}</p>
+            <div>
+              <button class="btn btn--primary btn--sm" type="submit"
+                      data-label="{{ t('schedule.time_off_submit') }}">{{ t('schedule.time_off_submit') }}</button>
+            </div>
+          </form>
+
+          {% set extra_failed = failed('extra') %}
+          {% set xv = form_state['values'] if extra_failed else {} %}
+          {% set xe = form_state['errors'] if extra_failed else {} %}
+          <form class="stack" method="post" action="/{{ locale }}/doctor/schedule/extra" novalidate>
+            <h3 class="panel__label">{{ t('schedule.extra_title') }}</h3>
+            {{ form_banner('extra') }}
+            {{ f.field('exception_date', t('schedule.date'), type='date', value=xv.get('exception_date', ''),
+                       errors=xe, required=True, min=today, dir='ltr', id_prefix='extra-') }}
+            {{ f.select('clinic_id', t('schedule.clinic'), clinic_options, value=xv.get('clinic_id', ''),
+                        errors=xe, id_prefix='extra-') }}
+            <div class="grid-2">
+              {{ f.field('start_time', t('schedule.start'), type='time', value=xv.get('start_time', ''),
+                         errors=xe, required=True, dir='ltr', id_prefix='extra-') }}
+              {{ f.field('end_time', t('schedule.end'), type='time', value=xv.get('end_time', ''),
+                         errors=xe, required=True, dir='ltr', id_prefix='extra-') }}
+            </div>
+            <label class="field" for="extra-f-max_tokens">
+              <span class="field-label">{{ t('schedule.extra_max_tokens') }}</span>
+              <input class="input" id="extra-f-max_tokens" name="max_tokens" type="number" min="1"
+                     max="{{ max_tokens_max }}" inputmode="numeric" dir="ltr"
+                     value="{{ xv.get('max_tokens', '') }}"
+                     {% if xe.get('max_tokens') %}aria-invalid="true" aria-describedby="extra-e-max_tokens"{% endif %}>
+              {% for hint in inherit_hints %}<span class="field-help">{{ hint }}</span>{% endfor %}
+              {% if xe.get('max_tokens') %}
+                <span class="field-error" id="extra-e-max_tokens" role="alert">
+                  <span aria-hidden="true">!</span>{{ xe.get('max_tokens') }}
+                </span>
+              {% endif %}
+            </label>
+            {{ f.field('reason', t('schedule.reason'), value=xv.get('reason', ''), errors=xe,
+                       maxlength=200, id_prefix='extra-') }}
+            <div>
+              <button class="btn btn--primary btn--sm" type="submit"
+                      data-label="{{ t('schedule.extra_submit') }}">{{ t('schedule.extra_submit') }}</button>
+            </div>
+          </form>
+        </div>
+      {% endif %}
+    </section>
+  </main>
+</div>
+<script src="/static/js/schedule.js" defer></script>
+{% endblock %}

@@ -27,7 +27,9 @@
     // Cleared on switch-back so doctor-only values can never be submitted
     // alongside a patient registration (SPEC §5.2).
     doctorFields.querySelectorAll("input, select").forEach(function (el) {
-      el.value = "";
+      // A checkbox keeps its value (the clinic id); unticking is what clears it.
+      if (el.type === "checkbox") el.checked = false;
+      else el.value = "";
       el.removeAttribute("aria-invalid");
     });
   }
