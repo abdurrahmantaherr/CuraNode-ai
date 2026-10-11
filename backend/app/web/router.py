@@ -61,6 +61,7 @@ from ..i18n.catalogue import direction, normalise_locale, translate
 from ..identity import oauth, service
 from ..identity.router import clear_session_cookies, set_session_cookies
 from ..identity.schemas import (
+    MAX_CLINICS,
     DoctorOnboardingRequest,
     DoctorRegisterRequest,
     LoginRequest,
@@ -113,6 +114,15 @@ def _render(
 async def _clinic_options(session: SessionDep) -> list[dict[str, str]]:
     rows = await session.execute(select(Clinic).order_by(Clinic.city, Clinic.name))
     return [{"value": str(c.id), "label": f"{c.name} — {c.city}"} for c in rows.scalars().all()]
+
+
+def _chosen_clinics(raw: list[str]) -> list[uuid.UUID] | None:
+    """The hospitals/clinics ticked on a doctor sign-up form, de-duplicated in
+    order. None when any value is not a UUID (a tampered form)."""
+    try:
+        return list(dict.fromkeys(uuid.UUID(v.strip()) for v in raw if v.strip()))
+    except ValueError:
+        return None
 
 
 def _initials(name: str) -> str:
@@ -222,6 +232,7 @@ async def register_submit(
     pmdc_number: Annotated[str, Form()] = "",
     specialty: Annotated[str, Form()] = "",
     primary_clinic_id: Annotated[str, Form()] = "",
+    clinic_ids: Annotated[list[str] | None, Form()] = None,
     consent: Annotated[str | None, Form()] = None,
 ) -> Response:
     loc = normalise_locale(locale)
@@ -232,7 +243,8 @@ async def register_submit(
         "phone_e164": phone_e164,
         "pmdc_number": pmdc_number,
         "specialty": specialty,
-        "primary_clinic_id": primary_clinic_id,
+        "clinic_ids": [str(c) for c in (clinic_ids or [])]
+        + ([primary_clinic_id] if primary_clinic_id else []),
         "consent": bool(consent),
     }
 
@@ -279,13 +291,18 @@ async def register_submit(
 
     try:
         if role == "doctor":
-            if not (pmdc_number.strip() and specialty.strip() and primary_clinic_id):
+            chosen = _chosen_clinics(values["clinic_ids"])
+            if chosen is None:
+                return await rerender({"clinic_ids": translate("errors.clinic_unknown", loc)})
+            if not (pmdc_number.strip() and specialty.strip() and chosen):
                 return await rerender({}, translate("errors.doctor_fields_required", loc))
+            if len(chosen) > MAX_CLINICS:
+                return await rerender({"clinic_ids": translate("errors.too_many_clinics", loc)})
             body: Any = DoctorRegisterRequest(
                 role="doctor",
                 pmdc_number=pmdc_number.strip(),
                 specialty=specialty.strip(),
-                primary_clinic_id=uuid.UUID(primary_clinic_id),
+                clinic_ids=chosen,
                 **payload,
             )
         else:
@@ -301,7 +318,7 @@ async def register_submit(
             user_agent=request.headers.get("user-agent"),
         )
     except ValidationFailed:
-        return await rerender({"primary_clinic_id": translate("errors.clinic_unknown", loc)})
+        return await rerender({"clinic_ids": translate("errors.clinic_unknown", loc)})
     except AppError:
         return await rerender({}, translate("errors.internal", loc), 500)
 
@@ -522,6 +539,7 @@ async def onboarding_submit(
     pmdc_number: Annotated[str, Form()] = "",
     specialty: Annotated[str, Form()] = "",
     primary_clinic_id: Annotated[str, Form()] = "",
+    clinic_ids: Annotated[list[str] | None, Form()] = None,
     consent: Annotated[str | None, Form()] = None,
 ) -> Response:
     loc = normalise_locale(locale)
@@ -536,7 +554,8 @@ async def onboarding_submit(
         "phone_e164": phone_e164,
         "pmdc_number": pmdc_number,
         "specialty": specialty,
-        "primary_clinic_id": primary_clinic_id,
+        "clinic_ids": [str(c) for c in (clinic_ids or [])]
+        + ([primary_clinic_id] if primary_clinic_id else []),
         "consent": bool(consent),
     }
 
@@ -578,13 +597,18 @@ async def onboarding_submit(
 
     try:
         if role == "doctor":
-            if not (pmdc_number.strip() and specialty.strip() and primary_clinic_id):
+            chosen = _chosen_clinics(values["clinic_ids"])
+            if chosen is None:
+                return await rerender({"clinic_ids": translate("errors.clinic_unknown", loc)})
+            if not (pmdc_number.strip() and specialty.strip() and chosen):
                 return await rerender({}, translate("errors.doctor_fields_required", loc))
+            if len(chosen) > MAX_CLINICS:
+                return await rerender({"clinic_ids": translate("errors.too_many_clinics", loc)})
             body: Any = DoctorOnboardingRequest(
                 role="doctor",
                 pmdc_number=pmdc_number.strip(),
                 specialty=specialty.strip(),
-                primary_clinic_id=uuid.UUID(primary_clinic_id),
+                clinic_ids=chosen,
                 **payload,
             )
         else:
@@ -604,7 +628,7 @@ async def onboarding_submit(
             user_agent=request.headers.get("user-agent"),
         )
     except ValidationFailed:
-        return await rerender({"primary_clinic_id": translate("errors.clinic_unknown", loc)})
+        return await rerender({"clinic_ids": translate("errors.clinic_unknown", loc)})
 
     return RedirectResponse(f"/{loc}/{_area(user.role.value)}", status_code=303)
 

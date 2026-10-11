@@ -230,7 +230,8 @@ class DoctorAffiliation(Base):
     Replaces this feature's original single `primary_clinic_id` column — the
     shared schema models doctor↔clinic as a relationship in its own right, so
     a doctor can move between or hold multiple affiliations over time.
-    Registration creates exactly one open-ended, active row here.
+    Registration (password or OAuth onboarding) creates one open-ended, active
+    row per hospital/clinic the doctor ticks, so a schedule can span several.
     """
 
     __tablename__ = "doctor_affiliation"

@@ -81,6 +81,13 @@ async def _unique_passport_no(session: AsyncSession) -> str:
     raise RuntimeError("Could not allocate a unique passport number")
 
 
+async def _check_clinics_exist(session: AsyncSession, clinic_ids: list[uuid.UUID]) -> None:
+    """Every chosen clinic must exist; otherwise nothing is created."""
+    for clinic_id in clinic_ids:
+        if await session.get(Clinic, clinic_id) is None:
+            raise ValidationFailed({"fields": {"clinic_ids": "errors.clinic_unknown"}})
+
+
 async def provision_role_records(
     session: AsyncSession,
     user: Profile,
@@ -89,11 +96,12 @@ async def provision_role_records(
     full_name: str,
     pmdc_number: str | None = None,
     specialty: str | None = None,
-    primary_clinic_id: uuid.UUID | None = None,
+    clinic_ids: list[uuid.UUID] | None = None,
 ) -> None:
-    """Creates the `Patient` or `Doctor` (+ `DoctorAffiliation`) row for a
-    user who has none yet. Shared by password registration and OAuth
-    onboarding — the two ways a `user_profile` row can end up choosing a role.
+    """Creates the `Patient` or `Doctor` (+ one active `DoctorAffiliation` per
+    chosen clinic) rows for a user who has none yet. Shared by password
+    registration and OAuth onboarding — the two ways a `user_profile` row can
+    end up choosing a role. The doctor stays pending whatever clinics they pick.
     """
     if role == UserRole.DOCTOR:
         doctor = Doctor(
@@ -109,15 +117,16 @@ async def provision_role_records(
             verified_at=None,
         )
         session.add(doctor)
-        session.add(
-            DoctorAffiliation(
-                id=uuid7(),
-                doctor_id=doctor.id,
-                clinic_id=primary_clinic_id,
-                start_date=datetime.now(UTC).date(),
-                status="active",
+        for clinic_id in clinic_ids or []:
+            session.add(
+                DoctorAffiliation(
+                    id=uuid7(),
+                    doctor_id=doctor.id,
+                    clinic_id=clinic_id,
+                    start_date=datetime.now(UTC).date(),
+                    status="active",
+                )
             )
-        )
     else:
         session.add(
             Patient(
@@ -178,9 +187,7 @@ async def register(
     is_doctor = isinstance(body, DoctorRegisterRequest)
 
     if is_doctor:
-        clinic = await session.get(Clinic, body.primary_clinic_id)
-        if clinic is None:
-            raise ValidationFailed({"fields": {"primary_clinic_id": "errors.clinic_unknown"}})
+        await _check_clinics_exist(session, body.all_clinic_ids)
 
     existing = await _user_by_email(session, body.email)
     if existing is not None:
@@ -240,7 +247,7 @@ async def register(
         full_name=body.full_name,
         pmdc_number=body.pmdc_number if is_doctor else None,
         specialty=body.specialty if is_doctor else None,
-        primary_clinic_id=body.primary_clinic_id if is_doctor else None,
+        clinic_ids=body.all_clinic_ids if is_doctor else None,
     )
 
     await audit.write(
@@ -455,9 +462,7 @@ async def complete_onboarding(
     is_doctor = isinstance(body, DoctorOnboardingRequest)
 
     if is_doctor:
-        clinic = await session.get(Clinic, body.primary_clinic_id)
-        if clinic is None:
-            raise ValidationFailed({"fields": {"primary_clinic_id": "errors.clinic_unknown"}})
+        await _check_clinics_exist(session, body.all_clinic_ids)
 
     if not await _onboarding_required(session, user):
         return user
@@ -476,7 +481,7 @@ async def complete_onboarding(
         full_name=body.full_name,
         pmdc_number=body.pmdc_number if is_doctor else None,
         specialty=body.specialty if is_doctor else None,
-        primary_clinic_id=body.primary_clinic_id if is_doctor else None,
+        clinic_ids=body.all_clinic_ids if is_doctor else None,
     )
 
     await audit.write(
