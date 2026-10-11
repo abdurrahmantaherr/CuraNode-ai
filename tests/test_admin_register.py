@@ -154,3 +154,55 @@ async def test_duplicate_email_returns_no_cookies_and_creates_nothing(db, clinic
         .all()
     )
     assert count == []  # nothing new was created
+
+
+async def test_admin_register_page_renders(client, db, clinic):
+    r = await client.get("/en/admin/register")
+    assert r.status_code == 200
+    assert in_html("admin.register.title") in r.text
+    assert str(clinic.id) in r.text  # clinic appears in the dropdown
+
+
+async def test_admin_register_submit_with_right_code_signs_in(client, db, clinic):
+    from app.db.models import ClinicInviteCode
+    from app.verification.codes import hash_code
+
+    db.add(
+        ClinicInviteCode(
+            clinic_id=clinic.id, code_hash=hash_code("SIGNUP-CODE-0001"), is_active=True
+        )
+    )
+    await db.commit()
+
+    r = await client.post(
+        "/en/admin/register",
+        data={
+            "full_name": "Front Desk Lead",
+            "email": "fd@x.com",
+            "password": "CorrectHorseBattery1",
+            "password_confirm": "CorrectHorseBattery1",
+            "clinic_id": str(clinic.id),
+            "invite_code": "SIGNUP-CODE-0001",
+            "consent": "on",
+        },
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/en/admin"
+    assert "cn_access" in r.cookies or len(r.cookies) > 0
+
+
+async def test_admin_register_submit_with_wrong_code_shows_an_error(client, db, clinic):
+    r = await client.post(
+        "/en/admin/register",
+        data={
+            "full_name": "Someone",
+            "email": "x@x.com",
+            "password": "CorrectHorseBattery1",
+            "password_confirm": "CorrectHorseBattery1",
+            "clinic_id": str(clinic.id),
+            "invite_code": "WRONG-CODE-0001",
+            "consent": "on",
+        },
+    )
+    assert r.status_code == 422
+    assert "cn_access" not in r.cookies

@@ -340,5 +340,11 @@
   "errors.clinics_required": "کم از کم ایک ہسپتال منتخب کریں۔",
   "errors.clinics_already_linked": "آپ منتخب کردہ ہسپتالوں سے پہلے ہی منسلک ہیں۔",
   "auth.role.admin": "کلینک ایڈمن",
-  "auth.login.subtitle_admin": "اپنے کلینک کے ڈاکٹروں کی تصدیق کے لیے سائن ان کریں۔"
+  "auth.login.subtitle_admin": "اپنے کلینک کے ڈاکٹروں کی تصدیق کے لیے سائن ان کریں۔",
+  "admin.register.title": "کلینک ایڈمن سائن اپ",
+  "admin.register.subtitle": "آپ کو اپنے کلینک کا انوائٹ کوڈ درکار ہوگا۔",
+  "admin.register.submit": "ایڈمن اکاؤنٹ بنائیں",
+  "field.invite_code": "انوائٹ کوڈ",
+  "field.invite_code_help": "یہ کیورا نوڈ ٹیم کی طرف سے آپ کے کلینک کو دیا جاتا ہے۔",
+  "errors.invite_code_invalid": "یہ انوائٹ کوڈ اس کلینک سے میل نہیں کھاتا۔"
 }

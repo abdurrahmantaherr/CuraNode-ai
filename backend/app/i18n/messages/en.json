@@ -340,5 +340,11 @@
   "errors.clinics_required": "Choose at least one hospital.",
   "errors.clinics_already_linked": "You are already linked to the hospitals you chose.",
   "auth.role.admin": "Clinic admin",
-  "auth.login.subtitle_admin": "Sign in to verify doctors at your clinic."
+  "auth.login.subtitle_admin": "Sign in to verify doctors at your clinic.",
+  "admin.register.title": "Clinic admin sign-up",
+  "admin.register.subtitle": "You'll need the invite code for your clinic.",
+  "admin.register.submit": "Create admin account",
+  "field.invite_code": "Invite code",
+  "field.invite_code_help": "Given to your clinic by the CuraNode team.",
+  "errors.invite_code_invalid": "That invite code doesn't match this clinic."
 }

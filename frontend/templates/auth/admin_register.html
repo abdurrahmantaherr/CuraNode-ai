@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% import "partials/form_field.html" as f %}
+{#- D-VERIFY — clinic-admin self-sign-up. Deliberately not linked from the
+    public register page: the invite code is the gate, not discoverability.
+    Context (web/router.py::admin_register_page/_submit): values, errors,
+    form_error, clinics. -#}
+{% block title %}{{ t('admin.register.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+<main class="auth-page">
+  <div class="auth-shell">
+    <div class="auth-head">
+      <div class="brandmark" aria-hidden="true">C</div>
+      <h1 class="auth-title">{{ t('admin.register.title') }}</h1>
+      <p class="auth-sub">{{ t('admin.register.subtitle') }}</p>
+    </div>
+
+    <form class="card" method="post" action="/{{ locale }}/admin/register" novalidate>
+      {{ f.form_banner(form_error) }}
+
+      {{ f.field('full_name', t('field.full_name'), value=values.get('full_name', ''),
+                 errors=errors, required=True, autocomplete='name') }}
+      {{ f.field('email', t('field.email'), type='email', value=values.get('email', ''),
+                 errors=errors, required=True, autocomplete='email') }}
+
+      <div class="grid-2">
+        {{ f.field('password', t('field.password'), type='password',
+                   errors=errors, required=True, autocomplete='new-password') }}
+        {{ f.field('password_confirm', t('field.confirm_password'), type='password',
+                   errors=errors, required=True, autocomplete='new-password') }}
+      </div>
+
+      {{ f.select('clinic_id', t('field.clinic'), clinics,
+                  value=values.get('clinic_id', ''), errors=errors,
+                  placeholder=t('field.clinic_placeholder')) }}
+      {{ f.field('invite_code', t('field.invite_code'), value=values.get('invite_code', ''),
+                 errors=errors, required=True, dir='ltr', help=t('field.invite_code_help')) }}
+
+      <label class="checkline">
+        <input type="checkbox" name="consent" {% if values.get('consent') %}checked{% endif %}>
+        {{ t('auth.register.consent') }}
+      </label>
+      {% if errors.get('consent') %}
+        <span class="field-error" role="alert"><span aria-hidden="true">!</span>{{ errors.get('consent') }}</span>
+      {% endif %}
+
+      {{ f.submit(t('admin.register.submit')) }}
+
+      <div class="centre-note">
+        {{ t('auth.register.already') }}
+        <a href="/{{ locale }}/login">{{ t('auth.register.sign_in') }}</a>
+      </div>
+    </form>
+
+    <p class="mono-note">{{ t('app.encrypted_note') }}</p>
+  </div>
+</main>
+<script src="/static/js/auth.js" defer></script>
+{% endblock %}

@@ -26,6 +26,8 @@ from pydantic_core import PydanticCustomError
 from sqlalchemy import select
 from supabase_auth.errors import AuthApiError
 
+from ..admin import schemas as admin_schemas
+from ..admin import service as admin_service
 from ..audit import writer as audit
 from ..cache import cache, oauth_state_key
 from ..consent import access_log as consent_access_log
@@ -325,6 +327,111 @@ async def register_submit(
     if pair is None:
         # Duplicate email. Do not confirm the address exists — send the user to
         # sign in instead (SPEC AC-24, BL-05).
+        return RedirectResponse(f"/{loc}/login", status_code=303)
+
+    response = RedirectResponse(f"/{loc}/{_area(out.role)}", status_code=303)
+    set_session_cookies(response, pair)
+    return response
+
+
+# ── Clinic-admin sign-up (D-VERIFY v1) ───────────────────────────────────
+@router.get("/{locale}/admin/register", response_class=HTMLResponse)
+async def admin_register_page(
+    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    loc = normalise_locale(locale)
+    if actor is not None:
+        return RedirectResponse(f"/{loc}/{_area(actor.role)}", status_code=303)
+    return _render(
+        request,
+        "auth/admin_register.html",
+        loc,
+        values={},
+        errors={},
+        form_error=None,
+        clinics=await _clinic_options(session),
+    )
+
+
+@router.post("/{locale}/admin/register")
+async def admin_register_submit(
+    request: Request,
+    locale: str,
+    session: SessionDep,
+    full_name: Annotated[str, Form()] = "",
+    email: Annotated[str, Form()] = "",
+    password: Annotated[str, Form()] = "",
+    password_confirm: Annotated[str, Form()] = "",
+    clinic_id: Annotated[str, Form()] = "",
+    invite_code: Annotated[str, Form()] = "",
+    consent: Annotated[str | None, Form()] = None,
+) -> Response:
+    loc = normalise_locale(locale)
+    values = {
+        "full_name": full_name,
+        "email": email,
+        "clinic_id": clinic_id,
+        "invite_code": invite_code,
+        "consent": bool(consent),
+    }
+
+    async def rerender(
+        errors: dict[str, str], form_error: str | None = None, code: int = 422
+    ) -> Response:
+        return _render(
+            request,
+            "auth/admin_register.html",
+            loc,
+            status_code=code,
+            values=values,
+            errors=errors,
+            clinics=await _clinic_options(session),
+            form_error=form_error,
+        )
+
+    try:
+        await enforce_auth_rate_limit(request)
+    except RateLimited:
+        return await rerender({}, translate("errors.rate_limited", loc), 429)
+
+    errors: dict[str, str] = {}
+    if not full_name.strip():
+        errors["full_name"] = translate("errors.name_required", loc)
+    if len(password) < 10:
+        errors["password"] = translate("errors.password_short", loc)
+    elif password != password_confirm:
+        errors["password_confirm"] = translate("errors.password_mismatch", loc)
+    if not consent:
+        errors["consent"] = translate("errors.consent_required", loc)
+    if errors:
+        return await rerender(errors)
+
+    try:
+        body = admin_schemas.AdminRegisterRequest(
+            full_name=full_name,
+            email=email,
+            password=password,
+            clinic_id=uuid.UUID(clinic_id),
+            invite_code=invite_code,
+            preferred_locale=loc,
+        )
+    except (ValidationError, ValueError):
+        return await rerender({"email": translate("errors.email_invalid", loc)})
+
+    try:
+        out, pair = await admin_service.register_admin(
+            session,
+            body,
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except ValidationFailed as exc:
+        fields = exc.details.get("fields", {})
+        return await rerender({k: translate(v, loc) for k, v in fields.items()})
+    except AppError:
+        return await rerender({}, translate("errors.internal", loc), 500)
+
+    if pair is None:
         return RedirectResponse(f"/{loc}/login", status_code=303)
 
     response = RedirectResponse(f"/{loc}/{_area(out.role)}", status_code=303)
