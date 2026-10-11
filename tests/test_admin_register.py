@@ -37,3 +37,120 @@ async def test_admin_selecting_doctor_tile_is_a_role_mismatch(client, db, clinic
     await make_user(db, email="adm@x.com", role=UserRole.CLINIC_ADMIN, clinic_id=clinic.id)
     r = await login(client, "adm@x.com", role="doctor")
     assert r.status_code == 403
+
+
+import pytest
+from app.admin import service as admin_service
+from app.admin.schemas import AdminRegisterRequest
+from app.db.models import ClinicInviteCode, ClinicStaff
+from app.errors import ValidationFailed
+from app.verification.codes import hash_code
+from sqlalchemy import select
+
+
+async def set_code(db, clinic_id, code: str) -> None:
+    # Upsert: clinic_id is the primary key (one row per clinic, Task 1), so
+    # rotating a code updates the existing row rather than inserting a second.
+    row = await db.get(ClinicInviteCode, clinic_id)
+    if row is None:
+        db.add(ClinicInviteCode(clinic_id=clinic_id, code_hash=hash_code(code), is_active=True))
+    else:
+        row.code_hash = hash_code(code)
+        row.is_active = True
+    await db.commit()
+
+
+async def test_register_admin_with_the_right_code_creates_a_clinic_admin(db, clinic):
+    await set_code(db, clinic.id, "RIGHT-CODE-0001")
+    body = AdminRegisterRequest(
+        full_name="Front Desk Lead",
+        email="fd@x.com",
+        password="CorrectHorseBattery1",
+        clinic_id=clinic.id,
+        invite_code="RIGHT-CODE-0001",
+    )
+    out, pair = await admin_service.register_admin(db, body)
+    assert pair is not None
+    assert out.role == "admin"
+
+    staff = (
+        await db.execute(select(ClinicStaff).where(ClinicStaff.user_id == out.user_id))
+    ).scalar_one()
+    assert staff.clinic_id == clinic.id
+
+
+async def test_register_admin_with_the_wrong_code_is_refused(db, clinic):
+    await set_code(db, clinic.id, "RIGHT-CODE-0001")
+    body = AdminRegisterRequest(
+        full_name="Someone",
+        email="fd2@x.com",
+        password="CorrectHorseBattery1",
+        clinic_id=clinic.id,
+        invite_code="WRONG-CODE-0001",
+    )
+    with pytest.raises(ValidationFailed):
+        await admin_service.register_admin(db, body)
+
+
+async def test_register_admin_with_no_code_set_for_the_clinic_is_refused(db, clinic):
+    body = AdminRegisterRequest(
+        full_name="Someone",
+        email="fd3@x.com",
+        password="CorrectHorseBattery1",
+        clinic_id=clinic.id,
+        invite_code="ANYTHING-0001",
+    )
+    with pytest.raises(ValidationFailed):
+        await admin_service.register_admin(db, body)
+
+
+async def test_rotated_code_stops_the_old_one_working(db, clinic):
+    # Review focus 3 — rotation must actually invalidate the old code.
+    await set_code(db, clinic.id, "OLD-CODE-0001")
+    await set_code(db, clinic.id, "NEW-CODE-0001")  # same clinic_id — updates the one row
+
+    body_old = AdminRegisterRequest(
+        full_name="Someone",
+        email="old@x.com",
+        password="CorrectHorseBattery1",
+        clinic_id=clinic.id,
+        invite_code="OLD-CODE-0001",
+    )
+    with pytest.raises(ValidationFailed):
+        await admin_service.register_admin(db, body_old)
+
+    body_new = AdminRegisterRequest(
+        full_name="Someone",
+        email="new@x.com",
+        password="CorrectHorseBattery1",
+        clinic_id=clinic.id,
+        invite_code="NEW-CODE-0001",
+    )
+    _out, pair = await admin_service.register_admin(db, body_new)
+    assert pair is not None
+
+
+async def test_duplicate_email_returns_no_cookies_and_creates_nothing(db, clinic):
+    await set_code(db, clinic.id, "RIGHT-CODE-0001")
+    from tests.conftest import make_user
+
+    existing = await make_user(
+        db, email="taken@x.com", role=UserRole.CLINIC_ADMIN, clinic_id=clinic.id
+    )
+    body = AdminRegisterRequest(
+        full_name="Impostor",
+        email="taken@x.com",
+        password="CorrectHorseBattery1",
+        clinic_id=clinic.id,
+        invite_code="RIGHT-CODE-0001",
+    )
+    out, pair = await admin_service.register_admin(db, body)
+    assert pair is None
+    assert out.user_id != existing.id  # a fresh, throwaway id — never leaks the real one
+
+    count = (
+        (await db.execute(select(ClinicStaff).where(ClinicStaff.user_id != existing.id)))
+        .scalars()
+        .all()
+    )
+    assert count == []  # nothing new was created
