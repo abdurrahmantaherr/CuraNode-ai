@@ -18,10 +18,16 @@ from app.db.models import (
 from app.db.types import utcnow, uuid7
 from app.deps import Actor
 from app.errors import NotFound, ValidationFailed
+from app.i18n.catalogue import translate
 from app.verification import service as verification_service
+from markupsafe import escape
 from sqlalchemy import select
 
 from tests.conftest import make_user
+
+
+def in_html(key: str, locale: str = "en", **params) -> str:
+    return str(escape(translate(key, locale, **params)))
 
 
 async def doctor_of(db, user) -> Doctor:
@@ -378,3 +384,106 @@ async def test_approving_a_rejected_doctor_removes_the_banner(client, db, clinic
     html = (await client.get("/en/doctor")).text
     assert "Verification not approved" not in html
     assert "My patients" in html or "<table" in html  # the real dashboard renders again
+
+
+ADMIN_URL = "/en/admin"
+
+
+async def test_admin_dashboard_requires_sign_in(client):
+    r = await client.get(ADMIN_URL)
+    assert r.status_code == 303 and r.headers["location"].startswith("/en/login")
+
+
+async def test_admin_dashboard_pending_tab_lists_only_this_clinics_pending_doctors(
+    client, db, clinic, other_clinic
+):
+    await make_user(db, email="adm@x.com", role=UserRole.CLINIC_ADMIN, clinic_id=clinic.id)
+    mine = await make_user(db, email="dr1@x.com", role=UserRole.DOCTOR, clinic_id=clinic.id)
+    await doctor_of(db, mine)
+    theirs = await make_user(db, email="dr2@x.com", role=UserRole.DOCTOR, clinic_id=other_clinic.id)
+    await doctor_of(db, theirs)
+    await login(client, "adm@x.com")
+
+    html = (await client.get(ADMIN_URL)).text
+    assert "dr1@x.com" not in html  # emails never shown
+    assert in_html("verify.tab.pending") in html
+
+
+async def test_admin_can_approve_a_pending_doctor_with_the_checklist(client, db, clinic):
+    await make_user(db, email="adm@x.com", role=UserRole.CLINIC_ADMIN, clinic_id=clinic.id)
+    user = await make_user(db, email="dr@x.com", role=UserRole.DOCTOR, clinic_id=clinic.id)
+    doctor = await doctor_of(db, user)
+    await login(client, "adm@x.com")
+
+    r = await client.post(
+        f"/en/admin/doctors/{doctor.id}/approve",
+        data={"checked_number": "on", "checked_name": "on", "checked_licence": "on"},
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/en/admin?tab=verified&saved=approved"
+
+
+async def test_admin_approve_with_a_missing_tick_is_refused(client, db, clinic):
+    await make_user(db, email="adm@x.com", role=UserRole.CLINIC_ADMIN, clinic_id=clinic.id)
+    user = await make_user(db, email="dr@x.com", role=UserRole.DOCTOR, clinic_id=clinic.id)
+    doctor = await doctor_of(db, user)
+    await login(client, "adm@x.com")
+
+    r = await client.post(
+        f"/en/admin/doctors/{doctor.id}/approve",
+        data={"checked_number": "on", "checked_name": "on"},  # licence missing
+    )
+    assert r.status_code == 422
+    assert in_html("errors.checklist_required") in r.text
+
+
+async def test_admin_can_reject_with_a_reason(client, db, clinic):
+    await make_user(db, email="adm@x.com", role=UserRole.CLINIC_ADMIN, clinic_id=clinic.id)
+    user = await make_user(db, email="dr@x.com", role=UserRole.DOCTOR, clinic_id=clinic.id)
+    doctor = await doctor_of(db, user)
+    await login(client, "adm@x.com")
+
+    r = await client.post(
+        f"/en/admin/doctors/{doctor.id}/reject",
+        data={"reason": "name_mismatch"},
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/en/admin?tab=pending&saved=rejected"
+
+
+async def test_admin_can_revoke_a_verified_doctor(client, db, clinic):
+    await make_user(db, email="adm@x.com", role=UserRole.CLINIC_ADMIN, clinic_id=clinic.id)
+    user = await make_user(db, email="dr@x.com", role=UserRole.DOCTOR, clinic_id=clinic.id)
+    doctor = await doctor_of(db, user)
+    await login(client, "adm@x.com")
+    await client.post(
+        f"/en/admin/doctors/{doctor.id}/approve",
+        data={"checked_number": "on", "checked_name": "on", "checked_licence": "on"},
+    )
+
+    r = await client.post(
+        f"/en/admin/doctors/{doctor.id}/revoke",
+        data={"reason": "licence_invalid", "source_tab": "verified"},
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/en/admin?tab=verified&saved=revoked"
+
+
+async def test_admin_cannot_act_on_another_clinics_doctor(client, db, clinic, other_clinic):
+    await make_user(db, email="adm@x.com", role=UserRole.CLINIC_ADMIN, clinic_id=clinic.id)
+    user = await make_user(db, email="dr@x.com", role=UserRole.DOCTOR, clinic_id=other_clinic.id)
+    doctor = await doctor_of(db, user)
+    await login(client, "adm@x.com")
+
+    r = await client.post(
+        f"/en/admin/doctors/{doctor.id}/approve",
+        data={"checked_number": "on", "checked_name": "on", "checked_licence": "on"},
+    )
+    assert r.status_code == 404
+
+
+async def test_a_patient_or_doctor_cannot_reach_the_admin_dashboard(client, db):
+    await make_user(db, email="pat@x.com", role=UserRole.PATIENT)
+    await login(client, "pat@x.com")
+    r = await client.get(ADMIN_URL)
+    assert r.status_code == 303 and r.headers["location"] == "/en/patient"
