@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}{{ t('errors.unavailable.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+{#- Shown instead of a bare 500 when the database cannot be reached. It must not depend on
+    the database (or on being signed in), so it uses only the public base layout. -#}
+<main class="auth-page">
+  <div class="auth-shell">
+    <div class="auth-head">
+      <div class="brandmark" aria-hidden="true">C</div>
+      <h1 class="auth-title">{{ t('errors.unavailable.title') }}</h1>
+      <p class="auth-sub" role="alert">{{ t('errors.service_unavailable') }}</p>
+      {% if not can_retry %}
+        <p class="auth-sub">{{ t('errors.unavailable.unsure') }}</p>
+      {% endif %}
+    </div>
+    <p class="auth-sub">
+      {% if can_retry %}
+        <a class="btn btn--primary" href="{{ retry_url }}">{{ t('errors.unavailable.retry') }}</a>
+      {% else %}
+        <a class="btn" href="/{{ locale }}/login">{{ t('errors.unavailable.home') }}</a>
+      {% endif %}
+    </p>
+    <p class="auth-sub"><small>{{ t('errors.unavailable.reference') }}: <code>{{ request_id }}</code></small></p>
+  </div>
+</main>
+{% endblock %}

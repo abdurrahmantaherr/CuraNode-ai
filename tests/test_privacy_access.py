@@ -139,7 +139,7 @@ def test_ac29_migration_is_additive():
 
 
 def test_ac29_revision_chain_is_single_and_unbroken():
-    """One head, and the chain runs through both reconstructed upstream revisions."""
+    """One head, and the chain runs through the document / OCR codebase's four real revisions."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -152,28 +152,35 @@ def test_ac29_revision_chain_is_single_and_unbroken():
         "a7d3c89106f9",  # D-VERIFY v1
         "291c06a2b86f",  # D7
         "dba968144fb4",
-        "e3a52c8d7f14",  # the OCR codebase's real file
-        "b7e24c19a053",  # reconstructed placeholder
-        "35c4bc13fa37",  # reconstructed placeholder
+        "e3a52c8d7f14",  # the document / OCR codebase's real files, in the order the
+        "b7e24c19a053",  # shared database applied them
+        "35c4bc13fa37",
+        "c3a91d7e5f20",
         "488dbf2b3915",
         "6feacefae2d0",
     ]
 
 
-def test_ac29_placeholder_upgrade_is_noop_and_downgrade_refuses():
-    spec = importlib.util.spec_from_file_location(
-        "placeholder",
-        ROOT / "alembic" / "versions" / "35c4bc13fa37_reconstructed_document_ocr_placeholder.py",
-    )
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    engine = sa.create_engine("sqlite://")
-    with engine.begin() as conn:
-        _run(conn, module.upgrade)  # touches nothing
-        assert sa.inspect(conn).get_table_names() == []
-        with pytest.raises(RuntimeError, match="placeholder"):
-            _run(conn, module.downgrade)
+def test_ac29_the_document_ocr_revisions_are_real_files_in_chain_order():
+    """The shared database was migrated by the document / OCR codebase through the same
+    `alembic_version` table. Its four revisions are in this repo as their REAL files (they
+    replaced the reconstructed placeholders that once stood in for them), chained in the order
+    the database applied them. A placeholder must never come back: its upgrade is a no-op, so it
+    would hide that a real migration is missing."""
+    expected = {
+        "c3a91d7e5f20_medical_documents_lifecycle_and_review.py": ("c3a91d7e5f20", "488dbf2b3915"),
+        "35c4bc13fa37_allow_doctor_entry_as_an_ocr_job_engine_.py": (
+            "35c4bc13fa37",
+            "c3a91d7e5f20",
+        ),
+        "b7e24c19a053_ocr_job_ai_sections.py": ("b7e24c19a053", "35c4bc13fa37"),
+        "e3a52c8d7f14_ocr_extraction_more_field_names.py": ("e3a52c8d7f14", "b7e24c19a053"),
+    }
+    for filename, pair in expected.items():
+        module = _load_revision(filename)
+        assert (module.revision, module.down_revision) == pair, filename
+        assert "RECONSTRUCTED" not in (module.__doc__ or ""), filename
+    assert not list((ROOT / "alembic" / "versions").glob("*placeholder*"))
 
 
 def _load_revision(filename: str):
@@ -186,18 +193,7 @@ def _load_revision(filename: str):
     return module
 
 
-def test_ac29_b7e24c19a053_placeholder_upgrade_is_noop_and_downgrade_refuses():
-    module = _load_revision("b7e24c19a053_reconstructed_ocr_placeholder.py")
-    assert (module.revision, module.down_revision) == ("b7e24c19a053", "35c4bc13fa37")
-    engine = sa.create_engine("sqlite://")
-    with engine.begin() as conn:
-        _run(conn, module.upgrade)  # touches nothing
-        assert sa.inspect(conn).get_table_names() == []
-        with pytest.raises(RuntimeError, match="placeholder"):
-            _run(conn, module.downgrade)
-
-
-def test_ac29_real_e3a52c8d7f14_follows_the_placeholder_and_is_postgres_only():
+def test_ac29_real_e3a52c8d7f14_follows_b7e24c19a053_and_is_postgres_only():
     """The OCR codebase's own file, unchanged: it widens a CHECK on its
     `ocr_extraction` table on Postgres and does nothing on SQLite."""
     module = _load_revision("e3a52c8d7f14_ocr_extraction_more_field_names.py")

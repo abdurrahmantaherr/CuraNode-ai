@@ -1,0 +1,214 @@
+{#- The sections of a document's OCR text, shared by the review step and the saved
+    record so both show exactly the same thing (see documents/sections.py).
+
+    Everything here is DISPLAY ONLY: built from what the document itself labelled,
+    never invented, and a section with nothing found in it is simply absent. These
+    are not the reviewable rows (medicines / lab results) — those are tables of their
+    own on the page.
+
+    Import with context:  {% import "partials/doc_sections.html" as ds with context %}
+
+      ds.head(doc)     facility, patient, doctor, document details, symptoms &
+                       diagnosis, vital signs
+      ds.vaccines(doc) a vaccination record's doses
+      ds.notes(doc)    advice / interpretation notes (a heading key may be passed)
+      ds.block(title_key, items, skip)  a titled list of what was FOUND; nothing when none
+      ds.rows / ds.fields(items, skip)  the found items as <dt>/<dd> pairs / a <dl>
+      ds.other_rows(doc)  the who / what of an "other" document, found items only
+      ds.topics(doc)   an "other" document's headed passages (findings, procedure...)
+      ds.flag(kind, source)   a lab result's High / Low / Normal pill -#}
+
+{% macro _list(items) %}
+  <dl class="readonly-list">
+    {% for item in items %}
+      <dt>{{ t('documents.field.' ~ item.key) }}</dt>
+      <dd>{{ item.value }}</dd>
+    {% endfor %}
+  </dl>
+{% endmacro %}
+
+{% macro head(doc) %}
+  {% set s = doc.sections %}
+  {% set kind = doc.document_type %}
+  {% if s %}
+    {% if s.facility %}
+      <div class="stack">
+        <h3 class="panel__label">{{ t('documents.section.lab' if kind == 'lab_report' else 'documents.section.hospital') }}</h3>
+        {{ _list(s.facility) }}
+      </div>
+    {% endif %}
+    {% if s.patient %}
+      <div class="stack">
+        <h3 class="panel__label">{{ t('documents.section.patient') }}</h3>
+        {{ _list(s.patient) }}
+      </div>
+    {% endif %}
+    {% if s.provider %}
+      <div class="stack">
+        <h3 class="panel__label">{{ t('documents.section.provider') }}</h3>
+        {{ _list(s.provider) }}
+      </div>
+    {% endif %}
+    {% if s.report %}
+      <div class="stack">
+        <h3 class="panel__label">{{ t('documents.section.report_lab' if kind == 'lab_report' else ('documents.section.report_rx' if kind == 'prescription' else 'documents.section.report_other')) }}</h3>
+        {{ _list(s.report) }}
+      </div>
+    {% endif %}
+    {% if s.clinical %}
+      <div class="stack">
+        <h3 class="panel__label">{{ t('documents.section.clinical') }}</h3>
+        {{ _list(s.clinical) }}
+      </div>
+    {% endif %}
+    {% if s.vitals %}
+      <div class="stack">
+        <h3 class="panel__label">{{ t('documents.section.vitals') }}</h3>
+        {{ _list(s.vitals) }}
+      </div>
+    {% endif %}
+  {% endif %}
+{% endmacro %}
+
+{% macro vaccines(doc) %}
+  {% set s = doc.sections %}
+  {% if s and s.entries %}
+    <div class="stack">
+      <h3 class="panel__label">{{ t('documents.section.vaccines') }}</h3>
+      <div class="data-table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>{% for key in s.entry_fields %}<th scope="col">{{ t('documents.field.' ~ key) }}</th>{% endfor %}</tr>
+          </thead>
+          <tbody>
+            {% for entry in s.entries %}
+              <tr>
+                {% for key in s.entry_fields %}
+                  <td>{{ entry.values.get(key) or t('documents.record.not_specified') }}</td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+{% endmacro %}
+
+{% macro notes(doc, heading=none) %}
+  {% set s = doc.sections %}
+  {% if s and s.notes %}
+    <div class="stack">
+      <h3 class="panel__label">{{ t(heading or ('documents.section.notes_lab' if doc.document_type == 'lab_report' else 'documents.section.advice')) }}</h3>
+      <ul class="notes-list">
+        {% for note in s.notes %}<li>{{ note }}</li>{% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+{% endmacro %}
+
+{#- What a lab report, a vaccination card or an "other" document shows is only what the reader
+    FOUND: an item the document does not carry is not listed at all (a prescription keeps its
+    "Not specified" rows, below). `skip` names keys not to repeat — the document's own date,
+    when the page shows it as a field of its own. -#}
+{% macro rows(items, skip=()) %}
+  {%- for item in items if item.value and item.key not in skip %}
+    <dt>{{ t('documents.field.' ~ item.key) }}</dt>
+    <dd>{{ item.value }}</dd>
+  {%- endfor %}
+{% endmacro %}
+
+{% macro fields(items, skip=()) %}
+  {% if (items | rejectattr('key', 'in', skip) | selectattr('value') | list) %}
+    <dl class="readonly-list">{{ rows(items, skip) }}</dl>
+  {% endif %}
+{% endmacro %}
+
+{% macro block(title_key, items, skip=()) %}
+  {% if (items | rejectattr('key', 'in', skip) | selectattr('value') | list) %}
+    <div class="stack">
+      <h3 class="panel__label">{{ t(title_key) }}</h3>
+      <dl class="readonly-list">{{ rows(items, skip) }}</dl>
+    </div>
+  {% endif %}
+{% endmacro %}
+
+{#- The who / what of an "other" document — hospital, laboratory, doctor, patient, the document's
+    own title — each only if the document names it. -#}
+{% macro other_rows(doc) %}
+  {% set s = doc.sections %}
+  {% if s %}
+    {{ rows(s.facility | selectattr('key', 'in', ('hospital_name', 'lab_name')) | list) }}
+    {{ rows(s.provider | selectattr('key', 'equalto', 'doctor_name') | list) }}
+    {{ rows(s.patient | selectattr('key', 'equalto', 'patient_name') | list) }}
+    {{ rows(s.report | selectattr('key', 'equalto', 'document_title') | list) }}
+  {% endif %}
+{% endmacro %}
+
+{#- An "other" document's own passages, under its own headings. -#}
+{% macro topics(doc) %}
+  {% set s = doc.sections %}
+  {% if s and s.topics %}
+    {% for topic in s.topics %}
+      <div class="stack" data-topic="{{ topic.key }}">
+        <h3 class="panel__label">{{ t('documents.topic.' ~ topic.key) }}</h3>
+        <ul class="notes-list">
+          {% for line in topic.lines %}<li>{{ line }}</li>{% endfor %}
+        </ul>
+      </div>
+    {% endfor %}
+  {% endif %}
+{% endmacro %}
+
+{#- The few facts a prescription or an "other" medical document leads with: who it is from,
+    for whom, and when. `{{ ds.person_rows(doc) }}` emits <dt>/<dd> pairs for the hospital / clinic,
+    the doctor and the patient AS THE DOCUMENT NAMES THEM (read-only; a name the reader did not
+    find says so rather than vanishing); `{{ ds.upload_row(doc) }}` the day it was uploaded. -#}
+{% macro _named(items, key) %}
+  {%- for i in items if i.key == key and i.value -%}{{ i.value }}{%- endfor -%}
+{% endmacro %}
+
+{% macro _row(label_key, value) %}
+  <dt>{{ t(label_key) }}</dt>
+  <dd>{% if value | trim %}{{ value }}{% else %}{{ t('documents.record.not_specified') }}{% endif %}</dd>
+{% endmacro %}
+
+{% macro person_rows(doc) %}
+  {% set s = doc.sections %}
+  {{ _row('documents.field.hospital_name', _named(s.facility, 'hospital_name') if s else '') }}
+  {{ _row('documents.field.doctor_name', _named(s.provider, 'doctor_name') if s else '') }}
+  {{ _row('documents.field.patient_name', _named(s.patient, 'patient_name') if s else '') }}
+{% endmacro %}
+
+{% macro upload_row(doc) %}
+  <dt>{{ t('documents.field.uploaded_on') }}</dt>
+  <dd><span dir="ltr">{{ local_date(doc.uploaded_at) }}</span></dd>
+{% endmacro %}
+
+{#- The diagnosis, symptoms and vital signs of a document saved BEFORE they were tables: still
+    shown (read from its text) so an older record loses nothing. Empty for every newer one. -#}
+{% macro fallback(doc) %}
+  {% set s = doc.sections %}
+  {% if s and s.clinical %}
+    <div class="stack">
+      <h3 class="panel__label">{{ t('documents.section.clinical') }}</h3>
+      {{ _list(s.clinical) }}
+    </div>
+  {% endif %}
+  {% if s and s.vitals %}
+    <div class="stack">
+      <h3 class="panel__label">{{ t('documents.section.vitals') }}</h3>
+      {{ _list(s.vitals) }}
+    </div>
+  {% endif %}
+{% endmacro %}
+
+{#- A lab result's flag. `source` says whether the report printed it or it was worked
+    out from the result and the stated range — the second is labelled so it is never
+    mistaken for the laboratory's own judgement. -#}
+{% macro flag(kind, source) %}
+  {% if kind %}
+    <span class="badge {{ {'high': 'badge--err', 'critical': 'badge--err', 'low': 'badge--warn', 'abnormal': 'badge--warn', 'check': 'badge--warn', 'normal': 'badge--ok'}[kind] }}">{{ t('documents.flag.' ~ kind) }}</span>
+    {% if source == 'calculated' %}<span class="field-help">{{ t('documents.flag.check_hint' if kind == 'check' else 'documents.flag.calculated') }}</span>{% endif %}
+  {% endif %}
+{% endmacro %}

@@ -199,7 +199,9 @@ async def _seed() -> list[tuple[str, str]]:
 
         ayesha = doctor("dr.ayesha@example.com", "Dr Ayesha Khan", "Cardiology", "DEMO-1001", True)
         bilal = doctor("dr.bilal@example.com", "Dr Bilal Ahmed", "Dermatology", "DEMO-1002", True)
-        pending = doctor("dr.pending@example.com", "Dr Sara Pending", "Pediatrics", "DEMO-1003", False)
+        pending = doctor(
+            "dr.pending@example.com", "Dr Sara Pending", "Pediatrics", "DEMO-1003", False
+        )
         s.add_all([ayesha, bilal, pending])
         await s.flush()
         bilal_shifa = DoctorAffiliation(
@@ -237,11 +239,19 @@ async def _seed() -> list[tuple[str, str]]:
         await s.flush()
         s.add_all(
             [
-                Allergy(patient_id=patient.id, substance="Penicillin", reaction="Rash", severity="severe"),
+                Allergy(
+                    patient_id=patient.id,
+                    substance="Penicillin",
+                    reaction="Rash",
+                    severity="severe",
+                ),
                 Allergy(patient_id=patient.id, substance="Peanuts", severity="moderate"),
                 ChronicCondition(patient_id=patient.id, name="Asthma", onset_date=date(2012, 3, 1)),
                 PatientMedication(
-                    patient_id=patient.id, name="Salbutamol", strength="100 mcg", frequency="As needed"
+                    patient_id=patient.id,
+                    name="Salbutamol",
+                    strength="100 mcg",
+                    frequency="As needed",
                 ),
             ]
         )
@@ -252,7 +262,10 @@ async def _seed() -> list[tuple[str, str]]:
         await s.flush()
         s.add(
             Patient(
-                id=uuid7(), user_id=other.id, full_name="Omar Demo", passport_no=generate_passport_no()
+                id=uuid7(),
+                user_id=other.id,
+                full_name="Omar Demo",
+                passport_no=generate_passport_no(),
             )
         )
         accounts.append(("Second patient (empty record)", other.email))

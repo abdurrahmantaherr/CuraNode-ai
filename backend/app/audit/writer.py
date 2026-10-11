@@ -77,6 +77,17 @@ SCHEDULE_EXCEPTION_REMOVE = "schedule.exception.remove"
 # as at sign-up). `detail` holds clinic ids only.
 DOCTOR_AFFILIATION_ADD = "doctor.affiliation.add"
 
+# Actions emitted by medical-document processing (FR10–FR13). `detail` carries
+# counts and the document type only — never OCR text or extracted values,
+# which are clinical free text that may hold identity PII.
+DOCUMENT_UPLOAD = "document.upload"
+DOCUMENT_PROCESS = "document.process"
+DOCUMENT_CONFIRM = "document.confirm"
+DOCUMENT_CANCEL = "document.cancel"
+# A patient deleting a document (any status). `detail` carries the id, the type and the
+# status it had — never the file name, text or values.
+DOCUMENT_DELETE = "document.delete"
+
 
 async def write(
     session: AsyncSession,

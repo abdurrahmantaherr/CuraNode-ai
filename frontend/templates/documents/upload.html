@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{#- Upload Medical Document — the ONE upload screen for every document type.
+    Works without JavaScript (a normal multipart POST); documents.js only adds
+    the drag highlight, the selected-file summary, client-side pre-checks and
+    the "reading your document" state while the request runs.
+
+    Context (built in web/documents.py::_render_upload):
+      selected      pre-selected document type key, or ''
+      errors        {document_type|file: message}
+      form_error    page-level error banner text, or None
+      type_options  [{value, label}] for the four document types
+      max_mb        the upload limit, in MB -#}
+{% import "partials/form_field.html" as f %}
+{% import "partials/doc_steps.html" as d with context %}
+
+{% block title %}{{ t('documents.upload.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    <div class="rowline">
+      <a class="linkish" href="/{{ locale }}/patient/documents">← {{ t('documents.action.back') }}</a>
+      {{ d.steps(1) }}
+    </div>
+
+    {{ f.form_banner(form_error) }}
+
+    <form class="panel stack" id="upload-form" method="post"
+          action="/{{ locale }}/patient/documents" enctype="multipart/form-data" novalidate
+          data-max-bytes="{{ max_mb * 1024 * 1024 }}"
+          data-msg-type="{{ t('errors.file_type_unsupported') }}"
+          data-msg-size="{{ t('errors.file_too_large', max_mb=max_mb) }}"
+          data-msg-required="{{ t('errors.file_required') }}">
+      <h1 class="panel__label">{{ t('documents.upload.title') }}</h1>
+      <p class="lead">{{ t('documents.subtitle') }}</p>
+
+      {#- 1. Document type. Native radios, so the choice submits without JS. -#}
+      <fieldset class="role-fieldset">
+        <legend class="eyebrow">{{ t('documents.upload.choose_type') }}</legend>
+        <div class="doctype-row">
+          {% for opt in type_options %}
+            <label class="doctype-pill">
+              <input type="radio" name="document_type" value="{{ opt.value }}"
+                     {% if selected == opt.value %}checked{% endif %}
+                     {% if errors.get('document_type') %}aria-invalid="true" aria-describedby="e-document_type"{% endif %}>
+              <span>{{ opt.label }}</span>
+            </label>
+          {% endfor %}
+        </div>
+        {% if errors.get('document_type') %}
+          <span class="field-error" id="e-document_type" role="alert">
+            <span aria-hidden="true">!</span>{{ errors['document_type'] }}
+          </span>
+        {% endif %}
+      </fieldset>
+
+      {#- 2. File. Printed documents only: handwriting is not read. -#}
+      <div class="dropzone" id="dropzone">
+        <div class="dropzone__title">{{ t('documents.upload.drop_title') }}</div>
+        <div class="field-help">{{ t('documents.upload.drop_hint', max=max_mb) }}</div>
+        <div class="field-help">{{ t('documents.upload.printed_only') }}</div>
+        <input class="input" id="f-file" name="file" type="file"
+               accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
+               aria-label="{{ t('documents.upload.choose_file') }}"
+               {% if errors.get('file') %}aria-invalid="true" aria-describedby="e-file"{% endif %}>
+      </div>
+      <div class="file-picked" id="file-picked" hidden>
+        <div>
+          <div class="eyebrow">{{ t('documents.upload.selected') }}</div>
+          <div class="entry-row__title" id="file-name"></div>
+          <div class="mono" id="file-size"></div>
+        </div>
+        <button class="btn btn--secondary btn--sm" type="button" id="file-remove">
+          {{ t('documents.upload.remove_file') }}
+        </button>
+      </div>
+      <span class="field-error" id="e-file" role="alert" {% if not errors.get('file') %}hidden{% endif %}>
+        <span aria-hidden="true">!</span><span id="e-file-text">{{ errors.get('file', '') }}</span>
+      </span>
+
+      <div>
+        <button class="btn btn--primary" type="submit" id="upload-submit"
+                data-label="{{ t('documents.upload.submit') }}">{{ t('documents.upload.submit') }}</button>
+      </div>
+    </form>
+
+    {#- Shown by documents.js while the upload + OCR request runs. -#}
+    <div class="panel state-block" id="processing-state" role="status" aria-live="polite" hidden>
+      <span class="ai-state ai-state--processing">
+        <i class="spinner spinner--dark" aria-hidden="true"></i>{{ t('documents.status.processing') }}
+      </span>
+      <div class="entry-row__title">{{ t('documents.upload.processing_title') }}</div>
+      <p class="lead">{{ t('documents.upload.processing_hint') }}</p>
+    </div>
+  </main>
+</div>
+<script src="/static/js/documents.js" defer></script>
+{% endblock %}

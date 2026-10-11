@@ -1,0 +1,44 @@
+{#- Deleting a document, with an explicit confirmation step. Two ways in, one action:
+
+      * every "Delete" control is a plain link to the confirmation PAGE
+        (`documents/delete.html`) — it works with JavaScript off;
+      * with JavaScript, `documents.js` intercepts that link and shows the single dialog below
+        instead, filling in the document's name and the address to post to.
+
+    Either way the answer is a POST to `/{locale}/patient/documents/{id}/delete`, and the server
+    — not the page — decides whether the deletion is allowed and confirmed.
+
+    Import with context:  {% import "partials/doc_delete.html" as dd with context %}
+
+      dd.trigger(item)   the "Delete" control for a document (`item.can_delete` must be true)
+      dd.dialog()        the one dialog; include once per page that has triggers -#}
+
+{% macro trigger(item, class='btn btn--secondary btn--sm') %}
+  {% set url = '/' ~ locale ~ '/patient/documents/' ~ item.id ~ '/delete' %}
+  <a class="{{ class }}" href="{{ url }}"
+     data-delete-url="{{ url }}"
+     data-delete-name="{{ item.original_filename or t('documents.detail.title') }}"
+     data-delete-saved="{{ '1' if item.status == 'finalized' else '0' }}">{{ t('documents.action.delete') }}</a>
+{% endmacro %}
+
+{% macro dialog() %}
+  <dialog id="delete-dialog" class="confirm-dialog" aria-labelledby="delete-dialog-title">
+    <form method="post" action="" class="stack">
+      <h2 id="delete-dialog-title" class="panel__label">{{ t('documents.delete.title') }}</h2>
+      <p class="entry-row__title" data-delete-dialog-name></p>
+      <p class="lead" data-when="saved" hidden>{{ t('documents.delete.body_saved') }}</p>
+      <p class="lead" data-when="unsaved" hidden>{{ t('documents.delete.body_unsaved') }}</p>
+      <p class="field-help" data-when="saved" hidden>{{ t('documents.delete.profile_note') }}</p>
+      <label class="checkline" data-when="saved" hidden>
+        <input type="checkbox" name="confirm" value="1" disabled>
+        <span>{{ t('documents.delete.checkbox') }}</span>
+      </label>
+      <input type="hidden" name="confirm" value="1" disabled>
+      <div class="btn-row">
+        <button class="btn btn--danger" type="submit"
+                data-label="{{ t('documents.action.delete_confirm') }}">{{ t('documents.action.delete_confirm') }}</button>
+        <button class="btn btn--secondary" type="button" data-dialog-close>{{ t('documents.action.keep') }}</button>
+      </div>
+    </form>
+  </dialog>
+{% endmacro %}

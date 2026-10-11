@@ -142,10 +142,55 @@ class FakeAuthClient:
         return _Obj(user=_Obj(id=user_id), session=session)
 
 
+class FakeBucket:
+    """The subset of `storage3`'s bucket API that `documents.storage` uses."""
+
+    def __init__(self, store: FakeStorage, bucket: str) -> None:
+        self._store = store
+        self._bucket = bucket
+
+    async def upload(
+        self, path: str, file: bytes, file_options: dict[str, Any] | None = None
+    ) -> None:
+        if self._store.fail_put:
+            raise RuntimeError("storage unavailable")
+        key = (self._bucket, path)
+        if key in self._store.objects:  # `upsert: false`
+            raise RuntimeError("Duplicate")
+        self._store.objects[key] = bytes(file)
+        self._store.content_types[key] = (file_options or {}).get("content-type", "")
+
+    async def download(self, path: str, options: Any = None) -> bytes:
+        if self._store.fail_get:
+            raise RuntimeError("storage unavailable")
+        return self._store.objects[(self._bucket, path)]
+
+    async def remove(self, paths: list[str]) -> list[dict[str, Any]]:
+        for path in paths:
+            self._store.objects.pop((self._bucket, path), None)
+            self._store.removed.append(path)
+        return []
+
+
+class FakeStorage:
+    """In-memory object store standing in for Supabase Storage — no network."""
+
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], bytes] = {}
+        self.content_types: dict[tuple[str, str], str] = {}
+        self.removed: list[str] = []
+        self.fail_put = False
+        self.fail_get = False
+
+    def from_(self, bucket: str) -> FakeBucket:
+        return FakeBucket(self, bucket)
+
+
 class FakeSupabaseAuth:
-    """Stand-in for `supabase.AsyncClient` — only `.auth` is implemented."""
+    """Stand-in for `supabase.AsyncClient` — `.auth` and `.storage`."""
 
     def __init__(self, jwt_secret: str = TEST_JWT_SECRET) -> None:
+        self.storage = FakeStorage()
         self._jwt_secret = jwt_secret
         self.users: dict[str, dict[str, str]] = {}
         self.refresh_tokens: dict[str, tuple[str, str]] = {}

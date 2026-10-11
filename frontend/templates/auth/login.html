@@ -17,6 +17,8 @@
 
     <form class="card" method="post" action="/{{ locale }}/login" novalidate>
       {{ f.form_banner(form_error) }}
+      {#- Where the visitor was going (already checked by the server): they return there. -#}
+      {% if next_path %}<input type="hidden" name="next" value="{{ next_path }}">{% endif %}
 
       {#- Real radio inputs, not buttons: the browser submits `role` natively,
           keyboard and screen-reader behaviour come free, and the toggle still

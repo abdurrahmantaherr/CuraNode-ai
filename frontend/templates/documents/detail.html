@@ -1,0 +1,313 @@
+{% extends "base.html" %}
+{#- One document, whatever its type. What this page shows depends only on the
+    document's status:
+
+      uploaded / processing  -> "reading your document" (auto-refreshes)
+      failed                 -> what went wrong, with Try again / Discard
+      awaiting_review        -> original beside the extracted, EDITABLE values;
+                                Confirm & Save is the only way to finalize
+      finalized              -> the saved record (read-only)
+      cancelled              -> a short notice
+
+    Every form works without JavaScript. The fields on the review step come
+    from the document type's extractor; the workflow itself never changes.
+
+    Context (web/documents.py::_render_detail):
+      doc         DocumentDetailOut (status, rows, groups, ocr_text, field_names, ...)
+      review_groups
+                  review view-model, one per TABLE of the document (medicines,
+                  diagnosis, symptoms, vital signs, allergies, ...): {key, label,
+                  layout, rows, blank_row, list_row} — submitted values laid over
+                  the proposals after a failed save
+      date_value  ISO date for the date input
+      errors      {document_date: message}
+      banner      page-level error text, or None
+      just_saved  True right after Confirm & Save
+      processing  True while uploaded / processing -#}
+{% import "partials/form_field.html" as f %}
+{% import "partials/doc_steps.html" as d with context %}
+{% import "partials/doc_sections.html" as ds with context %}
+{% import "partials/doc_groups.html" as dg with context %}
+{% import "partials/doc_layouts.html" as L with context %}
+{% import "partials/doc_delete.html" as dd with context %}
+{% import "partials/doc_quality.html" as dq with context %}
+
+{% block title %}{{ doc.original_filename or t('documents.detail.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+{% set base = '/' ~ locale ~ '/patient/documents/' ~ doc.id %}
+{#- Every document type has a layout of its own (partials/doc_layouts.html). A prescription's is
+    the compact one below: who / for whom / when, then medicines, advice, diagnosis, symptoms,
+    vital signs, allergies — nothing else. -#}
+{% set compact = doc.document_type == 'prescription' %}
+{#- The text the reader found stays on the page for checking against the original: folded away
+    when the page already shows what it holds, open when it is all there is. -#}
+{% set sec = doc.sections %}
+{% set raw_open = (not sec) if doc.document_type != 'other'
+                  else not (sec and (sec.topics or sec.notes)) %}
+{% if compact %}{% set raw_open = false %}{% endif %}
+{% set step = {'uploaded': 2, 'processing': 2, 'failed': 2, 'awaiting_review': 3,
+               'finalized': 4, 'cancelled': 0}[doc.status] %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content" {% if processing %}data-autorefresh="4000"{% endif %}>
+    <div class="rowline">
+      <a class="linkish" href="/{{ locale }}/patient/documents">← {{ t('documents.action.back') }}</a>
+      {% if step %}{{ d.steps(step) }}{% endif %}
+    </div>
+
+    {{ f.form_banner(banner) }}
+
+    {#- Identity of the document -#}
+    <div class="panel stack">
+      <div class="identity">
+        <div class="identity__main">
+          <div class="entry-row__title">{{ doc.original_filename or t('documents.detail.title') }}</div>
+          <div class="mono">
+            {{ type_label(doc.document_type) }}{% if doc.size_bytes %} · {{ human_size(doc.size_bytes) }}{% endif %}
+            · {{ t('documents.record.uploaded') }} {{ local_date(doc.uploaded_at) }}
+          </div>
+        </div>
+        {% if doc.status == 'awaiting_review' %}
+          {#- The review step gets its own "Needs verification" badge (matching
+              the topbar's type-specific title) instead of the generic status
+              chip, so the header doesn't show two near-duplicate badges. -#}
+          <span class="ai-state ai-state--verify">✦ {{ t('documents.review.badge') }}</span>
+        {% else %}
+          {{ d.state_chip(doc.status) }}
+        {% endif %}
+      </div>
+      {#- Managing the document: look at the original exactly as uploaded, keep a copy,
+          or (a saved record only — an unconfirmed upload has "Discard" below) delete it.
+          Shown only when the server says each is valid. -#}
+      {% if doc.can_download %}
+        <div class="btn-row">
+          <a class="btn btn--secondary btn--sm" href="{{ base }}/file" target="_blank"
+             rel="noopener">{{ t('documents.action.open') }}</a>
+          <a class="btn btn--secondary btn--sm"
+             href="{{ base }}/file?download=1">{{ t('documents.action.download') }}</a>
+          {% if doc.can_delete and doc.status == 'finalized' %}{{ dd.trigger(doc) }}{% endif %}
+        </div>
+      {% endif %}
+    </div>
+
+    {#- ── uploaded / processing ─────────────────────────────────────── -#}
+    {% if doc.status in ('uploaded', 'processing') %}
+      {#- A photo that is already known to be hard to read: say so before it is read. -#}
+      {% if doc.status == 'uploaded' %}{{ dq.advice(doc) }}{% endif %}
+      <div class="panel state-block" role="status" aria-live="polite">
+        {% if doc.status == 'processing' %}
+          <span class="ai-state ai-state--processing">
+            <i class="spinner spinner--dark" aria-hidden="true"></i>{{ t('documents.status.processing') }}
+          </span>
+          <div class="entry-row__title">{{ t('documents.processing.title') }}</div>
+          <p class="lead">{{ t('documents.processing.hint') }}</p>
+          <div class="btn-row">
+            <a class="btn btn--secondary" href="{{ base }}">{{ t('documents.action.check_again') }}</a>
+          </div>
+        {% else %}
+          <div class="entry-row__title">{{ t('documents.uploaded.title') }}</div>
+          <p class="lead">{{ t('documents.uploaded.hint') }}</p>
+          <form method="post" action="{{ base }}/process" class="btn-row">
+            <button class="btn btn--primary" type="submit"
+                    data-label="{{ t('documents.action.read') }}">{{ t('documents.action.read') }}</button>
+          </form>
+          <a class="linkish" href="{{ base }}/preprocess">{{ t('documents.preprocess.link') }}</a>
+        {% endif %}
+        <form method="post" action="{{ base }}/cancel">
+          <button class="btn btn--secondary btn--sm" type="submit"
+                  data-label="{{ t('documents.action.discard') }}">{{ t('documents.action.discard') }}</button>
+        </form>
+      </div>
+
+    {#- ── failed ────────────────────────────────────────────────────── -#}
+    {% elif doc.status == 'failed' %}
+      <div class="banner banner--error" role="alert">
+        <span aria-hidden="true">!</span>
+        <div>
+          <div class="banner__title">{{ t('documents.failed.title') }}</div>
+          <div class="banner__body">{{ failure_text(doc.failure_code) }}</div>
+        </div>
+      </div>
+      {{ dq.advice(doc) }}
+      <div class="panel stack">
+        <div class="btn-row">
+          <form method="post" action="{{ base }}/process">
+            <button class="btn btn--primary" type="submit"
+                    data-label="{{ t('documents.action.retry') }}">{{ t('documents.action.retry') }}</button>
+          </form>
+          <form method="post" action="{{ base }}/cancel">
+            <button class="btn btn--secondary" type="submit"
+                    data-label="{{ t('documents.action.discard') }}">{{ t('documents.action.discard') }}</button>
+          </form>
+        </div>
+        <a class="linkish" href="{{ base }}/preprocess">{{ t('documents.preprocess.link') }}</a>
+      </div>
+
+    {#- ── awaiting review ───────────────────────────────────────────── -#}
+    {% elif doc.status == 'awaiting_review' %}
+      {#- A blurry / faint / tiny photo: ask for a clearer one (advice only). -#}
+      {{ dq.advice(doc, true) }}
+      <div class="review">
+        <section class="panel stack" aria-labelledby="orig-h">
+          <h2 id="orig-h" class="panel__label">
+            {{ t('documents.review.original_image') if can_preview_image else t('documents.review.original') }}
+          </h2>
+          <div class="doc-preview">
+            {% if can_preview_image %}
+              <img src="{{ base }}/file" alt="{{ t('documents.review.original_alt') }}">
+            {% else %}
+              <a class="btn btn--secondary" href="{{ base }}/file" target="_blank" rel="noopener">
+                {{ t('documents.review.open_pdf') }}
+              </a>
+            {% endif %}
+          </div>
+          <a class="linkish" href="{{ base }}/preprocess">{{ t('documents.preprocess.link') }}</a>
+        </section>
+
+        <form class="panel stack" id="review-form" method="post" action="{{ base }}/confirm" novalidate>
+          <h2 class="panel__label">{{ t('documents.review.heading') }}</h2>
+          <p class="lead">{{ t('documents.review.notice') }} {{ t('documents.review.ai_note') }}</p>
+
+          {% if compact %}
+            {#- Prescription: who it is from, for whom, and when — as the document says it
+                (read-only), the document date (editable) and the upload day — then medicines,
+                advice, and the clinical tables. Nothing else. -#}
+            <section class="stack doc-details" aria-labelledby="det-h">
+              <h3 id="det-h" class="panel__label">{{ t('documents.section.details') }}</h3>
+              <dl class="readonly-list">{{ ds.person_rows(doc) }}</dl>
+              <div class="grid-2">
+                {{ f.field('document_date', t('documents.review.date'), type='date', value=date_value,
+                           errors=errors, min='1900-01-01', max=today, dir='ltr',
+                           help=t('documents.review.date_help')) }}
+              </div>
+              <dl class="readonly-list">{{ ds.upload_row(doc) }}</dl>
+            </section>
+
+            {% for g in review_groups if g.key == 'medicines' %}
+              {{ dg.review_group(g, doc) }}
+            {% endfor %}
+            {{ ds.notes(doc) }}
+            {{ ds.fallback(doc) }}
+            {% for g in review_groups if g.key != 'medicines' %}
+              {{ dg.review_group(g, doc) }}
+            {% endfor %}
+            <p class="field-help">{{ t('documents.review.add_hint') }}</p>
+          {% elif doc.document_type == 'lab_report' %}
+            {{ L.review_lab(doc) }}
+          {% elif doc.document_type == 'vaccination' %}
+            {{ L.review_vaccine(doc) }}
+          {% else %}
+            {{ L.review_other(doc) }}
+          {% endif %}
+
+          {% if doc.ocr_text %}
+            <details{{ ' open' if raw_open }}>
+              <summary class="linkish">{{ t('documents.review.text_heading') }}</summary>
+              <pre class="ocr-text" dir="auto">{{ doc.ocr_text }}</pre>
+            </details>
+          {% endif %}
+
+          <div class="btn-row">
+            <button class="btn btn--primary" type="submit"
+                    data-label="{{ t('documents.action.confirm') }}">{{ t('documents.action.confirm') }}</button>
+            {#- Discard is its own form (forms cannot nest); `form=` attaches
+                this button to it. -#}
+            <button class="btn btn--secondary" type="submit" form="cancel-form">
+              {{ t('documents.action.discard') }}
+            </button>
+          </div>
+        </form>
+      </div>
+      <form id="cancel-form" method="post" action="{{ base }}/cancel"></form>
+
+    {#- ── finalized: the saved record ───────────────────────────────── -#}
+    {% elif doc.status == 'finalized' %}
+      {% if just_saved %}
+        <div class="banner banner--ok" role="status">
+          <span aria-hidden="true">✓</span>
+          <div>
+            <div class="banner__title">{{ t('documents.saved.title') }}</div>
+            <div class="banner__body">{{ t('documents.saved.body') }}
+              {% for note in saved_notes %}<br>{{ note }}{% endfor %}</div>
+          </div>
+        </div>
+      {% endif %}
+
+      <div class="review">
+        {#- The original file the patient uploaded, preserved and shown in its
+            own format — an image inline, a PDF as an open link — exactly as
+            the review step already does, so comparing the record against the
+            source document doesn't require leaving this page. -#}
+        <section class="panel stack" aria-labelledby="orig-h">
+          <h2 id="orig-h" class="panel__label">
+            {{ t('documents.review.original_image') if can_preview_image else t('documents.review.original') }}
+          </h2>
+          <div class="doc-preview">
+            {% if can_preview_image %}
+              <img src="{{ base }}/file" alt="{{ t('documents.review.original_alt') }}">
+            {% else %}
+              <a class="btn btn--secondary" href="{{ base }}/file" target="_blank" rel="noopener">
+                {{ t('documents.review.open_pdf') }}
+              </a>
+            {% endif %}
+          </div>
+        </section>
+
+        <section class="panel stack" aria-labelledby="rec-h">
+          <h2 id="rec-h" class="panel__label">{{ type_label(doc.document_type) }}</h2>
+          {% if compact %}
+            {#- Prescription: the same few facts as the review step, then the confirmed medicines,
+                the advice, and the confirmed clinical tables. Nothing else. -#}
+            <h3 class="panel__label">{{ t('documents.section.details') }}</h3>
+            <dl class="readonly-list">
+              {{ ds.person_rows(doc) }}
+              <dt>{{ t('documents.review.date') }}</dt>
+              <dd>{% if doc.document_date %}<span dir="ltr">{{ doc.document_date.isoformat() }}</span>{% else %}{{ t('documents.record.not_specified') }}{% endif %}</dd>
+              {{ ds.upload_row(doc) }}
+            </dl>
+
+            {% for g in doc.groups if g.key == 'medicines' %}
+              {{ dg.saved_group(g, doc) }}
+            {% endfor %}
+            {{ ds.notes(doc) }}
+            {{ ds.fallback(doc) }}
+            {% for g in doc.groups if g.key != 'medicines' %}
+              {{ dg.saved_group(g, doc) }}
+            {% endfor %}
+          {% elif doc.document_type == 'lab_report' %}
+            {{ L.saved_lab(doc) }}
+          {% elif doc.document_type == 'vaccination' %}
+            {{ L.saved_vaccine(doc) }}
+          {% else %}
+            {{ L.saved_other(doc) }}
+          {% endif %}
+
+          {% if doc.ocr_text %}
+            <details{{ ' open' if raw_open }}>
+              <summary class="linkish">{{ t('documents.review.text_heading') }}</summary>
+              <pre class="ocr-text" dir="auto">{{ doc.ocr_text }}</pre>
+            </details>
+          {% endif %}
+
+          <div class="btn-row">
+            <a class="btn btn--primary" href="/{{ locale }}/patient/documents/new">{{ t('documents.action.upload_another') }}</a>
+            <a class="btn btn--secondary" href="/{{ locale }}/patient/documents">{{ t('documents.action.back') }}</a>
+          </div>
+        </section>
+      </div>
+
+    {#- ── cancelled ─────────────────────────────────────────────────── -#}
+    {% else %}
+      <div class="panel state-block">
+        <div class="entry-row__title">{{ t('documents.cancelled.title') }}</div>
+        <p class="lead">{{ t('documents.cancelled.hint') }}</p>
+        <a class="btn btn--secondary" href="/{{ locale }}/patient/documents">{{ t('documents.action.back') }}</a>
+      </div>
+    {% endif %}
+  </main>
+</div>
+{{ dd.dialog() }}
+<script src="/static/js/documents.js" defer></script>
+{% endblock %}
