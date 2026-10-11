@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{#- Doctor passport lookup (D2). One form, no JavaScript. A failed lookup
+    renders the same message whether the patient doesn't exist or simply
+    hasn't granted this doctor access (BL-09, BL-10).
+
+    Context (built in web/router.py::_render_lookup):
+      values   {passport_no}
+      errors   {passport_no: message} or {} -#}
+{% import "partials/form_field.html" as f %}
+
+{% block title %}{{ t('lookup.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    <section class="panel stack" aria-labelledby="lookup-h">
+      <h2 id="lookup-h" class="panel__label">{{ t('lookup.title') }}</h2>
+      <p class="lead">{{ t('lookup.subtitle') }}</p>
+      <form class="stack" method="post" action="/{{ locale }}/doctor/passport-lookup" novalidate>
+        {{ f.field('passport_no', t('lookup.field.passport'), value=values.get('passport_no', ''),
+                   errors=errors, required=True, maxlength=16, placeholder='CN-XXXX-XXXX',
+                   dir='ltr') }}
+        <div>
+          <button class="btn btn--primary" type="submit"
+                  data-label="{{ t('lookup.submit') }}">{{ t('lookup.submit') }}</button>
+        </div>
+      </form>
+    </section>
+  </main>
+</div>
+<script src="/static/js/profile.js" defer></script>
+{% endblock %}

@@ -5,7 +5,7 @@ A cross-hospital health management platform for Pakistan's private healthcare se
 Patients in Pakistan carry their medical history on paper, and when the paper is lost the history is gone. CuraNode gives every patient one portable **Medical Passport** that they own and that any clinician they authorise can read instantly, from any participating facility.
 
 > **Project status — authentication core, Google OAuth, Medical Passport, the patient profile, and medical documents implemented.**
-> This repository currently implements **five** features: *Authentication & Role-Based Access* (password + Google OAuth), *OAuth Onboarding*, *Medical Passport (FR1)*, the *Patient Profile (FR2)*, and *Medical Documents (FR10–FR13)*. Registration, sign-in (password and Google), sessions, role gates, first-time-OAuth-user onboarding, passport number generation/display, and a patient's own basic details / allergies / chronic conditions / current medications (view, add, edit, soft-remove) are complete and tested. Medical documents — upload, local OCR, a review screen per document type, search, download and delete — are complete and tested too: see [How medical documents work](#how-medical-documents-work). Appointments, the doctor-facing screens and the AI orchestrator described in `docs/PRD.md` are **not built yet**.
+> This repository currently implements **five** features: *Authentication & Role-Based Access* (password + Google OAuth), *OAuth Onboarding*, *Medical Passport (FR1)*, the *Patient Profile (FR2)*, and *Medical Documents (FR10–FR13)*. Registration, sign-in (password and Google), sessions, role gates, first-time-OAuth-user onboarding, passport number generation/display, and a patient's own basic details / allergies / chronic conditions / current medications (view, add, edit, soft-remove) are complete and tested. Medical documents — upload, local OCR, a review screen per document type, search, download and delete — are complete and tested too: see [How medical documents work](#how-medical-documents-work). Alongside these, other branches merged into `dev` add the consent / access-control work (P4, P9), the doctor dashboard (D4) and the doctor schedule (D7) — described in `CLAUDE.md`. Appointments and the AI orchestrator described in `docs/PRD.md` are **not built yet**.
 >
 > Identity is delegated to **Supabase Auth**, and the database is **Supabase Postgres** — shared with the wider CuraNode-AI product, so this repo's tables (`user_profile`, `clinic`, `patient`, `doctor`, `clinic_staff`, `doctor_affiliation`, `allergy`, `chronic_condition`) match that shared schema rather than inventing parallel ones. See [How authentication works](#how-authentication-works) and [How the patient profile works](#how-the-patient-profile-works) below.
 
@@ -77,6 +77,9 @@ backend/
     identity/          router · service · schemas · security · oauth (Supabase Auth + Google sign-in)
     audit/              append-only audit writer
     profile/            patient profile (FR2): schemas · service · router — basics, allergies, conditions, medications
+    consent/            grants, the consent gateway and the access log (FR4/FR5, P4 + P9)
+    doctor/             display rows for the doctor dashboard (D4)
+    schedule/           doctor schedule (D7): pure overlap/availability engine, schemas, service
     documents/          medical documents (FR10–FR13): storage · ocr · extractors · sections · groups · service · router · optional AI layer — one pipeline for all four types; doctor_router (API-only doctor prescription)
     i18n/               en/ur message catalogues
     web/                server-rendered page routes and form handling (OAuth, onboarding, patient profile, documents) + the "database unreachable" 503 page

@@ -10,7 +10,7 @@ logic) needed minimal churn.
 `user_profile`/`clinic`/`patient`/`doctor`/`clinic_staff`/`doctor_affiliation`
 are pre-existing tables owned by the shared schema — this module never
 creates or drops them; nor does it own the shared `allergy`/
-`chronic_condition` tables. Only `audit_log` and `patient_medication` are
+`chronic_condition` tables, or `doctor_schedule`/`schedule_exception` (D7). Only `audit_log` and `patient_medication` are
 owned outright by this codebase, plus a handful of additive columns on
 `user_profile`/`doctor`/`allergy`/`chronic_condition` that the shared schema
 didn't have yet (see the Alembic migrations for exactly what was added).
@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -34,14 +34,17 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
+    SmallInteger,
     String,
     Text,
+    Time,
     Uuid,
+    text,
 )
 from sqlalchemy import (
     Enum as SAEnum,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import INET, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from .types import utcnow, uuid7
@@ -79,6 +82,15 @@ class VerificationStatus(str, enum.Enum):
     PENDING = "pending"
     VERIFIED = "verified"
     REJECTED = "rejected"
+
+
+class ScheduleExceptionType(str, enum.Enum):
+    """`schedule_exception.type` (D7). `leave` and `emergency` both mean
+    "unavailable"; `extra` adds hours."""
+
+    LEAVE = "leave"
+    EMERGENCY = "emergency"
+    EXTRA = "extra"
 
 
 def _ts(**kw: object) -> Mapped[datetime]:
@@ -216,13 +228,22 @@ class Doctor(Base):
     )
 
 
+# The `doctor_affiliation.status` this app writes for every link a doctor
+# makes, at sign-up or later (the live column has no CHECK). Only "active"
+# links count for the schedule, `deps` and consent (clinic grants).
+AFFILIATION_ACTIVE = "active"
+
+
 class DoctorAffiliation(Base):
     """A doctor's clinic membership (many-to-many, date-ranged).
 
     Replaces this feature's original single `primary_clinic_id` column — the
     shared schema models doctor↔clinic as a relationship in its own right, so
     a doctor can move between or hold multiple affiliations over time.
-    Registration creates exactly one open-ended, active row here.
+    Registration (password or OAuth onboarding) creates one open-ended, active
+    row per hospital/clinic the doctor ticks, and a doctor can add more later
+    from the schedule page — the same active rows — so a schedule can span
+    several (`identity.service.link_doctor_clinics`).
     """
 
     __tablename__ = "doctor_affiliation"
@@ -254,6 +275,142 @@ class ClinicStaff(Base):
     role: Mapped[str] = mapped_column(String(40), nullable=False)
     joined_at: Mapped[datetime] = mapped_column(
         "joined_at", DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
+# ── Doctor schedule (D7) ─────────────────────────────────────────────────
+class DoctorSchedule(Base):
+    """doctor_schedule — one weekly slot of a doctor at a clinic (D7).
+
+    Shared, pre-existing table (verified against the live schema 2026-10-10).
+    A slot belongs to an *affiliation*, which gives both the doctor and the
+    clinic. `slot_minutes` is the booked-appointment grid; `max_tokens` caps
+    patients per session per date, booked plus walk-in (D7 R12–R14).
+
+    `status` has no CHECK in the live table. `active` is live; D7 removes a
+    slot by setting `inactive` and never deletes a row. Readers treat any value
+    other than `active` as not live, since other codebases share the table.
+
+    The first four CHECKs mirror the live ones; the last two were added by D7's
+    migration (`291c06a2b86f`).
+    """
+
+    __tablename__ = "doctor_schedule"
+
+    id: Mapped[uuid.UUID] = mapped_column("schedule_id", Uuid, primary_key=True, default=uuid7)
+    affiliation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("doctor_affiliation.affiliation_id", ondelete="CASCADE"), nullable=False
+    )
+    weekday: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    start_time: Mapped[time] = mapped_column(Time, nullable=False)
+    end_time: Mapped[time] = mapped_column(Time, nullable=False)
+    slot_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+
+    __table_args__ = (
+        CheckConstraint("end_time > start_time", name="doctor_schedule_check"),
+        CheckConstraint("weekday >= 0 AND weekday <= 6", name="doctor_schedule_weekday_check"),
+        CheckConstraint("slot_minutes > 0", name="doctor_schedule_slot_minutes_check"),
+        CheckConstraint("max_tokens >= 0", name="doctor_schedule_max_tokens_check"),
+        CheckConstraint(
+            "slot_minutes BETWEEN 5 AND 60 AND slot_minutes % 5 = 0",
+            name="doctor_schedule_slot_minutes_grid",
+        ),
+        CheckConstraint("max_tokens >= 1", name="doctor_schedule_max_tokens_min"),
+        Index("idx_doctor_schedule_affiliation_id", "affiliation_id"),
+    )
+
+
+class ScheduleException(Base):
+    """schedule_exception — time off on, or extra hours anchored to, one slot
+    on one date (D7).
+
+    Shared, pre-existing table. D7's migration (`291c06a2b86f`) added
+    `start_time`/`end_time` (time off for a window, or the extra's window;
+    both NULL = the whole slot), `removed_at` (soft-remove; rows are never
+    deleted) and `max_tokens` (an extra's own cap; NULL = inherit the anchor
+    slot's cap, read live), plus their CHECKs and the date index.
+    """
+
+    __tablename__ = "schedule_exception"
+
+    id: Mapped[uuid.UUID] = mapped_column("exception_id", Uuid, primary_key=True, default=uuid7)
+    schedule_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("doctor_schedule.schedule_id", ondelete="CASCADE"), nullable=False
+    )
+    exception_date: Mapped[date] = mapped_column(nullable=False)
+    kind: Mapped[ScheduleExceptionType] = mapped_column(
+        "type", _enum(ScheduleExceptionType, "schedule_exception_type"), nullable=False
+    )
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
+    start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    removed_at: Mapped[datetime | None] = _ts(nullable=True)
+    max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "type IN ('leave', 'emergency', 'extra')", name="schedule_exception_type_check"
+        ),
+        CheckConstraint(
+            "(start_time IS NULL) = (end_time IS NULL)", name="schedule_exception_times_pair"
+        ),
+        CheckConstraint(
+            "start_time IS NULL OR end_time > start_time", name="schedule_exception_times_order"
+        ),
+        CheckConstraint(
+            "type <> 'extra' OR (start_time IS NOT NULL AND end_time IS NOT NULL)",
+            name="schedule_exception_extra_has_times",
+        ),
+        CheckConstraint(
+            "max_tokens IS NULL OR max_tokens >= 1", name="schedule_exception_max_tokens_min"
+        ),
+        CheckConstraint(
+            "max_tokens IS NULL OR type = 'extra'",
+            name="schedule_exception_max_tokens_extra_only",
+        ),
+        Index("idx_schedule_exception_schedule_id", "schedule_id"),
+        Index("idx_schedule_exception_date", "exception_date"),
+    )
+
+
+class Appointment(Base):
+    """appointment — shared, pre-existing; owned by the booking work (P5).
+
+    Mapped only so D7 can COUNT upcoming bookings against a slot (spec R10)
+    and so the SQLite test schema has the table. D7 never writes it and never
+    reads a patient column; columns and CHECK follow the live table
+    (verified 2026-10-10).
+    """
+
+    __tablename__ = "appointment"
+
+    id: Mapped[uuid.UUID] = mapped_column("appointment_id", Uuid, primary_key=True, default=uuid7)
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient.patient_id", ondelete="CASCADE"), nullable=False
+    )
+    doctor_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("doctor.doctor_id"), nullable=False
+    )
+    clinic_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("clinic.clinic_id"), nullable=False
+    )
+    schedule_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("doctor_schedule.schedule_id"), nullable=True
+    )
+    slot_start: Mapped[datetime] = _ts(nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="booked")
+    booking_channel: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    created_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('booked', 'checked_in', 'done', 'cancelled')",
+            name="appointment_status_check",
+        ),
+        Index("idx_appointment_schedule_id", "schedule_id"),
     )
 
 
@@ -339,6 +496,101 @@ class PatientMedication(Base):
     removed_at: Mapped[datetime | None] = _ts(nullable=True)
 
     __table_args__ = (Index("idx_patient_medication_patient_id", "patient_id"),)
+
+
+# ── Medical Passport consent (FR4) ──────────────────────────────────────
+class ConsentGrant(Base):
+    """consent_grant — FR4/NFR16/D2, per-section since P9.
+
+    Pre-exists in the shared Supabase schema (verified against the live
+    `information_schema` 2026-10-01 and again 2026-10-07). `grantee_id` is
+    polymorphic (a `doctor_id` or a `clinic_id`, by `grantee_type`) and has no
+    FK, so the consent service checks the grantee exists. `grantee_type` is
+    DB-constrained to `'doctor'`/`'clinic'`.
+
+    `scope_sections` lists the record sections the grant shares (P9, see
+    `.claude/specs/privacy_access_spec.md`); `[]` means nothing is shared.
+    Changing sections never edits a grant: the old one is revoked and points
+    at its replacement through `replaced_by`. Rows are never deleted.
+
+    `revoked_by` and `replaced_by` were added by this repo's P9 migration, as
+    was `uq_consent_grant_one_active`: at most one unrevoked grant per
+    patient/grantee, now enforced by the database as well as the service.
+    """
+
+    __tablename__ = "consent_grant"
+
+    id: Mapped[uuid.UUID] = mapped_column("consent_id", Uuid, primary_key=True, default=uuid7)
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient.patient_id", ondelete="CASCADE"), nullable=False
+    )
+    grantee_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    grantee_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    scope_sections: Mapped[list[str]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=list
+    )
+    granted_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
+    expires_at: Mapped[datetime | None] = _ts(nullable=True)
+    revoked_at: Mapped[datetime | None] = _ts(nullable=True)
+    # NULL with `revoked_at` set means the system closed a lapsed grant.
+    revoked_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("user_profile.user_id", ondelete="SET NULL"), nullable=True
+    )
+    replaced_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("consent_grant.consent_id"), nullable=True
+    )
+
+    __table_args__ = (
+        Index(
+            "uq_consent_grant_one_active",
+            "patient_id",
+            "grantee_type",
+            "grantee_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+            sqlite_where=text("revoked_at IS NULL"),
+        ),
+    )
+
+
+class AccessLog(Base):
+    """access_log — FR5, NFR17. One row per read of a patient's record.
+
+    Pre-exists in the shared Supabase schema (verified 2026-10-07); this repo
+    adds no DDL to it. Written only by `consent/gateway.py`, one row per
+    section a non-owner reads, in the same transaction as the read. Append-
+    only: the application never updates or deletes a row.
+
+    `resource_id` is NOT NULL in the live table; section reads have no record
+    id of their own yet, so they store the patient's id.
+    """
+
+    __tablename__ = "access_log"
+
+    id: Mapped[uuid.UUID] = mapped_column("log_id", Uuid, primary_key=True, default=uuid7)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("user_profile.user_id", ondelete="SET NULL"), nullable=True
+    )
+    patient_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("patient.patient_id", ondelete="SET NULL"), nullable=True
+    )
+    consent_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("consent_grant.consent_id"), nullable=True
+    )
+    resource_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    resource_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    action: Mapped[str] = mapped_column(String(10), nullable=False)
+    is_break_glass: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    ip_address: Mapped[str | None] = mapped_column(
+        String(64).with_variant(INET(), "postgresql"), nullable=True
+    )
+    occurred_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
+
+    __table_args__ = (
+        CheckConstraint("action IN ('read', 'write', 'export')", name="access_log_action_check"),
+        Index("idx_access_log_patient_id", "patient_id"),
+        Index("idx_access_log_occurred_at", "occurred_at"),
+    )
 
 
 # ── Medical documents (FR10–FR13) ────────────────────────────────────────
@@ -489,11 +741,10 @@ class OcrExtraction(Base):
 class AuditLog(Base):
     """FR5, NFR17 — append-only. Never updated or deleted by the application.
 
-    Owned outright by this codebase — the shared schema's `access_log` table
-    is shaped for clinical record-access/consent auditing (a required
-    `resource_id`, break-glass flag, consent linkage) and doesn't fit generic
-    auth events like login/logout/lockout, so this stays a separate table
-    rather than being force-fit into that one.
+    Owned outright by this codebase. It holds auth events and grant changes;
+    reads of a patient's record go to the shared `access_log` instead (see
+    `AccessLog`), whose required `resource_id` and consent linkage don't fit
+    generic events like login/logout/lockout.
     """
 
     __tablename__ = "audit_log"

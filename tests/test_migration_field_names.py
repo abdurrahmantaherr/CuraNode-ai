@@ -39,9 +39,12 @@ def _run(module, direction: str, dialect: str, monkeypatch) -> list[str]:
 
 
 def test_it_extends_the_chain_without_branching():
+    """One linear chain with this revision in it. (Which revision is the HEAD changes every time
+    anyone adds a migration, so it is not asserted here.)"""
     scripts = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert scripts.get_heads() == [REVISION]
+    assert len(scripts.get_heads()) == 1
     assert scripts.get_revision(REVISION).down_revision == PREVIOUS
+    assert REVISION in {rev.revision for rev in scripts.walk_revisions("base", "heads")}
 
 
 def test_the_field_names_in_the_database_are_exactly_the_ones_the_code_uses():

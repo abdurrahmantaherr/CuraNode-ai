@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+{#- Who can see my passport (FR4 per section, FR5 — P9 spec §5.1). Every
+    control works without JavaScript: search is a GET form, giving access and
+    saving sections post and redirect (PRG), and Revoke is a two-step
+    <details> confirmation. profile.js only adds the submitting-state guard.
+
+    Context (built in web/router.py::_render_access):
+      grants          list[ConsentGrantOut] — active, newest first
+      past            list[ConsentGrantOut] — revoked or expired
+      log             list[AccessLogEntry]  — newest 50 reads by others
+      sections        canonical section keys
+      later_sections  sections that fill up once P2/P3 exist
+      durations       ("24h", "7d", "30d", "until_revoked")
+      q, q_error      the search text and its error, if any
+      results         list[GranteeOut] | None (None = no search yet)
+      form_state      {values: {grantee, sections, duration}, errors}
+      saved           success banner text, or None
+      page_error      page-level error banner text, or None
+      pkt, pkt_date   UTC → Pakistan time formatters -#}
+
+{% block title %}{{ t('access.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% macro section_checks(name_prefix, checked, id_prefix) %}
+  <div class="section-checks">
+    {% for s in sections %}
+      <label class="section-check" for="{{ id_prefix }}{{ s }}">
+        <input type="checkbox" id="{{ id_prefix }}{{ s }}" name="sections" value="{{ s }}"
+               {% if s in checked %}checked{% endif %}>
+        <span>{{ t('section.' ~ s) }}</span>
+        {% if s in later_sections %}<span class="field-help">{{ t('access.section_hint.later') }}</span>{% endif %}
+      </label>
+    {% endfor %}
+  </div>
+{% endmacro %}
+
+{% block body %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    {% if page_error %}
+      <div class="banner banner--error" role="alert">
+        <span aria-hidden="true">!</span><span>{{ page_error }}</span>
+      </div>
+    {% endif %}
+    {% if saved %}
+      <div class="banner banner--ok" role="status"><span>{{ saved }}</span></div>
+    {% endif %}
+
+    <div class="panel stack">
+      <p class="lead">{{ t('access.subtitle') }}</p>
+    </div>
+
+    {# ── Who can see my passport ───────────────────────────────────────── #}
+    <section id="active" class="panel stack" aria-labelledby="active-h">
+      <h2 id="active-h" class="panel__label">{{ t('access.section.who_can_see') }}</h2>
+      {% if grants %}
+        <ul class="grant-list">
+          {% for g in grants %}
+            <li class="grant-card stack">
+              <div class="entry-row__main">
+                <div class="entry-row__title">{{ g.grantee_name or t('access.grantee_unknown') }}</div>
+                {% if g.grantee_detail %}<div class="field-help">{{ g.grantee_detail }}</div>{% endif %}
+                <div class="mono">
+                  {{ t('access.granted_on', date=pkt_date(g.granted_at)) }} ·
+                  {% if g.expires_at %}{{ t('access.until', date=pkt_date(g.expires_at)) }}{% else %}{{ t('access.until_revoked') }}{% endif %}
+                </div>
+              </div>
+              <span class="badge badge--neutral">{{ t('access.grantee.' ~ g.grantee_type) }}</span>
+              <form class="stack" method="post" action="/{{ locale }}/patient/access/{{ g.id }}/sections">
+                <fieldset class="role-fieldset">
+                  <legend class="eyebrow">{{ t('access.field.sections') }}</legend>
+                  {{ section_checks('sections', g.sections, 'g-' ~ g.id ~ '-') }}
+                </fieldset>
+                <div>
+                  <button class="btn btn--secondary btn--sm" type="submit"
+                          data-label="{{ t('access.action.save_sections') }}">{{ t('access.action.save_sections') }}</button>
+                </div>
+              </form>
+              <div class="entry-row__actions">
+                <details class="confirm">
+                  <summary class="btn btn--secondary btn--sm">{{ t('access.action.revoke') }}</summary>
+                  <form method="post" action="/{{ locale }}/patient/access/{{ g.id }}/revoke">
+                    <p class="field-help">{{ t('access.revoke_hint') }}</p>
+                    <button class="btn btn--danger btn--sm" type="submit"
+                            data-label="{{ t('access.action.confirm_revoke') }}">{{ t('access.action.confirm_revoke') }}</button>
+                  </form>
+                </details>
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty-state">{{ t('access.empty') }}</p>
+      {% endif %}
+    </section>
+
+    {# ── Give access ───────────────────────────────────────────────────── #}
+    {% set values = form_state['values'] %}
+    {% set errors = form_state['errors'] %}
+    <section id="grant" class="panel stack" aria-labelledby="grant-h">
+      <h2 id="grant-h" class="panel__label">{{ t('access.section.grant') }}</h2>
+      <form class="stack" method="get" action="/{{ locale }}/patient/access#grant" role="search">
+        <label class="field" for="f-q">
+          <span class="field-label">{{ t('access.search.label') }}</span>
+          <input class="input" id="f-q" name="q" type="search" value="{{ q }}" maxlength="80"
+                 {% if q_error %}aria-invalid="true" aria-describedby="e-q"{% endif %}>
+          {% if q_error %}
+            <span class="field-error" id="e-q" role="alert"><span aria-hidden="true">!</span>{{ q_error }}</span>
+          {% endif %}
+        </label>
+        <div>
+          <button class="btn btn--secondary" type="submit">{{ t('access.search.action') }}</button>
+        </div>
+      </form>
+
+      {% if errors and not results %}
+        {#- A failed grant whose search can't be re-shown: never hide why. -#}
+        {% for msg in errors.values() %}
+          <span class="field-error" role="alert"><span aria-hidden="true">!</span>{{ msg }}</span>
+        {% endfor %}
+      {% endif %}
+
+      {% if results is not none %}
+        {% if results %}
+          <form class="stack" method="post" action="/{{ locale }}/patient/access" novalidate>
+            <input type="hidden" name="q" value="{{ q }}">
+            <fieldset class="role-fieldset">
+              <legend class="eyebrow">{{ t('access.search.pick') }}</legend>
+              <div class="role-group">
+                {% for r in results %}
+                  {% set key = r.type ~ ':' ~ r.id %}
+                  <label class="role-tile">
+                    <input class="role-tile__radio" type="radio" name="grantee" value="{{ key }}"
+                           {% if values.get('grantee') == key %}checked{% endif %}>
+                    <span class="role-tile__name">{{ r.name }}</span>
+                    <span class="role-tile__hint">{{ t('access.grantee.' ~ r.type) }}{% if r.detail %} · {{ r.detail }}{% endif %}</span>
+                  </label>
+                {% endfor %}
+              </div>
+              {% if errors.get('grantee') %}
+                <span class="field-error" role="alert"><span aria-hidden="true">!</span>{{ errors['grantee'] }}</span>
+              {% endif %}
+            </fieldset>
+
+            <fieldset class="role-fieldset">
+              <legend class="eyebrow">{{ t('access.field.sections') }}</legend>
+              {{ section_checks('sections', values.get('sections', []), 'new-') }}
+              {% if errors.get('sections') %}
+                <span class="field-error" role="alert"><span aria-hidden="true">!</span>{{ errors['sections'] }}</span>
+              {% endif %}
+            </fieldset>
+
+            <fieldset class="role-fieldset">
+              <legend class="eyebrow">{{ t('access.field.duration') }}</legend>
+              <div class="section-checks">
+                {% for d in durations %}
+                  <label class="section-check" for="dur-{{ d }}">
+                    <input type="radio" id="dur-{{ d }}" name="duration" value="{{ d }}"
+                           {% if values.get('duration') == d %}checked{% endif %}>
+                    <span>{{ t('access.duration.' ~ d) }}</span>
+                  </label>
+                {% endfor %}
+              </div>
+              {% if errors.get('duration') %}
+                <span class="field-error" role="alert"><span aria-hidden="true">!</span>{{ errors['duration'] }}</span>
+              {% endif %}
+            </fieldset>
+
+            <div>
+              <button class="btn btn--primary" type="submit"
+                      data-label="{{ t('access.action.grant') }}">{{ t('access.action.grant') }}</button>
+            </div>
+          </form>
+        {% else %}
+          <p class="empty-state">{{ t('access.search.none') }}</p>
+        {% endif %}
+      {% endif %}
+    </section>
+
+    {# ── Who looked ────────────────────────────────────────────────────── #}
+    <section id="log" class="panel stack" aria-labelledby="log-h">
+      <h2 id="log-h" class="panel__label">{{ t('access.section.log') }}</h2>
+      {% if log %}
+        <div class="table-scroll">
+          <table class="patient-table access-log">
+            <thead>
+              <tr>
+                <th scope="col">{{ t('access.log.when') }}</th>
+                <th scope="col">{{ t('access.log.who') }}</th>
+                <th scope="col">{{ t('access.log.clinic') }}</th>
+                <th scope="col">{{ t('access.log.section') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for e in log %}
+                <tr>
+                  <td class="mono" dir="ltr">{{ pkt(e.occurred_at) }}</td>
+                  <td>{{ e.accessor_name or t('access.grantee_unknown') }}{% if e.accessor_specialty %}<div class="field-help">{{ e.accessor_specialty }}</div>{% endif %}</td>
+                  <td>{{ e.clinic_name or '—' }}</td>
+                  <td>{% if e.section in sections %}{{ t('section.' ~ e.section) }}{% else %}{{ e.section }}{% endif %}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="empty-state">{{ t('access.log.empty') }}</p>
+      {% endif %}
+
+      {% if past %}
+        <h3 class="eyebrow">{{ t('access.section.past') }}</h3>
+        <ul class="entry-list">
+          {% for g in past %}
+            <li class="entry-row">
+              <div class="entry-row__main">
+                <div class="entry-row__title">{{ g.grantee_name or t('access.grantee_unknown') }}</div>
+                <div class="field-help">
+                  {% for s in g.sections %}{{ t('section.' ~ s) }}{% if not loop.last %}, {% endif %}{% endfor %}
+                </div>
+                <div class="mono">
+                  {{ t('access.ended_on', date=pkt_date(g.revoked_at or g.expires_at)) }}{% if g.replaced_by %} · {{ t('access.replaced') }}{% endif %}
+                </div>
+              </div>
+              <span class="badge badge--neutral">{{ t('access.grantee.' ~ g.grantee_type) }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </section>
+  </main>
+</div>
+<script src="/static/js/profile.js" defer></script>
+{% endblock %}

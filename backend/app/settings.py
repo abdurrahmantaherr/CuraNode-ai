@@ -74,6 +74,14 @@ class Settings(BaseSettings):
     profile_write_rate_limit_per_minute: int = 30
     profile_max_entries_per_list: int = 50
 
+    # ── Medical Passport consent (FR4) ───────────────────────────────────
+    consent_write_rate_limit_per_minute: int = 10
+    # Grantee search on the access page and API (P9).
+    consent_search_rate_limit_per_minute: int = 30
+
+    # ── Doctor schedule (D7) ─────────────────────────────────────────────
+    schedule_write_rate_limit_per_minute: int = 30
+
     # ── Medical documents (FR10–FR13) ────────────────────────────────────
     # The private Supabase Storage bucket that already exists in the shared
     # project. Originals are read back through the app (ownership-checked),

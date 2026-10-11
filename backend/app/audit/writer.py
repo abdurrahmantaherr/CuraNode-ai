@@ -50,6 +50,27 @@ PROFILE_MEDICATION_ADD = "profile.medication.add"
 PROFILE_MEDICATION_UPDATE = "profile.medication.update"
 PROFILE_MEDICATION_REMOVE = "profile.medication.remove"
 
+# Actions emitted by the Medical Passport consent gateway (FR4, NFR16, D2).
+CONSENT_GRANT = "consent.grant"
+CONSENT_REVOKE = "consent.revoke"
+CONSENT_CHANGE = "consent.change"  # P9: sections changed (revoke + replace)
+RECORD_READ = "record.read"
+
+# Emitted by the doctor dashboard (D4). `detail` holds a patient count only.
+DOCTOR_DASHBOARD_VIEW = "doctor.dashboard.view"
+
+# Emitted by the doctor schedule (D7). `detail` holds ids, clinic, weekday or
+# date, type, times and caps; an exception's free-text `reason` is never
+# copied, only `reason_length`.
+SCHEDULE_SLOT_ADD = "schedule.slot.add"
+SCHEDULE_SLOT_UPDATE = "schedule.slot.update"
+SCHEDULE_SLOT_REMOVE = "schedule.slot.remove"
+SCHEDULE_EXCEPTION_ADD = "schedule.exception.add"
+SCHEDULE_EXCEPTION_REMOVE = "schedule.exception.remove"
+# A doctor linking themselves to more hospitals they work at (active links,
+# as at sign-up). `detail` holds clinic ids only.
+DOCTOR_AFFILIATION_ADD = "doctor.affiliation.add"
+
 # Actions emitted by medical-document processing (FR10–FR13). `detail` carries
 # counts and the document type only — never OCR text or extracted values,
 # which are clinical free text that may hold identity PII.

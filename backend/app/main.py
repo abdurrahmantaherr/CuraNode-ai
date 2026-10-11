@@ -47,6 +47,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
+from app.consent.router import router as consent_router
 from app.db.models import Profile
 from app.db.session import SessionFactory, engine
 from app.documents.doctor_router import router as doctor_documents_router
@@ -185,6 +186,7 @@ if STATIC_DIR.exists():
 
 app.include_router(identity_router)
 app.include_router(profile_router)
+app.include_router(consent_router)
 app.include_router(documents_router)
 app.include_router(doctor_documents_router)
 app.include_router(web_documents_router)
