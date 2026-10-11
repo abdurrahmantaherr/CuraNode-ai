@@ -325,8 +325,20 @@
   "errors.schedule_slot_minutes_invalid": "5 سے 60 منٹ کے درمیان، 5 کے وقفے سے منتخب کریں۔",
   "errors.schedule_too_short": "یہ اوقات فی مریض منٹ سے کم ہیں۔",
   "errors.schedule_max_tokens_invalid": "1 سے 200 تک پورا عدد درج کریں۔",
-  "schedule.clinics_linked_note": "آپ {count} کلینک سے منسلک ہیں۔ آپ صرف اُن کلینکس میں اوقات شامل کر سکتے ہیں جن سے آپ منسلک ہیں؛ کسی اور ہسپتال میں کام کے لیے اُس ہسپتال کے ایڈمن سے کہیں کہ آپ کو شامل کرے۔",
+  "schedule.clinics_linked_note": "آپ {count} ہسپتال میں اوقات شامل کر سکتے ہیں۔ کسی اور ہسپتال کے لیے، اوپر \"آپ کے ہسپتال\" میں اسے شامل کریں۔",
   "field.clinics": "ہسپتال / کلینک جہاں آپ کام کرتے ہیں",
   "field.clinics_help": "ہر اُس ہسپتال پر نشان لگائیں جہاں آپ مریض دیکھتے ہیں۔ پھر آپ ہر ایک میں اپنے اوقات شامل کر سکیں گے۔",
-  "errors.too_many_clinics": "زیادہ سے زیادہ 10 ہسپتال منتخب کریں۔"
+  "errors.too_many_clinics": "زیادہ سے زیادہ 10 ہسپتال منتخب کریں۔",
+  "schedule.hospitals_title": "آپ کے ہسپتال",
+  "schedule.hospital_linked": "منسلک",
+  "schedule.hospital_pending": "ہسپتال کی تصدیق کا انتظار",
+  "schedule.hospital_ended": "تعلق ختم",
+  "schedule.add_hospitals_title": "وہ ہسپتال شامل کریں جہاں آپ کام کرتے ہیں",
+  "schedule.add_hospitals_help": "آپ وہاں فوراً اپنے اوقات شامل کر سکتے ہیں۔ ہسپتال بعد میں اس تعلق کی تصدیق کرے گا؛ تب تک اس سے آپ کو کسی مریض کے ریکارڈ تک رسائی نہیں ملتی۔",
+  "schedule.add_hospitals_submit": "ہسپتال شامل کریں",
+  "schedule.add_hospitals_none": "آپ CuraNode کے ہر ہسپتال سے منسلک ہیں۔",
+  "schedule.saved.hospitals_added": "ہسپتال شامل ہو گئے۔ اب آپ وہاں اپنے اوقات شامل کر سکتے ہیں۔",
+  "errors.clinics_required": "کم از کم ایک ہسپتال منتخب کریں۔",
+  "errors.clinics_already_linked": "آپ منتخب کردہ ہسپتالوں سے پہلے ہی منسلک ہیں۔",
+  "errors.clinic_link_ended": "اس ہسپتال سے آپ کا تعلق ختم کر دیا گیا تھا۔ اسے صرف ہسپتال ہی بحال کر سکتا ہے۔"
 }

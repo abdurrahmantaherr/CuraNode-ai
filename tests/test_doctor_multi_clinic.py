@@ -68,7 +68,7 @@ async def test_the_schedule_page_then_offers_both_hospitals(client, db, clinic, 
         data=_form("sched@x.com", clinic_ids=[str(clinic.id), str(second_clinic.id)]),
     )
     body = (await client.get("/en/doctor/schedule")).text
-    assert "You are linked to 2 clinic(s)." in body
+    assert "You can add hours at 2 hospital(s)." in body
     assert clinic.name in body and second_clinic.name in body
 
 

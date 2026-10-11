@@ -224,6 +224,15 @@ class Doctor(Base):
     )
 
 
+# `doctor_affiliation.status` values this app writes (the live column has no
+# CHECK). "active": confirmed — the only status consent (clinic grants) and
+# `deps` count. "pending": a link the doctor added themselves after sign-up;
+# usable for their schedule (D7), never for patient access.
+AFFILIATION_ACTIVE = "active"
+AFFILIATION_PENDING = "pending"
+SCHEDULABLE_AFFILIATION_STATUSES = (AFFILIATION_ACTIVE, AFFILIATION_PENDING)
+
+
 class DoctorAffiliation(Base):
     """A doctor's clinic membership (many-to-many, date-ranged).
 

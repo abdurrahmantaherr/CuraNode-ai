@@ -345,7 +345,7 @@ def test_ac24_no_schedule_handler_uses_the_verified_doctor_gate():
             assert "VerifiedDoctorDep" not in text and "require_verified_doctor" not in text
             assert "is_verified_doctor" not in text or node.name == "_render_schedule"
             checked += 1
-    assert checked == len(names) + 7  # the guard, two helpers, and seven routes
+    assert checked == len(names) + 8  # the guard, two helpers, and eight routes
 
 
 async def test_ac28_a_booked_slot_shows_the_locked_message(doctor_client, db, clinic):
@@ -458,5 +458,5 @@ async def test_on_a_sunday_the_default_view_shows_the_coming_week(
 
 async def test_the_add_form_says_hours_go_only_at_linked_clinics(doctor_client):
     body = (await doctor_client.get(PAGE)).text
-    assert "You are linked to 2 clinic(s)." in body  # schedule_doctor: two clinics
-    assert "ask that hospital&#39;s admin to add you" in body
+    assert "You can add hours at 2 hospital(s)." in body  # schedule_doctor: two clinics
+    assert "add it under Your hospitals above" in body

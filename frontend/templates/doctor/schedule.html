@@ -128,6 +128,57 @@
       </ol>
     </section>
 
+    {#- Your hospitals: every link, and adding more (pending until the hospital
+        confirms; usable for the schedule, never for patient access). -#}
+    <section class="panel stack" id="hospitals" aria-labelledby="hospitals-h">
+      <h2 id="hospitals-h" class="panel__label">{{ t('schedule.hospitals_title') }}</h2>
+      {% if hospitals %}
+        <ul class="legend" aria-label="{{ t('schedule.hospitals_title') }}">
+          {% for h in hospitals %}
+            <li class="legend__item {{ h.colour }}">
+              <span class="legend__dot" aria-hidden="true"></span>{{ h.name }}
+              {% if h.state == 'pending' %}<span class="badge badge--warn">{{ t('schedule.hospital_pending') }}</span>
+              {% elif h.state == 'linked' %}<span class="badge badge--ok">{{ t('schedule.hospital_linked') }}</span>
+              {% else %}<span class="badge badge--neutral">{{ t('schedule.hospital_ended') }}</span>{% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+
+      {% set hosp_failed = failed('hospitals') %}
+      {% set hv = form_state['values'] if hosp_failed else {} %}
+      {% set he = form_state['errors'] if hosp_failed else {} %}
+      {% if hospital_options %}
+        <form class="stack" method="post" action="/{{ locale }}/doctor/schedule/hospitals" novalidate>
+          <fieldset class="field">
+            <legend class="field-label">{{ t('schedule.add_hospitals_title') }}</legend>
+            <span class="field-help">{{ t('schedule.add_hospitals_help') }}</span>
+            <div class="section-checks">
+              {% for c in hospital_options %}
+                <label class="section-check">
+                  <input type="checkbox" name="clinic_ids" value="{{ c.value }}"
+                         {% if c.value in (hv.get('clinic_ids') or []) %}checked{% endif %}>
+                  <span>{{ c.label }}</span>
+                </label>
+              {% endfor %}
+            </div>
+            {% if he.get('clinic_ids') %}
+              <span class="field-error" role="alert"><span aria-hidden="true">!</span>{{ he.get('clinic_ids') }}</span>
+            {% endif %}
+          </fieldset>
+          <div>
+            <button class="btn btn--primary btn--sm" type="submit"
+                    data-label="{{ t('schedule.add_hospitals_submit') }}">{{ t('schedule.add_hospitals_submit') }}</button>
+          </div>
+        </form>
+      {% else %}
+        {% if he.get('clinic_ids') %}
+          <span class="field-error" role="alert"><span aria-hidden="true">!</span>{{ he.get('clinic_ids') }}</span>
+        {% endif %}
+        <p class="muted-note">{{ t('schedule.add_hospitals_none') }}</p>
+      {% endif %}
+    </section>
+
     {#- Weekly hours -#}
     <section class="panel stack" id="slots" aria-labelledby="slots-h">
       <h2 id="slots-h" class="panel__label">{{ t('schedule.slots_title') }}</h2>

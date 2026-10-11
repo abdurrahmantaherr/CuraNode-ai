@@ -360,7 +360,12 @@ Back-to-back is allowed. (Widened from "different clinic" by decision 17, so a
 later slot add or edit cannot create the overlap R4 forbids.)
 
 R2. Affiliation rule. A slot can only be added to, or moved to, an affiliation
-with `status = 'active'` at a clinic with `status = 'active'` (`end_date` is
+with `status = 'active'` **or `'pending'`** at a clinic with `status = 'active'`.
+(Amended 2026-10-11: doctors pick several hospitals at sign-up, all `active`, and
+can later add more themselves from the schedule page; a self-added link is
+`pending` until the hospital confirms it. A pending link counts for the schedule
+only: consent counts `active` links alone, so it never reaches a clinic grant. A
+link the hospital ended cannot be re-added by the doctor.) For the rest of R2, (`end_date` is
 not consulted, matching the rest of the code). If the doctor has several
 active affiliation rows for one clinic, use the most recent `start_date`.
 Moving a slot to another clinic changes its `affiliation_id`. If an

@@ -33,7 +33,7 @@ from ..consent import gateway as consent_gateway
 from ..consent import schemas as consent_schemas
 from ..consent import service as consent_service
 from ..db import types as dbtypes
-from ..db.models import Clinic, Profile, UserRole
+from ..db.models import AFFILIATION_ACTIVE, AFFILIATION_PENDING, Clinic, Profile, UserRole
 from ..deps import (
     Actor,
     OptionalActorDep,
@@ -1725,6 +1725,7 @@ _SCHEDULE_SAVED = (
     "time_off_added",
     "extra_added",
     "exception_removed",
+    "hospitals_added",
 )
 _SLOT_FIELDS = ("clinic_id", "start_time", "end_time", "slot_minutes", "max_tokens")
 _TIME_OFF_FIELDS = ("exception_date", "clinic_id", "start_time", "end_time", "emergency", "reason")
@@ -1823,6 +1824,35 @@ async def _render_schedule(
     }
     live_clinics = [c for c in clinics if c.id in live_clinic_ids]
     clinic_filter = next((c.id for c in clinics if str(c.id) == clinic), None)
+
+    # Your hospitals: one line per clinic, the strongest link status first.
+    rank = {AFFILIATION_ACTIVE: 0, AFFILIATION_PENDING: 1}
+    best: dict[uuid.UUID, str] = {}
+    for a in loaded.affiliations.values():
+        if a.clinic_id not in best or rank.get(a.status, 2) < rank.get(best[a.clinic_id], 2):
+            best[a.clinic_id] = a.status
+    hospitals = [
+        {
+            "name": c.name,
+            "colour": colour[c.id],
+            "state": "closed"
+            if c.status != "active"
+            else {AFFILIATION_ACTIVE: "linked", AFFILIATION_PENDING: "pending"}.get(
+                best[c.id], "ended"
+            ),
+        }
+        for c in clinics
+    ]
+    # Active clinics the doctor has never been linked to (an ended link is
+    # restored only by that hospital).
+    addable = (
+        await session.execute(select(Clinic).where(Clinic.status == "active").order_by(Clinic.name))
+    ).scalars()
+    hospital_options = [
+        {"value": str(c.id), "label": f"{c.name} — {c.city}" if c.city else c.name}
+        for c in addable
+        if c.id not in loaded.clinics
+    ]
 
     # The week view reads availability only through the service (spec §6).
     windows: list[schedule_engine.EffectiveWindow] = []
@@ -1986,6 +2016,8 @@ async def _render_schedule(
         exceptions=exceptions,
         inherit_hints=inherit_hints,
         can_add=bool(live_clinics),
+        hospitals=hospitals,
+        hospital_options=hospital_options,
         edit_id=edit_id,
         form_state=form_state,
         saved=translate(f"schedule.saved.{saved}", loc) if saved in _SCHEDULE_SAVED else None,
@@ -2188,6 +2220,38 @@ async def doctor_schedule_add_extra(
             request, loc, session, actor, exc, form="extra", values=values
         )
     return _schedule_saved(loc, "extra_added", "exceptions")
+
+
+@router.post("/{locale}/doctor/schedule/hospitals")
+async def doctor_schedule_add_hospitals(
+    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    """A doctor links themselves to more hospitals they work at. Each link is
+    pending: usable for the schedule, never for patient access (consent counts
+    active links only)."""
+    if (redirect := _doctor_schedule_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    raw = [str(v) for v in (await request.form()).getlist("clinic_ids")]
+    values: dict[str, Any] = {"clinic_ids": raw}
+    try:
+        await check_schedule_write_rate(actor)
+        chosen = _chosen_clinics(raw)
+        if chosen is None:
+            raise ValidationFailed({"fields": {"clinic_ids": "errors.clinic_unknown"}})
+        await service.add_doctor_clinics(
+            session,
+            actor.user_id,
+            chosen,
+            ip=actor.ip_address,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped onto the page
+        return await _schedule_failure(
+            request, loc, session, actor, exc, form="hospitals", values=values
+        )
+    return _schedule_saved(loc, "hospitals_added", "hospitals")
 
 
 @router.post("/{locale}/doctor/schedule/exceptions/{exception_id}/remove")

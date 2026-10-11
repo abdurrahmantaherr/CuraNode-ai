@@ -32,7 +32,10 @@ from supabase_auth.errors import AuthApiError
 
 from ..audit import writer as audit
 from ..cache import cache, lockout_key
+from ..db import types as dbtypes
 from ..db.models import (
+    AFFILIATION_PENDING,
+    SCHEDULABLE_AFFILIATION_STATUSES,
     AccountStatus,
     Clinic,
     ClinicStaff,
@@ -45,11 +48,12 @@ from ..db.models import (
     VerificationStatus,
 )
 from ..db.types import uuid7
-from ..errors import Unauthenticated, ValidationFailed
+from ..errors import NotFound, Unauthenticated, ValidationFailed
 from ..settings import settings
 from . import oauth as oauth_mod
 from . import security
 from .schemas import (
+    MAX_CLINICS,
     DoctorOnboardingRequest,
     DoctorRegisterRequest,
     LoginRequest,
@@ -86,6 +90,84 @@ async def _check_clinics_exist(session: AsyncSession, clinic_ids: list[uuid.UUID
     for clinic_id in clinic_ids:
         if await session.get(Clinic, clinic_id) is None:
             raise ValidationFailed({"fields": {"clinic_ids": "errors.clinic_unknown"}})
+
+
+async def add_doctor_clinics(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    clinic_ids: list[uuid.UUID],
+    *,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> list[DoctorAffiliation]:
+    """An existing doctor links themselves to more hospitals they work at.
+
+    Each new link is `pending`: usable for the schedule, never for patient
+    access. Clinics they are already linked to are skipped; a link the
+    hospital ended cannot be re-added here (only that hospital can restore
+    it). All or nothing, one audit row.
+    """
+    chosen = list(dict.fromkeys(clinic_ids))
+    if not chosen:
+        raise ValidationFailed({"fields": {"clinic_ids": "errors.clinics_required"}})
+
+    doctor = (
+        await session.execute(select(Doctor).where(Doctor.user_id == user_id))
+    ).scalar_one_or_none()
+    if doctor is None:
+        raise NotFound()
+    # Serialise this doctor's link changes, so a double submit adds nothing twice.
+    await session.execute(select(Doctor.id).where(Doctor.id == doctor.id).with_for_update())
+
+    existing = list(
+        (
+            await session.execute(
+                select(DoctorAffiliation).where(DoctorAffiliation.doctor_id == doctor.id)
+            )
+        ).scalars()
+    )
+    linked = {a.clinic_id for a in existing if a.status in SCHEDULABLE_AFFILIATION_STATUSES}
+    ended = {a.clinic_id for a in existing if a.status not in SCHEDULABLE_AFFILIATION_STATUSES}
+
+    new: list[uuid.UUID] = []
+    for clinic_id in chosen:
+        clinic = await session.get(Clinic, clinic_id)
+        if clinic is None or clinic.status != "active":
+            raise ValidationFailed({"fields": {"clinic_ids": "errors.clinic_unknown"}})
+        if clinic_id in linked:
+            continue
+        if clinic_id in ended:
+            raise ValidationFailed({"fields": {"clinic_ids": "errors.clinic_link_ended"}})
+        new.append(clinic_id)
+    if not new:
+        raise ValidationFailed({"fields": {"clinic_ids": "errors.clinics_already_linked"}})
+    if len(linked) + len(new) > MAX_CLINICS:
+        raise ValidationFailed({"fields": {"clinic_ids": "errors.too_many_clinics"}})
+
+    rows = [
+        DoctorAffiliation(
+            id=uuid7(),
+            doctor_id=doctor.id,
+            clinic_id=clinic_id,
+            start_date=dbtypes.today_pk(),
+            status=AFFILIATION_PENDING,
+        )
+        for clinic_id in new
+    ]
+    session.add_all(rows)
+    await session.flush()
+    await audit.write(
+        session,
+        action=audit.DOCTOR_AFFILIATION_ADD,
+        actor_user_id=user_id,
+        actor_role=UserRole.DOCTOR.value,
+        resource_type="doctor_affiliation",
+        ip_address=ip,
+        user_agent=user_agent,
+        detail={"clinic_ids": [str(c) for c in new], "status": AFFILIATION_PENDING},
+    )
+    await session.commit()
+    return rows
 
 
 async def provision_role_records(

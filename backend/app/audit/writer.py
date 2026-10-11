@@ -67,6 +67,9 @@ SCHEDULE_SLOT_UPDATE = "schedule.slot.update"
 SCHEDULE_SLOT_REMOVE = "schedule.slot.remove"
 SCHEDULE_EXCEPTION_ADD = "schedule.exception.add"
 SCHEDULE_EXCEPTION_REMOVE = "schedule.exception.remove"
+# A doctor linking themselves to a hospital they work at (status "pending"
+# until the hospital confirms). `detail` holds clinic ids only.
+DOCTOR_AFFILIATION_ADD = "doctor.affiliation.add"
 
 
 async def write(

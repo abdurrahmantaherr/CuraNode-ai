@@ -325,8 +325,20 @@
   "errors.schedule_slot_minutes_invalid": "Choose 5 to 60 minutes, in steps of 5.",
   "errors.schedule_too_short": "These hours are shorter than the minutes per patient.",
   "errors.schedule_max_tokens_invalid": "Enter a whole number from 1 to 200.",
-  "schedule.clinics_linked_note": "You are linked to {count} clinic(s). You can add hours only at clinics you are linked to; to work at another hospital, ask that hospital's admin to add you.",
+  "schedule.clinics_linked_note": "You can add hours at {count} hospital(s). To work at another one, add it under Your hospitals above.",
   "field.clinics": "Hospitals / clinics you work at",
   "field.clinics_help": "Tick every hospital where you see patients. You can then add your hours at each one.",
-  "errors.too_many_clinics": "Choose at most 10 hospitals."
+  "errors.too_many_clinics": "Choose at most 10 hospitals.",
+  "schedule.hospitals_title": "Your hospitals",
+  "schedule.hospital_linked": "Linked",
+  "schedule.hospital_pending": "Awaiting the hospital's confirmation",
+  "schedule.hospital_ended": "Link ended",
+  "schedule.add_hospitals_title": "Add a hospital you work at",
+  "schedule.add_hospitals_help": "You can add your hours there straight away. The hospital confirms the link later; until then it gives you no access to any patient's records.",
+  "schedule.add_hospitals_submit": "Add hospitals",
+  "schedule.add_hospitals_none": "You are linked to every hospital on CuraNode.",
+  "schedule.saved.hospitals_added": "Hospitals added. You can add your hours there now.",
+  "errors.clinics_required": "Choose at least one hospital.",
+  "errors.clinics_already_linked": "You are already linked to the hospitals you chose.",
+  "errors.clinic_link_ended": "Your link to that hospital was ended. Only the hospital can restore it."
 }
