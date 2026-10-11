@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{#- D-VERIFY — clinic-admin doctor verification. Every action works without
+    JavaScript: each row's form posts and redirects (PRG), same pattern as
+    patient/access.html's revoke.
+
+    Context (web/router.py::_render_admin):
+      tab        "pending" | "verified" | "rejected"
+      doctors    list[Doctor] at this admin's clinic, for this tab
+      decisions  dict[doctor_id -> DoctorVerification] — latest, for verified/rejected
+      reasons    REASONS tuple
+      saved      success banner text, or None
+      page_error page-level error banner text, or None -#}
+{% import "partials/form_field.html" as f %}
+{% block title %}{{ t('admin.dashboard.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    {% if page_error %}
+      <div class="banner banner--error" role="alert">
+        <span aria-hidden="true">!</span><span>{{ page_error }}</span>
+      </div>
+    {% endif %}
+    {% if saved %}
+      <div class="banner banner--ok" role="status"><span>{{ saved }}</span></div>
+    {% endif %}
+
+    <section class="panel stack">
+      {% if not doctors %}
+        <p class="empty-state">{{ t('verify.empty.' ~ tab) }}</p>
+      {% else %}
+        <ul class="entry-list">
+          {% for d in doctors %}
+            <li class="entry-row">
+              <div class="entry-row__main">
+                <div class="entry-row__title">{{ d.full_name }}</div>
+                <div class="mono" dir="ltr">{{ d.pmdc_number }}</div>
+                <div class="mono-note">{{ d.specialty or '' }}</div>
+                {% set dec = decisions.get(d.id) %}
+                {% if tab == 'rejected' and dec %}
+                  <div class="field-help">
+                    {{ t('verify.last_decision', reason=t('verify.reason.' ~ (dec.reason or 'other'))) }}
+                  </div>
+                {% endif %}
+              </div>
+
+              <div class="entry-row__actions">
+                <a class="btn btn--secondary btn--sm" href="https://pmdc.pk/" target="_blank" rel="noopener">
+                  {{ t('verify.action.check_pmdc') }}
+                </a>
+
+                {% if tab in ('pending', 'rejected') %}
+                  <details class="confirm">
+                    <summary class="btn btn--primary btn--sm">{{ t('verify.action.approve') }}</summary>
+                    <form method="post" action="/{{ locale }}/admin/doctors/{{ d.id }}/approve">
+                      <input type="hidden" name="source_tab" value="{{ tab }}">
+                      <label class="checkline">
+                        <input type="checkbox" name="checked_number">
+                        {{ t('verify.check.number') }}
+                      </label>
+                      <label class="checkline">
+                        <input type="checkbox" name="checked_name">
+                        {{ t('verify.check.name') }}
+                      </label>
+                      <label class="checkline">
+                        <input type="checkbox" name="checked_licence">
+                        {{ t('verify.check.licence') }}
+                      </label>
+                      {{ f.textarea('note', t('field.note'), rows=2, placeholder=t('field.note_placeholder'), maxlength=500,
+                                    id_prefix=d.id|string ~ '-approve-') }}
+                      <button class="btn btn--primary btn--sm" type="submit"
+                              data-label="{{ t('verify.action.confirm_approve') }}">{{ t('verify.action.confirm_approve') }}</button>
+                    </form>
+                  </details>
+                {% endif %}
+
+                {% if tab == 'pending' %}
+                  <details class="confirm">
+                    <summary class="btn btn--danger btn--sm">{{ t('verify.action.reject') }}</summary>
+                    <form method="post" action="/{{ locale }}/admin/doctors/{{ d.id }}/reject">
+                      <input type="hidden" name="source_tab" value="{{ tab }}">
+                      <label class="field">
+                        <span class="field-label">{{ t('field.reason') }}</span>
+                        <select class="select" name="reason">
+                          {% for r in reasons %}
+                            <option value="{{ r }}">{{ t('verify.reason.' ~ r) }}</option>
+                          {% endfor %}
+                        </select>
+                      </label>
+                      {{ f.textarea('note', t('field.note'), rows=2, placeholder=t('field.note_placeholder'), maxlength=500,
+                                    id_prefix=d.id|string ~ '-reject-') }}
+                      <button class="btn btn--danger btn--sm" type="submit"
+                              data-label="{{ t('verify.action.confirm_reject') }}">{{ t('verify.action.confirm_reject') }}</button>
+                    </form>
+                  </details>
+                {% endif %}
+
+                {% if tab == 'verified' %}
+                  <details class="confirm">
+                    <summary class="btn btn--danger btn--sm">{{ t('verify.action.revoke') }}</summary>
+                    <form method="post" action="/{{ locale }}/admin/doctors/{{ d.id }}/revoke">
+                      <input type="hidden" name="source_tab" value="{{ tab }}">
+                      <label class="field">
+                        <span class="field-label">{{ t('field.reason') }}</span>
+                        <select class="select" name="reason">
+                          {% for r in reasons %}
+                            <option value="{{ r }}">{{ t('verify.reason.' ~ r) }}</option>
+                          {% endfor %}
+                        </select>
+                      </label>
+                      {{ f.textarea('note', t('field.note'), rows=2, placeholder=t('field.note_placeholder'), maxlength=500,
+                                    id_prefix=d.id|string ~ '-revoke-') }}
+                      <button class="btn btn--danger btn--sm" type="submit"
+                              data-label="{{ t('verify.action.confirm_revoke') }}">{{ t('verify.action.confirm_revoke') }}</button>
+                    </form>
+                  </details>
+                {% endif %}
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </section>
+  </main>
+</div>
+{% endblock %}

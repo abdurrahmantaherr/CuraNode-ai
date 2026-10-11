@@ -59,6 +59,12 @@ RECORD_READ = "record.read"
 # Emitted by the doctor dashboard (D4). `detail` holds a patient count only.
 DOCTOR_DASHBOARD_VIEW = "doctor.dashboard.view"
 
+# Emitted by clinic-admin doctor verification (D-VERIFY v1). `detail` never
+# carries the admin's free-text note — only the doctor id and reason code.
+VERIFICATION_APPROVE = "verification.approve"
+VERIFICATION_REJECT = "verification.reject"
+VERIFICATION_REVOKE = "verification.revoke"
+
 # Emitted by the doctor schedule (D7). `detail` holds ids, clinic, weekday or
 # date, type, times and caps; an exception's free-text `reason` is never
 # copied, only `reason_length`.
