@@ -331,14 +331,12 @@
   "errors.too_many_clinics": "زیادہ سے زیادہ 10 ہسپتال منتخب کریں۔",
   "schedule.hospitals_title": "آپ کے ہسپتال",
   "schedule.hospital_linked": "منسلک",
-  "schedule.hospital_pending": "ہسپتال کی تصدیق کا انتظار",
-  "schedule.hospital_ended": "تعلق ختم",
+  "schedule.hospital_ended": "منسلک نہیں",
   "schedule.add_hospitals_title": "وہ ہسپتال شامل کریں جہاں آپ کام کرتے ہیں",
-  "schedule.add_hospitals_help": "آپ وہاں فوراً اپنے اوقات شامل کر سکتے ہیں۔ ہسپتال بعد میں اس تعلق کی تصدیق کرے گا؛ تب تک اس سے آپ کو کسی مریض کے ریکارڈ تک رسائی نہیں ملتی۔",
+  "schedule.add_hospitals_help": "ہر اُس دوسرے ہسپتال پر نشان لگائیں جہاں آپ مریض دیکھتے ہیں۔ یہ فوراً شامل ہو جائے گا، اور آپ وہاں اپنے اوقات شامل کر سکیں گے۔",
   "schedule.add_hospitals_submit": "ہسپتال شامل کریں",
   "schedule.add_hospitals_none": "آپ CuraNode کے ہر ہسپتال سے منسلک ہیں۔",
   "schedule.saved.hospitals_added": "ہسپتال شامل ہو گئے۔ اب آپ وہاں اپنے اوقات شامل کر سکتے ہیں۔",
   "errors.clinics_required": "کم از کم ایک ہسپتال منتخب کریں۔",
-  "errors.clinics_already_linked": "آپ منتخب کردہ ہسپتالوں سے پہلے ہی منسلک ہیں۔",
-  "errors.clinic_link_ended": "اس ہسپتال سے آپ کا تعلق ختم کر دیا گیا تھا۔ اسے صرف ہسپتال ہی بحال کر سکتا ہے۔"
+  "errors.clinics_already_linked": "آپ منتخب کردہ ہسپتالوں سے پہلے ہی منسلک ہیں۔"
 }

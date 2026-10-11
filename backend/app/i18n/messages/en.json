@@ -331,14 +331,12 @@
   "errors.too_many_clinics": "Choose at most 10 hospitals.",
   "schedule.hospitals_title": "Your hospitals",
   "schedule.hospital_linked": "Linked",
-  "schedule.hospital_pending": "Awaiting the hospital's confirmation",
-  "schedule.hospital_ended": "Link ended",
+  "schedule.hospital_ended": "Not linked",
   "schedule.add_hospitals_title": "Add a hospital you work at",
-  "schedule.add_hospitals_help": "You can add your hours there straight away. The hospital confirms the link later; until then it gives you no access to any patient's records.",
+  "schedule.add_hospitals_help": "Tick every other hospital where you see patients. It is added straight away, and you can add your hours there.",
   "schedule.add_hospitals_submit": "Add hospitals",
   "schedule.add_hospitals_none": "You are linked to every hospital on CuraNode.",
   "schedule.saved.hospitals_added": "Hospitals added. You can add your hours there now.",
   "errors.clinics_required": "Choose at least one hospital.",
-  "errors.clinics_already_linked": "You are already linked to the hospitals you chose.",
-  "errors.clinic_link_ended": "Your link to that hospital was ended. Only the hospital can restore it."
+  "errors.clinics_already_linked": "You are already linked to the hospitals you chose."
 }

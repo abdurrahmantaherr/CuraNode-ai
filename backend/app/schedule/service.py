@@ -33,7 +33,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..audit import writer as audit
 from ..db import types as dbtypes
 from ..db.models import (
-    SCHEDULABLE_AFFILIATION_STATUSES,
     Appointment,
     Clinic,
     Doctor,
@@ -74,12 +73,8 @@ class Loaded:
         return self.clinics[self.affiliations[slot.affiliation_id].clinic_id]
 
     def affiliation_live(self, affiliation: DoctorAffiliation) -> bool:
-        """R2: a link the doctor can schedule at: active, or self-added and
-        awaiting the hospital (pending), at a clinic that is active."""
-        return (
-            affiliation.status in SCHEDULABLE_AFFILIATION_STATUSES
-            and self.clinics[affiliation.clinic_id].status == LIVE
-        )
+        """R2: an active link at an active clinic."""
+        return affiliation.status == LIVE and self.clinics[affiliation.clinic_id].status == LIVE
 
     def slot_value(self, row: DoctorSchedule) -> engine.Slot:
         affiliation = self.affiliations[row.affiliation_id]

@@ -224,13 +224,10 @@ class Doctor(Base):
     )
 
 
-# `doctor_affiliation.status` values this app writes (the live column has no
-# CHECK). "active": confirmed — the only status consent (clinic grants) and
-# `deps` count. "pending": a link the doctor added themselves after sign-up;
-# usable for their schedule (D7), never for patient access.
+# The `doctor_affiliation.status` this app writes for every link a doctor
+# makes, at sign-up or later (the live column has no CHECK). Only "active"
+# links count for the schedule, `deps` and consent (clinic grants).
 AFFILIATION_ACTIVE = "active"
-AFFILIATION_PENDING = "pending"
-SCHEDULABLE_AFFILIATION_STATUSES = (AFFILIATION_ACTIVE, AFFILIATION_PENDING)
 
 
 class DoctorAffiliation(Base):
@@ -240,7 +237,9 @@ class DoctorAffiliation(Base):
     shared schema models doctor↔clinic as a relationship in its own right, so
     a doctor can move between or hold multiple affiliations over time.
     Registration (password or OAuth onboarding) creates one open-ended, active
-    row per hospital/clinic the doctor ticks, so a schedule can span several.
+    row per hospital/clinic the doctor ticks, and a doctor can add more later
+    from the schedule page — the same active rows — so a schedule can span
+    several (`identity.service.link_doctor_clinics`).
     """
 
     __tablename__ = "doctor_affiliation"

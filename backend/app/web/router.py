@@ -33,7 +33,7 @@ from ..consent import gateway as consent_gateway
 from ..consent import schemas as consent_schemas
 from ..consent import service as consent_service
 from ..db import types as dbtypes
-from ..db.models import AFFILIATION_ACTIVE, AFFILIATION_PENDING, Clinic, Profile, UserRole
+from ..db.models import Clinic, Profile, UserRole
 from ..deps import (
     Actor,
     OptionalActorDep,
@@ -1825,33 +1825,25 @@ async def _render_schedule(
     live_clinics = [c for c in clinics if c.id in live_clinic_ids]
     clinic_filter = next((c.id for c in clinics if str(c.id) == clinic), None)
 
-    # Your hospitals: one line per clinic, the strongest link status first.
-    rank = {AFFILIATION_ACTIVE: 0, AFFILIATION_PENDING: 1}
-    best: dict[uuid.UUID, str] = {}
-    for a in loaded.affiliations.values():
-        if a.clinic_id not in best or rank.get(a.status, 2) < rank.get(best[a.clinic_id], 2):
-            best[a.clinic_id] = a.status
+    # Your hospitals: one line per clinic — linked (an active link at an active
+    # clinic) or not (ended link, or a closed clinic).
     hospitals = [
         {
             "name": c.name,
             "colour": colour[c.id],
-            "state": "closed"
-            if c.status != "active"
-            else {AFFILIATION_ACTIVE: "linked", AFFILIATION_PENDING: "pending"}.get(
-                best[c.id], "ended"
-            ),
+            "state": "linked" if c.id in live_clinic_ids else "ended",
         }
         for c in clinics
     ]
-    # Active clinics the doctor has never been linked to (an ended link is
-    # restored only by that hospital).
+    # Every active clinic the doctor is not actively linked to; re-adding one
+    # with an ended link reactivates it (identity.service.link_doctor_clinics).
     addable = (
         await session.execute(select(Clinic).where(Clinic.status == "active").order_by(Clinic.name))
     ).scalars()
     hospital_options = [
         {"value": str(c.id), "label": f"{c.name} — {c.city}" if c.city else c.name}
         for c in addable
-        if c.id not in loaded.clinics
+        if c.id not in live_clinic_ids
     ]
 
     # The week view reads availability only through the service (spec §6).

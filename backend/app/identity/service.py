@@ -34,8 +34,7 @@ from ..audit import writer as audit
 from ..cache import cache, lockout_key
 from ..db import types as dbtypes
 from ..db.models import (
-    AFFILIATION_PENDING,
-    SCHEDULABLE_AFFILIATION_STATUSES,
+    AFFILIATION_ACTIVE,
     AccountStatus,
     Clinic,
     ClinicStaff,
@@ -92,6 +91,48 @@ async def _check_clinics_exist(session: AsyncSession, clinic_ids: list[uuid.UUID
             raise ValidationFailed({"fields": {"clinic_ids": "errors.clinic_unknown"}})
 
 
+async def link_doctor_clinics(
+    session: AsyncSession,
+    doctor_id: uuid.UUID,
+    clinic_ids: list[uuid.UUID],
+    existing: list[DoctorAffiliation],
+) -> tuple[list[uuid.UUID], list[uuid.UUID]]:
+    """Make the doctor actively linked to each clinic. The single path for both
+    sign-up and adding hospitals later, so the two always behave the same.
+
+    Already active: left alone. A link that exists but isn't active (ended, or
+    left over from an earlier flow): reactivated in place, never duplicated.
+    Otherwise: a new open-ended active row. Returns (added, reactivated).
+    """
+    by_clinic: dict[uuid.UUID, DoctorAffiliation] = {}
+    for a in existing:
+        current = by_clinic.get(a.clinic_id)
+        if current is None or a.status == AFFILIATION_ACTIVE:
+            by_clinic[a.clinic_id] = a
+    added: list[uuid.UUID] = []
+    reactivated: list[uuid.UUID] = []
+    for clinic_id in dict.fromkeys(clinic_ids):
+        link = by_clinic.get(clinic_id)
+        if link is not None and link.status == AFFILIATION_ACTIVE:
+            continue
+        if link is not None:
+            link.status = AFFILIATION_ACTIVE
+            link.end_date = None
+            reactivated.append(clinic_id)
+            continue
+        session.add(
+            DoctorAffiliation(
+                id=uuid7(),
+                doctor_id=doctor_id,
+                clinic_id=clinic_id,
+                start_date=dbtypes.today_pk(),
+                status=AFFILIATION_ACTIVE,
+            )
+        )
+        added.append(clinic_id)
+    return added, reactivated
+
+
 async def add_doctor_clinics(
     session: AsyncSession,
     user_id: uuid.UUID,
@@ -99,13 +140,13 @@ async def add_doctor_clinics(
     *,
     ip: str | None = None,
     user_agent: str | None = None,
-) -> list[DoctorAffiliation]:
-    """An existing doctor links themselves to more hospitals they work at.
+) -> list[uuid.UUID]:
+    """An existing doctor links themselves to more hospitals they work at —
+    active links, exactly as at sign-up (no hospital confirmation step).
 
-    Each new link is `pending`: usable for the schedule, never for patient
-    access. Clinics they are already linked to are skipped; a link the
-    hospital ended cannot be re-added here (only that hospital can restore
-    it). All or nothing, one audit row.
+    Note (owner's decision, 2026-10-11): an active link means a VERIFIED doctor
+    is immediately reached by clinic consent grants at that hospital (P9), as
+    with links chosen at sign-up. All or nothing; one audit row.
     """
     chosen = list(dict.fromkeys(clinic_ids))
     if not chosen:
@@ -119,6 +160,11 @@ async def add_doctor_clinics(
     # Serialise this doctor's link changes, so a double submit adds nothing twice.
     await session.execute(select(Doctor.id).where(Doctor.id == doctor.id).with_for_update())
 
+    for clinic_id in chosen:
+        clinic = await session.get(Clinic, clinic_id)
+        if clinic is None or clinic.status != "active":
+            raise ValidationFailed({"fields": {"clinic_ids": "errors.clinic_unknown"}})
+
     existing = list(
         (
             await session.execute(
@@ -126,35 +172,13 @@ async def add_doctor_clinics(
             )
         ).scalars()
     )
-    linked = {a.clinic_id for a in existing if a.status in SCHEDULABLE_AFFILIATION_STATUSES}
-    ended = {a.clinic_id for a in existing if a.status not in SCHEDULABLE_AFFILIATION_STATUSES}
-
-    new: list[uuid.UUID] = []
-    for clinic_id in chosen:
-        clinic = await session.get(Clinic, clinic_id)
-        if clinic is None or clinic.status != "active":
-            raise ValidationFailed({"fields": {"clinic_ids": "errors.clinic_unknown"}})
-        if clinic_id in linked:
-            continue
-        if clinic_id in ended:
-            raise ValidationFailed({"fields": {"clinic_ids": "errors.clinic_link_ended"}})
-        new.append(clinic_id)
-    if not new:
+    active = {a.clinic_id for a in existing if a.status == AFFILIATION_ACTIVE}
+    if all(c in active for c in chosen):
         raise ValidationFailed({"fields": {"clinic_ids": "errors.clinics_already_linked"}})
-    if len(linked) + len(new) > MAX_CLINICS:
+    if len(active | set(chosen)) > MAX_CLINICS:
         raise ValidationFailed({"fields": {"clinic_ids": "errors.too_many_clinics"}})
 
-    rows = [
-        DoctorAffiliation(
-            id=uuid7(),
-            doctor_id=doctor.id,
-            clinic_id=clinic_id,
-            start_date=dbtypes.today_pk(),
-            status=AFFILIATION_PENDING,
-        )
-        for clinic_id in new
-    ]
-    session.add_all(rows)
+    added, reactivated = await link_doctor_clinics(session, doctor.id, chosen, existing)
     await session.flush()
     await audit.write(
         session,
@@ -164,10 +188,13 @@ async def add_doctor_clinics(
         resource_type="doctor_affiliation",
         ip_address=ip,
         user_agent=user_agent,
-        detail={"clinic_ids": [str(c) for c in new], "status": AFFILIATION_PENDING},
+        detail={
+            "added": [str(c) for c in added],
+            "reactivated": [str(c) for c in reactivated],
+        },
     )
     await session.commit()
-    return rows
+    return added + reactivated
 
 
 async def provision_role_records(
@@ -199,16 +226,7 @@ async def provision_role_records(
             verified_at=None,
         )
         session.add(doctor)
-        for clinic_id in clinic_ids or []:
-            session.add(
-                DoctorAffiliation(
-                    id=uuid7(),
-                    doctor_id=doctor.id,
-                    clinic_id=clinic_id,
-                    start_date=datetime.now(UTC).date(),
-                    status="active",
-                )
-            )
+        await link_doctor_clinics(session, doctor.id, clinic_ids or [], existing=[])
     else:
         session.add(
             Patient(

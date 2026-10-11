@@ -128,8 +128,8 @@
       </ol>
     </section>
 
-    {#- Your hospitals: every link, and adding more (pending until the hospital
-        confirms; usable for the schedule, never for patient access). -#}
+    {#- Your hospitals: every link, and adding more (active at once, exactly
+        like the hospitals picked at sign-up). -#}
     <section class="panel stack" id="hospitals" aria-labelledby="hospitals-h">
       <h2 id="hospitals-h" class="panel__label">{{ t('schedule.hospitals_title') }}</h2>
       {% if hospitals %}
@@ -137,8 +137,7 @@
           {% for h in hospitals %}
             <li class="legend__item {{ h.colour }}">
               <span class="legend__dot" aria-hidden="true"></span>{{ h.name }}
-              {% if h.state == 'pending' %}<span class="badge badge--warn">{{ t('schedule.hospital_pending') }}</span>
-              {% elif h.state == 'linked' %}<span class="badge badge--ok">{{ t('schedule.hospital_linked') }}</span>
+              {% if h.state == 'linked' %}<span class="badge badge--ok">{{ t('schedule.hospital_linked') }}</span>
               {% else %}<span class="badge badge--neutral">{{ t('schedule.hospital_ended') }}</span>{% endif %}
             </li>
           {% endfor %}
