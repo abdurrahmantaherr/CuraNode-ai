@@ -274,6 +274,61 @@ class ClinicStaff(Base):
     )
 
 
+# ── Doctor verification (D-VERIFY v1) ────────────────────────────────────
+class VerificationDecision(str, enum.Enum):
+    APPROVE = "approve"
+    REJECT = "reject"
+    REVOKE = "revoke"
+
+
+class DoctorVerification(Base):
+    """One row per clinic-admin decision about a doctor. Owned outright by
+    this repo, append-only — never updated or deleted, same rule as
+    `AuditLog`. `doctor.verification_status` stays the fast current-state
+    read; this table is the history behind it.
+    """
+
+    __tablename__ = "doctor_verification"
+
+    id: Mapped[uuid.UUID] = mapped_column("verification_id", Uuid, primary_key=True, default=uuid7)
+    doctor_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("doctor.doctor_id"), nullable=False
+    )
+    decided_by: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("user_profile.user_id"), nullable=False
+    )
+    decision: Mapped[VerificationDecision] = mapped_column(
+        _enum(VerificationDecision, "verification_decision"), nullable=False
+    )
+    # A fixed code from verification/schemas.py::REASONS — never free text.
+    # NULL for `approve`.
+    reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    checked_number: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    checked_name: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    checked_licence: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Admin-only free text. Never shown to the doctor, never in audit_log.detail.
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decided_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
+
+    __table_args__ = (Index("idx_doctor_verification_doctor", "doctor_id", "decided_at"),)
+
+
+class ClinicInviteCode(Base):
+    """One active code per clinic, gating clinic-admin self-sign-up
+    (`/admin/register`). `code_hash` only — the plain code is shown once,
+    by `ops/scripts/set_clinic_invite_code.py`, and never stored.
+    """
+
+    __tablename__ = "clinic_invite_code"
+
+    clinic_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("clinic.clinic_id"), primary_key=True
+    )
+    code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
+
+
 # ── Doctor schedule (D7) ─────────────────────────────────────────────────
 class DoctorSchedule(Base):
     """doctor_schedule — one weekly slot of a doctor at a clinic (D7).
