@@ -148,7 +148,7 @@ async def login_submit(
     role: Annotated[str, Form()] = "",
 ) -> Response:
     loc = normalise_locale(locale)
-    selected = role if role in ("patient", "doctor") else ""
+    selected = role if role in ("patient", "doctor", "admin") else ""
 
     def fail(message_key: str, code: int = 400, **params: object) -> Response:
         return _render(

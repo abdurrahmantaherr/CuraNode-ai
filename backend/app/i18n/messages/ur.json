@@ -338,5 +338,7 @@
   "schedule.add_hospitals_none": "آپ CuraNode کے ہر ہسپتال سے منسلک ہیں۔",
   "schedule.saved.hospitals_added": "ہسپتال شامل ہو گئے۔ اب آپ وہاں اپنے اوقات شامل کر سکتے ہیں۔",
   "errors.clinics_required": "کم از کم ایک ہسپتال منتخب کریں۔",
-  "errors.clinics_already_linked": "آپ منتخب کردہ ہسپتالوں سے پہلے ہی منسلک ہیں۔"
+  "errors.clinics_already_linked": "آپ منتخب کردہ ہسپتالوں سے پہلے ہی منسلک ہیں۔",
+  "auth.role.admin": "کلینک ایڈمن",
+  "auth.login.subtitle_admin": "اپنے کلینک کے ڈاکٹروں کی تصدیق کے لیے سائن ان کریں۔"
 }
