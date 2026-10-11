@@ -331,3 +331,50 @@ async def test_doctor_status_for_banner_rejected_carries_the_reason(db, admin, p
     status, reason = await verification_service.doctor_status_for_banner(db, actor)
     assert status == "rejected"
     assert reason == "licence_invalid"
+
+
+async def login(client, email: str):
+    from tests.conftest import TEST_PASSWORD
+
+    r = await client.post("/api/v1/auth/login", json={"email": email, "password": TEST_PASSWORD})
+    assert r.status_code == 200, r.text
+
+
+async def test_rejected_doctor_sees_the_red_banner_and_no_dashboard_list(client, db, clinic, admin):
+    user = await make_user(db, email="dr@x.com", role=UserRole.DOCTOR, clinic_id=clinic.id)
+    doctor = await doctor_of(db, user)
+    await verification_service.reject(db, admin, doctor.id, reason="name_mismatch", note=None)
+    await login(client, "dr@x.com")
+
+    r = await client.get("/en/doctor")
+    assert r.status_code == 200
+    assert "<table" not in r.text  # no patient list, same FR3 rule as pending
+    # The actual distinguishing behaviour: the red "not approved" banner, not
+    # the yellow "awaiting verification" one a pending doctor sees.
+    assert "Verification not approved" in r.text
+    assert "Awaiting verification" not in r.text
+
+
+async def test_approving_a_rejected_doctor_removes_the_banner(client, db, clinic, admin):
+    # Review focus 5 — the stale banner must not survive the approval.
+    user = await make_user(db, email="dr@x.com", role=UserRole.DOCTOR, clinic_id=clinic.id)
+    doctor = await doctor_of(db, user)
+    await verification_service.reject(db, admin, doctor.id, reason="name_mismatch", note=None)
+    await login(client, "dr@x.com")
+    rejected_html = (await client.get("/en/doctor")).text
+    assert "<table" not in rejected_html
+    assert "Verification not approved" in rejected_html
+
+    await verification_service.approve(
+        db,
+        admin,
+        doctor.id,
+        checked_number=True,
+        checked_name=True,
+        checked_licence=True,
+        note=None,
+    )
+
+    html = (await client.get("/en/doctor")).text
+    assert "Verification not approved" not in html
+    assert "My patients" in html or "<table" in html  # the real dashboard renders again

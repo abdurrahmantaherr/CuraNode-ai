@@ -346,5 +346,12 @@
   "admin.register.submit": "ایڈمن اکاؤنٹ بنائیں",
   "field.invite_code": "انوائٹ کوڈ",
   "field.invite_code_help": "یہ کیورا نوڈ ٹیم کی طرف سے آپ کے کلینک کو دیا جاتا ہے۔",
-  "errors.invite_code_invalid": "یہ انوائٹ کوڈ اس کلینک سے میل نہیں کھاتا۔"
+  "errors.invite_code_invalid": "یہ انوائٹ کوڈ اس کلینک سے میل نہیں کھاتا۔",
+  "doctor.rejected_title": "تصدیق منظور نہیں ہوئی",
+  "doctor.rejected_body": "آپ کی تصدیق منظور نہیں ہوئی: {reason}۔ براہ کرم {clinic} سے رابطہ کریں۔",
+  "verify.reason.number_not_found": "پی ایم ڈی سی نمبر نہیں ملا",
+  "verify.reason.name_mismatch": "نام میل نہیں کھاتا",
+  "verify.reason.licence_invalid": "لائسنس غلط یا معطل ہے",
+  "verify.reason.not_at_clinic": "اس کلینک میں نہیں",
+  "verify.reason.other": "دیگر"
 }

@@ -346,5 +346,12 @@
   "admin.register.submit": "Create admin account",
   "field.invite_code": "Invite code",
   "field.invite_code_help": "Given to your clinic by the CuraNode team.",
-  "errors.invite_code_invalid": "That invite code doesn't match this clinic."
+  "errors.invite_code_invalid": "That invite code doesn't match this clinic.",
+  "doctor.rejected_title": "Verification not approved",
+  "doctor.rejected_body": "Your verification was not approved: {reason}. Please contact {clinic}.",
+  "verify.reason.number_not_found": "PMDC number not found",
+  "verify.reason.name_mismatch": "Name doesn't match",
+  "verify.reason.licence_invalid": "Licence invalid or suspended",
+  "verify.reason.not_at_clinic": "Not at this clinic",
+  "verify.reason.other": "Other"
 }

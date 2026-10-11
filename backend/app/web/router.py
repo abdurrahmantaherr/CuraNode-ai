@@ -77,6 +77,7 @@ from ..schedule import engine as schedule_engine
 from ..schedule import schemas as schedule_schemas
 from ..schedule import service as schedule_service
 from ..settings import settings
+from ..verification import service as verification_service
 
 OAUTH_STATE_COOKIE = "cn_oauth_state"
 
@@ -774,13 +775,27 @@ async def _guarded(
 
     pending_message = ""
     show_banner = False
+    rejected_message = ""
+    show_rejected_banner = False
     if actor.role == UserRole.DOCTOR.value and not actor.is_verified_doctor:
-        show_banner = True
         clinic_name = ""
         if me.clinic_ids:
             clinic = await session.get(Clinic, me.clinic_ids[0])
             clinic_name = clinic.name if clinic else ""
-        pending_message = translate("doctor.pending_body", loc, clinic=clinic_name)
+        status, reason = await verification_service.doctor_status_for_banner(session, actor)
+        if status == "rejected":
+            show_rejected_banner = True
+            reason_text = (
+                translate(f"verify.reason.{reason}", loc)
+                if reason
+                else translate("verify.reason.other", loc)
+            )
+            rejected_message = translate(
+                "doctor.rejected_body", loc, reason=reason_text, clinic=clinic_name
+            )
+        else:
+            show_banner = True
+            pending_message = translate("doctor.pending_body", loc, clinic=clinic_name)
 
     title_key = {
         "patient": "patient.dashboard.title",
@@ -844,6 +859,8 @@ async def _guarded(
         passport_no=me.passport_no,
         show_unverified_banner=show_banner,
         pending_message=pending_message,
+        show_rejected_banner=show_rejected_banner,
+        rejected_message=rejected_message,
         **extra,
     )
 

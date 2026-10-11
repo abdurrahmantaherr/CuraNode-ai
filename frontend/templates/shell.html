@@ -20,6 +20,16 @@
       </div>
     {% endif %}
 
+    {% if show_rejected_banner %}
+      <div class="banner banner--error" role="alert">
+        <span aria-hidden="true">!</span>
+        <div>
+          <div class="banner__title">{{ t('doctor.rejected_title') }}</div>
+          <div class="banner__body">{{ rejected_message }}</div>
+        </div>
+      </div>
+    {% endif %}
+
     <div class="panel">
       <div class="panel__label">{{ page_title }}</div>
       <div style="display:flex;gap:var(--sp-5);align-items:center">
