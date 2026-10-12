@@ -32,6 +32,7 @@ uv run pytest tests/test_oauth.py -v       # Run Google OAuth flow tests
 uv run pytest tests/test_profile.py -v     # Run patient profile (FR2) tests
 uv run pytest tests/test_privacy_access.py tests/test_privacy_access_web.py -v  # P9 consent/access tests
 uv run pytest tests/test_schedule_*.py -v   # D7 doctor schedule tests
+uv run pytest tests/test_booking_*.py -v   # P5 appointment booking tests
 uv run pytest tests/test_documents.py tests/test_document_extractors.py -v  # Medical-document pipeline tests
 uv run pytest tests/test_upload_roundtrips.py -v                           # upload round-trip budget, quiet session cleanup, storage-failure diagnostics
 uv run pytest tests/test_db_resilience.py -v                              # DB connect timeout, 503 page/envelope on an unreachable database, one patient lookup per request
@@ -90,9 +91,10 @@ backend/
     profile/                   # Patient profile (FR2): basics, allergies, conditions, medications — JSON API + service
     consent/                   # Grants, consent gateway, access log (FR4/FR5, P4 + P9) — JSON API + service
     schedule/                  # Doctor schedule (D7): pure engine, schemas, service — web page only
+    booking/                   # Appointment booking (P5, FR15/FR16): pure slot logic, service, display helpers — web pages only
     documents/                 # Medical documents (FR10–FR13): storage, ocr, extractors, normalization, sections, vitals, vaccines, lab_flags, groups, proposals, filters, drug_names, ai_* (provider chain), service, router (+ doctor_router: API-only doctor prescription) — ONE pipeline for all 4 types
     i18n/                      # English/Urdu message catalogues
-    web/                       # Server-rendered page routes and form handling (router.py: auth/OAuth/onboarding/profile; documents.py: document pages; unavailable.py: the 503 "database unreachable" handler)
+    web/                       # Server-rendered page routes and form handling (router.py: auth/OAuth/onboarding/profile; documents.py: document pages; booking.py: appointment booking pages; unavailable.py: the 503 "database unreachable" handler)
 alembic/                       # Database migrations (additive-only, hand-written — see above)
 frontend/
   templates/                   # Jinja2 templates (base, auth pages incl. onboarding/oauth_complete, documents/{upload,list,detail,delete}, errors/unavailable, shell, partials)
@@ -146,6 +148,13 @@ docs/                          # Product requirements, technical design, design 
    - Every write takes `SELECT … FOR UPDATE` on the caller's `doctor` row first (`service.lock_statement`), then checks and writes in one transaction, with one `audit_log` row per row written (`schedule.slot.*`, `schedule.exception.*`; an exception's `reason` is recorded only as `reason_length`). Rows are never deleted.
    - `get_effective_availability` is the only way to read availability (today up to 30 days). `appointment` is mapped read-only so R10 can count upcoming bookings; D7 never writes it.
    - Rules `R1`…`R14` and acceptance criteria `AC-1`…`AC-33` live in `.claude/specs/D7-multi-hospital-schedule.md` (wins over `docs/TDD.md` §3.7/§7.2); the plan is `.claude/plans/D7.plan.md`.
+
+5b. **Appointment booking (P5, FR15 + FR16)**
+   - `backend/app/booking/`: `slots.py` (pure: the grid, window membership, refusal reasons, overlap; no database, no clock), `service.py` (every rule: search, free times, book, cancel, reschedule, the patient's lists, the doctor's day), `display.py` (status labels, Pakistan `HH:MM`, the doctor's day rows), `schemas.py`. The pages are `web/booking.py`: patient `/{locale}/patient/doctors[/{id}[/confirm]]` and `/{locale}/patient/appointments[/{id}[/cancel|/reschedule]]`; doctor `/{locale}/doctor/appointments` and the "Appointments today" panel on the doctor home page. There is no JSON API yet.
+   - No new table: it writes the existing `appointment` table (`booking_channel="online"`, always with `schedule_id`). One additive index, `uq_appointment_active_slot` (migration `92b61c6e9db4`: unique on `(schedule_id, slot_start)` where `status <> 'cancelled'`), is the database backstop. The app's own lock is the real guard: every book, cancel and reschedule runs `schedule.service.lock_doctor` first, re-reads what is taken, then writes. **ASK ME BEFORE RUNNING that migration on the shared project.**
+   - Availability comes only from `get_effective_availability`. A time is `session start + n × slot_minutes` and the whole slot must fit; a session (one effective window on one date; an extra is counted apart from the weekly window) holds at most `max_tokens` active appointments; "active" is `booked`, `checked_in`, `done`. Bookable from 30 minutes ahead to 14 days ahead; cancel or move any time before it starts. All times are Pakistan time; `slot_start` is stored as an aware UTC instant, and SQLite hands back naive values (read them with `slots.as_utc`).
+   - Only verified doctors with a live hospital are searchable or bookable (D7 decision 6). The doctor sees name, time and status only: booking is not consent (FR4). A patient cannot hold overlapping appointments or two with one doctor on one day. Reschedule is one transaction (book the new time, cancel the old); a refused move leaves the old booking. A foreign or unknown appointment id is one `NotFound` (the pages send it to the list). Audit rows (`appointment.book`, `.cancel`, `.reschedule`) hold ids only.
+   - Spec: `docs/superpowers/specs/2026-10-12-appointment-booking-design.md`; plan: `docs/superpowers/plans/2026-10-12-appointment-booking-v1.md`.
 
 6. **Security Properties**
    - Password hashing is Supabase Auth's responsibility, not this codebase's.
@@ -245,6 +254,7 @@ docs/                          # Product requirements, technical design, design 
 15. **`backend/app/documents/ai_providers.py`**, **`ai_understanding.py`**, **`ai_sections.py`** - The optional AI layer: provider chain with cooldowns, the medicines reading, and the evidence-checked sections reading
 16. **`backend/app/documents/service.py`** and **`backend/app/web/documents.py`** - The one documents service (every rule: upload, process, confirm, retry, delete, search) and the page handlers that call it; **`documents/router.py`** is the JSON front door
 17. **`backend/app/db/session.py`**, **`db/transient.py`** and **`web/unavailable.py`** - How the app reaches the database and what happens when it cannot (read the "Reaching the database" decisions above before touching any of them)
+18. **`backend/app/booking/slots.py`** and **`booking/service.py`** - Appointment booking (P5): the pure slot logic and the locked service on top of D7's availability. Read the P5 spec first
 
 ### When Making Changes
 
@@ -252,6 +262,7 @@ docs/                          # Product requirements, technical design, design 
 - **OAuth changes**: Read `identity/oauth.py`'s module docstring first — the `state`-param gotcha there is easy to reintroduce by accident if the Supabase SDK/API ever looks like it should accept one. Never provision a `Patient`/`Doctor` row before onboarding; never skip the email-collision guard in `login_with_oauth`.
 - **Patient profile changes**: Read `.claude/specs/patient_profile_spec.md` first — it wins over `docs/TDD.md` wherever they disagree. Put every business rule in `profile/service.py` so the API and the web page stay in sync; never perform a query on `allergy`/`chronic_condition`/`patient_medication` without filtering by the caller's own `patient_id` (BYPASSRLS means the database will not catch a missed scope). Never let a patient edit an entry whose `recorded_by` isn't their own `user_id`.
 - **Schedule changes (D7)**: Read `.claude/specs/D7-multi-hospital-schedule.md` first. Put window rules in `schedule/engine.py` (pure, no app imports) and call `engine.overlaps` — never write another overlap test. Never gate schedule routes with `VerifiedDoctorDep`, never read a `schedule_exception`/`doctor_schedule` row except through `doctor_affiliation` scoped to the caller, never hard-delete a slot or exception.
+- **Booking changes (P5)**: Read `docs/superpowers/specs/2026-10-12-appointment-booking-design.md` first. Put grid and cap rules in `booking/slots.py` (pure) and every other rule in `booking/service.py`; read availability only through `schedule.service.get_effective_availability`; take `lock_doctor` before every write and re-read what is taken; never filter a patient query by anything but the caller's own `patient_id`; never show a doctor more than name, time and status; never hard-delete an appointment (cancel it).
 - **Consent / access changes**: Read `.claude/specs/privacy_access_spec.md` first. Never read another patient's sections outside `consent/gateway.py`; never return 403 for a consent failure (use `NotFound`/`ConsentDenied`); never update or delete `access_log` rows.
 - **UI changes**: Work with Jinja2 templates in `frontend/templates/` and `web/router.py` (documents: `web/documents.py`)
 - **Database access / resilience changes**: Read "Reaching the database" first. Every extra query is a network round trip (about a second on a far-away pooler), so add a query to a hot path only if it is needed; never add `pool_pre_ping`; keep the "outage" classifier narrow (a real bug must stay a 500); never retry an authentication error; never log SQL, parameters or exception messages from the database layer (class names only).
