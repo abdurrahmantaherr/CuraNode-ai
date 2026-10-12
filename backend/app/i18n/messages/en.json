@@ -649,5 +649,13 @@
   "errors.document_row_incomplete": "Each row needs its main field filled in (the medicine or test name).",
   "errors.value_too_long": "One of the values is too long (255 characters at most).",
   "errors.ocr_too_long": "This document is too long to read automatically. Upload only the pages that matter.",
-  "errors.ocr_model_unavailable": "This document was read with a handwriting reader that is no longer offered. Press Try again to read it as a printed document."
+  "errors.ocr_model_unavailable": "This document was read with a handwriting reader that is no longer offered. Press Try again to read it as a printed document.",
+  "errors.booking_not_offered": "That time is not available. Please pick another.",
+  "errors.booking_too_soon": "That time is too soon. Please pick a time at least 30 minutes from now.",
+  "errors.booking_too_far": "That day is too far ahead. You can book up to 14 days ahead.",
+  "errors.booking_taken": "Someone just booked that time. Please pick another.",
+  "errors.booking_full": "That session is full. Please pick another day.",
+  "errors.booking_overlap": "You already have an appointment at that time.",
+  "errors.booking_same_day": "You already have an appointment with this doctor that day.",
+  "errors.booking_not_cancellable": "This appointment can't be changed any more."
 }

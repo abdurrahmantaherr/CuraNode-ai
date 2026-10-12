@@ -82,6 +82,9 @@ class Settings(BaseSettings):
     # ── Doctor schedule (D7) ─────────────────────────────────────────────
     schedule_write_rate_limit_per_minute: int = 30
 
+    # ── Appointment booking (P5) ─────────────────────────────────────────
+    booking_write_rate_limit_per_minute: int = 20
+
     # ── Medical documents (FR10–FR13) ────────────────────────────────────
     # The private Supabase Storage bucket that already exists in the shared
     # project. Originals are read back through the app (ownership-checked),

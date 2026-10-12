@@ -16,6 +16,17 @@ LEAD_MINUTES = 30  # the earliest bookable time is this far from now
 HORIZON_DAYS = 14  # and the latest day is this far ahead
 SEARCH_LIMIT = 50
 DEFAULT_MINUTES = 15  # a held appointment with no schedule row (a later walk-in)
+# Why a booking, reschedule or cancel is refused; `errors.booking_<reason>` is the message.
+REFUSAL_REASONS = (
+    "not_offered",
+    "too_soon",
+    "too_far",
+    "taken",
+    "full",
+    "overlap",
+    "same_day",
+    "not_cancellable",
+)
 
 
 @dataclass(frozen=True)

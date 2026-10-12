@@ -59,6 +59,12 @@ RECORD_READ = "record.read"
 # Emitted by the doctor dashboard (D4). `detail` holds a patient count only.
 DOCTOR_DASHBOARD_VIEW = "doctor.dashboard.view"
 
+# Emitted by appointment booking (P5). `detail` holds ids only: never a name,
+# a time of day or a note.
+APPOINTMENT_BOOK = "appointment.book"
+APPOINTMENT_CANCEL = "appointment.cancel"
+APPOINTMENT_RESCHEDULE = "appointment.reschedule"
+
 # Emitted by clinic-admin doctor verification (D-VERIFY v1). `detail` never
 # carries the admin's free-text note — only the doctor id and reason code.
 VERIFICATION_APPROVE = "verification.approve"
