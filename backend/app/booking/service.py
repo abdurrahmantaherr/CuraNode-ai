@@ -14,11 +14,13 @@ request. A foreign or nonexistent appointment is one identical `NotFound`.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..audit import writer as audit
 from ..db import types as dbtypes
 from ..db.models import (
     Appointment,
@@ -26,13 +28,19 @@ from ..db.models import (
     Doctor,
     DoctorAffiliation,
     DoctorSchedule,
+    Patient,
+    UserRole,
     VerificationStatus,
 )
-from ..errors import NotFound
+from ..deps import Actor
+from ..errors import BookingRefused, NotFound
 from ..schedule import service as schedule_service
 from . import slots
 from .schemas import (
     ACTIVE_STATUSES,
+    CHANNEL_ONLINE,
+    DEFAULT_MINUTES,
+    HELD_STATUSES,
     HORIZON_DAYS,
     LEAD_MINUTES,
     SEARCH_LIMIT,
@@ -210,3 +218,166 @@ async def list_options(
         if times:
             by_day.setdefault(window.day, []).extend(times)
     return [DayOptions(day=d, times=tuple(sorted(ts))) for d, ts in sorted(by_day.items())]
+
+
+# ── Booking ──────────────────────────────────────────────────────────────
+async def _patient(session: AsyncSession, actor: Actor) -> Patient:
+    """The caller's own patient row. Anyone but a patient is `NotFound`."""
+    if actor.role != UserRole.PATIENT.value:
+        raise NotFound()
+    patient = (
+        await session.execute(select(Patient).where(Patient.user_id == actor.user_id))
+    ).scalar_one_or_none()
+    if patient is None:
+        raise NotFound()
+    return patient
+
+
+async def _check_patient_rules(
+    session: AsyncSession,
+    patient_id: uuid.UUID,
+    doctor_id: uuid.UUID,
+    start: datetime,
+    minutes: int,
+    *,
+    ignore: uuid.UUID | None,
+) -> None:
+    """The patient cannot hold two overlapping appointments (any doctor) or two
+    with one doctor on one Pakistan day. `ignore` leaves out the appointment a
+    reschedule is replacing."""
+    day_start = slots.to_utc(slots.to_local(start).date(), time(0, 0))
+    stmt = (
+        select(Appointment.doctor_id, Appointment.slot_start, DoctorSchedule.slot_minutes)
+        .join(DoctorSchedule, DoctorSchedule.id == Appointment.schedule_id, isouter=True)
+        .where(
+            Appointment.patient_id == patient_id,
+            Appointment.status.in_(HELD_STATUSES),
+            Appointment.slot_start >= day_start - timedelta(hours=1),
+            Appointment.slot_start < day_start + timedelta(days=1, hours=1),
+        )
+    )
+    if ignore is not None:
+        stmt = stmt.where(Appointment.id != ignore)
+    held = [
+        (held_doctor, slots.as_utc(held_start), held_minutes or DEFAULT_MINUTES)
+        for held_doctor, held_start, held_minutes in (await session.execute(stmt)).all()
+    ]
+    for _, held_start, held_minutes in held:
+        if slots.overlap(start, minutes, held_start, held_minutes):
+            raise BookingRefused("overlap")
+    for held_doctor, held_start, _ in held:
+        if held_doctor == doctor_id and slots.same_local_day(start, held_start):
+            raise BookingRefused("same_day")
+
+
+async def _place(
+    session: AsyncSession,
+    actor: Actor,
+    doctor_id: uuid.UUID,
+    clinic_id: uuid.UUID,
+    slot_start: datetime,
+    *,
+    replacing: Appointment | None,
+    user_agent: str | None,
+) -> Appointment:
+    """Book `slot_start`; when `replacing` is given, cancel that appointment in
+    the same transaction (a reschedule). Lock the doctor, re-read what is taken,
+    check every rule, then write. Any refusal leaves everything untouched."""
+    patient = await _patient(session, actor)
+    await schedule_service.lock_doctor(session, doctor_id)
+
+    found = await _visible_doctors(session, doctor_id)
+    if doctor_id not in found or clinic_id not in found[doctor_id][1]:
+        raise NotFound()
+
+    now = _now()
+    if replacing is not None:
+        await session.refresh(replacing)
+        if replacing.status != "booked" or slots.as_utc(replacing.slot_start) <= now:
+            raise BookingRefused("not_cancellable")
+
+    earliest = now + timedelta(minutes=LEAD_MINUTES)
+    last_day = current_day() + timedelta(days=HORIZON_DAYS)
+    start = slots.as_utc(slot_start)
+    if start < earliest:
+        raise BookingRefused("too_soon")
+    day = slots.to_local(start).date()
+    if day > last_day:
+        raise BookingRefused("too_far")
+
+    windows = await _windows(session, doctor_id, clinic_id, day, day)
+    window = next((w for w in windows if slots.in_window(w, start)), None)
+    if window is None:
+        raise BookingRefused("not_offered")
+
+    ignore = replacing.id if replacing is not None else None
+    lo, hi = slots.window_bounds(window)
+    booked = (await _active_starts(session, {window.schedule_id}, lo, hi, exclude=ignore))[
+        window.schedule_id
+    ]
+    reason = slots.refusal(window, booked, start, earliest=earliest, last_day=last_day)
+    if reason is not None:
+        raise BookingRefused(reason)
+    await _check_patient_rules(
+        session, patient.id, doctor_id, start, window.slot_minutes, ignore=ignore
+    )
+
+    if replacing is not None:
+        replacing.status = "cancelled"
+        await session.flush()  # frees its time before the new row is inserted
+    appointment = Appointment(
+        patient_id=patient.id,
+        doctor_id=doctor_id,
+        clinic_id=clinic_id,
+        schedule_id=window.schedule_id,
+        slot_start=start,
+        status="booked",
+        booking_channel=CHANNEL_ONLINE,
+    )
+    session.add(appointment)
+    try:
+        await session.flush()
+    except IntegrityError:
+        # The partial unique index: a concurrent booking the checks did not see.
+        await session.rollback()
+        raise BookingRefused("taken") from None
+
+    detail = {
+        "appointment_id": str(appointment.id),
+        "doctor_id": str(doctor_id),
+        "clinic_id": str(clinic_id),
+    }
+    action = audit.APPOINTMENT_BOOK
+    if replacing is not None:
+        detail["replaces"] = str(replacing.id)
+        action = audit.APPOINTMENT_RESCHEDULE
+    await audit.write(
+        session,
+        action=action,
+        actor_user_id=actor.user_id,
+        actor_role=actor.role,
+        subject_patient_id=patient.id,
+        resource_type="appointment",
+        ip_address=actor.ip_address,
+        user_agent=user_agent,
+        detail=detail,
+    )
+    await session.commit()
+    return appointment
+
+
+async def book(
+    session: AsyncSession,
+    actor: Actor,
+    doctor_id: uuid.UUID,
+    clinic_id: uuid.UUID,
+    slot_start: datetime,
+    *,
+    user_agent: str | None = None,
+) -> Appointment:
+    """Book `slot_start` with a verified doctor at one of their live hospitals.
+    Raises `NotFound` (not a patient, doctor or hospital not bookable) or
+    `BookingRefused(reason)`."""
+    return await _place(
+        session, actor, doctor_id, clinic_id, slot_start, replacing=None, user_agent=user_agent
+    )
