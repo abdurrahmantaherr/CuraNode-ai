@@ -56,9 +56,24 @@
                      errors=errors, help=t('field.pmdc_help'), placeholder='41192') }}
           {{ f.field('specialty', t('field.specialty'), value=values.get('specialty', ''),
                      errors=errors, placeholder='Cardiology') }}
-          {{ f.select('primary_clinic_id', t('field.clinic'), clinics,
-                      value=values.get('primary_clinic_id', ''), errors=errors,
-                      placeholder=t('field.clinic_placeholder')) }}
+          {#- Every hospital/clinic the doctor works at: one affiliation each, so
+              their schedule can span several (D7). -#}
+          <fieldset class="field">
+            <legend class="field-label">{{ t('field.clinics') }}</legend>
+            <span class="field-help">{{ t('field.clinics_help') }}</span>
+            <div class="section-checks">
+              {% for c in clinics %}
+                <label class="section-check">
+                  <input type="checkbox" name="clinic_ids" value="{{ c.value }}"
+                         {% if c.value in (values.get('clinic_ids') or []) %}checked{% endif %}>
+                  <span>{{ c.label }}</span>
+                </label>
+              {% endfor %}
+            </div>
+            {% if errors.get('clinic_ids') %}
+              <span class="field-error" role="alert"><span aria-hidden="true">!</span>{{ errors.get('clinic_ids') }}</span>
+            {% endif %}
+          </fieldset>
         </div>
       </div>
 

@@ -28,6 +28,7 @@ from app.errors import NotFound
 from app.i18n.catalogue import missing_keys, translate
 from markupsafe import escape
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from tests.conftest import TEST_PASSWORD, make_user
 
@@ -144,13 +145,13 @@ async def test_sorted_by_name(db, doctor):
     assert [p.full_name for p in got] == ["Ali", "Bilal", "Zainab"]
 
 
-async def test_two_active_grants_list_the_patient_once(db, doctor):
-    # Review focus 3 — the database has no unique constraint behind BL-04.
+async def test_a_second_active_grant_is_refused_by_the_database(db, doctor):
+    # Review focus 3 — since P9, `uq_consent_grant_one_active` backs BL-04.
     p = await make_patient(db, "p1@x.com", "Twice")
     await grant(db, p, doctor)
-    await grant(db, p, doctor)
-    got = await consent_service.list_patients_for_doctor(db, as_actor(doctor))
-    assert [x.full_name for x in got] == ["Twice"]
+    with pytest.raises(IntegrityError):
+        await grant(db, p, doctor)
+    await db.rollback()
 
 
 async def test_unverified_doctor_gets_not_found(db, clinic):

@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{#- The preprocessing report: the stage between "uploaded" and "recognised
+    text". It shows what the OCR engine actually RECEIVES for this document —
+    the page after it has been turned upright, converted to greyscale and
+    scaled up if small — recomputed from the stored original each time, never
+    stored. A read that went wrong is usually explained here: a blank, faint
+    or tiny page.
+
+    Context (web/documents.py::preprocess_page):
+      doc          DocumentOut (the document this is for)
+      report       ocr.PreprocessReport, or None when the file could not be prepared
+      error_text   why the file could not be prepared, or None
+      note_text    note -> translated sentence -#}
+{% import "partials/doc_steps.html" as d with context %}
+
+{% block title %}{{ t('documents.preprocess.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+{% set base = '/' ~ locale ~ '/patient/documents/' ~ doc.id %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    <div class="rowline">
+      <a class="linkish" href="{{ base }}">← {{ t('documents.preprocess.back') }}</a>
+    </div>
+
+    <div class="panel stack">
+      <div class="identity">
+        <div class="identity__main">
+          <div class="entry-row__title">{{ doc.original_filename or t('documents.detail.title') }}</div>
+          <div class="mono">
+            {{ type_label(doc.document_type) }}{% if doc.size_bytes %} · {{ human_size(doc.size_bytes) }}{% endif %}
+          </div>
+        </div>
+        {{ d.state_chip(doc.status) }}
+      </div>
+      <p class="lead">{{ t('documents.preprocess.lead') }}</p>
+    </div>
+
+    {% if error_text %}
+      <div class="panel stack" role="alert">
+        <div class="entry-row__title">{{ t('documents.preprocess.failed') }}</div>
+        <p class="lead">{{ error_text }}</p>
+      </div>
+    {% elif report %}
+      {% if report.notes %}
+        <div class="panel stack">
+          <h2 class="panel__label">{{ t('documents.preprocess.notes') }}</h2>
+          <ul class="notes-list">
+            {% for n in report.notes %}<li>{{ note_text(n) }}</li>{% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
+      {% for p in report.pages %}
+        <section class="panel stack" aria-labelledby="page-{{ p.index }}-h">
+          <h2 id="page-{{ p.index }}-h" class="panel__label">{{ t('documents.preprocess.page', n=p.index) }}</h2>
+
+          <dl class="readonly-list">
+            {% if p.original_size %}
+              <dt>{{ t('documents.preprocess.original_size') }}</dt>
+              <dd dir="ltr">{{ p.original_size[0] }} × {{ p.original_size[1] }} px</dd>
+            {% elif report.from_pdf %}
+              <dt>{{ t('documents.preprocess.original_size') }}</dt>
+              <dd>{{ t('documents.preprocess.pdf_render', dpi=report.render_dpi) }}</dd>
+            {% endif %}
+            <dt>{{ t('documents.preprocess.prepared_size') }}</dt>
+            <dd dir="ltr">{{ p.final_size[0] }} × {{ p.final_size[1] }} px · {{ p.megapixels }} MP</dd>
+            {% if p.scale %}
+              <dt>{{ t('documents.preprocess.scale') }}</dt>
+              <dd dir="ltr">{{ '%.2f' % p.scale }}×</dd>
+            {% endif %}
+            <dt>{{ t('documents.preprocess.contrast') }}</dt>
+            <dd dir="ltr">{{ p.contrast | round | int }} / 255</dd>
+            <dt>{{ t('documents.preprocess.ink') }}</dt>
+            <dd dir="ltr">{{ '%.2f' % (p.ink_fraction * 100) }}%</dd>
+          </dl>
+
+          {% if p.notes %}
+            <ul class="notes-list">
+              {% for n in p.notes %}<li>{{ note_text(n) }}</li>{% endfor %}
+            </ul>
+          {% else %}
+            <p class="field-help">{{ t('documents.preprocess.nothing_unusual') }}</p>
+          {% endif %}
+
+          <div class="doc-preview">
+            <img src="data:image/png;base64,{{ p.preview_b64 }}"
+                 alt="{{ t('documents.preprocess.preview_alt', n=p.index) }}">
+          </div>
+        </section>
+      {% endfor %}
+    {% endif %}
+
+    <div class="btn-row">
+      <a class="btn btn--secondary" href="{{ base }}">{{ t('documents.preprocess.back') }}</a>
+    </div>
+  </main>
+</div>
+{% endblock %}

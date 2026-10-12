@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 import segno
+from app.consent.schemas import SECTIONS
 from app.db.models import AuditLog, ConsentGrant, Doctor, Patient, Profile, UserRole
 from app.db.types import utcnow, uuid7
 from app.i18n.catalogue import missing_keys, translate
@@ -110,7 +111,7 @@ async def grant_to(db, patient: Patient, doctor: Doctor, *, revoked: bool = Fals
         patient_id=patient.id,
         grantee_type="doctor",
         grantee_id=doctor.id,
-        scope_sections=[],
+        scope_sections=list(SECTIONS),  # P9: [] would mean "nothing shared"
         granted_at=utcnow(),
         revoked_at=utcnow() if revoked else None,
     )
@@ -254,7 +255,8 @@ async def test_t11_no_passport_no_in_logs(client, db, patient_user, verified_doc
     with structlog.testing.capture_logs() as captured:
         await client.get("/en/patient/passport")
         await client.post(
-            "/en/patient/access", data={"grantee_type": "doctor", "grantee": doctor.pmdc_number}
+            "/en/patient/access",
+            data={"grantee": f"doctor:{doctor.id}", "sections": "basics", "duration": "24h"},
         )
         await login(client, "dr@x.com")
         location = (await client.post(LOOKUP, data={"passport_no": patient.passport_no})).headers[
@@ -370,18 +372,21 @@ async def test_t14_qr_is_inline_svg_without_script(client, db, patient_user):
     assert 'role="img"' in html and in_html("passport.qr_title") in html
 
 
-# ── Access page forms ────────────────────────────────────────────────────
+# ── Access page forms (rewritten for P9: search → pick → sections → duration)
+def grant_form(grantee: str, *sections: str, duration: str = "30d") -> dict:
+    return {"grantee": grantee, "duration": duration, "sections": list(sections)}
+
+
 async def test_access_page_grant_and_revoke(client, db, patient_user, verified_doctor, clinic):
     await login(client, "pat@x.com")
     empty = await client.get("/en/patient/access")
     assert empty.status_code == 200 and in_html("access.empty") in empty.text
 
     r = await client.post(
-        "/en/patient/access",
-        data={"grantee_type": "doctor", "grantee": verified_doctor.pmdc_number},
+        "/en/patient/access", data=grant_form(f"doctor:{verified_doctor.id}", "basics")
     )
     assert r.status_code == 303 and r.headers["location"] == "/en/patient/access?saved=granted"
-    await client.post("/en/patient/access", data={"grantee_type": "clinic", "grantee": clinic.name})
+    await client.post("/en/patient/access", data=grant_form(f"clinic:{clinic.id}", "allergies"))
 
     page = (await client.get("/en/patient/access?saved=granted")).text
     assert in_html("access.saved.granted") in page
@@ -394,7 +399,8 @@ async def test_access_page_grant_and_revoke(client, db, patient_user, verified_d
     # Idempotent: the same form submitted twice is not an error.
     assert (await client.post(f"/en/patient/access/{ids[0]}/revoke")).status_code == 303
     page = (await client.get("/en/patient/access")).text
-    assert ids[0] not in page and ids[1] in page
+    assert f"/en/patient/access/{ids[0]}/revoke" not in page
+    assert f"/en/patient/access/{ids[1]}/revoke" in page
     assert [a.action for a in await audit_rows(db)] == [
         "consent.grant",
         "consent.grant",
@@ -406,17 +412,23 @@ async def test_access_page_grant_and_revoke(client, db, patient_user, verified_d
 
 
 @pytest.mark.parametrize(
-    ("data", "status", "key"),
+    ("form", "status", "field", "key"),
     [
-        ({"grantee_type": "doctor", "grantee": "NO-SUCH"}, 404, "errors.grantee_doctor_not_found"),
-        ({"grantee_type": "clinic", "grantee": "No Such"}, 404, "errors.grantee_clinic_not_found"),
-        ({"grantee_type": "doctor", "grantee": "  "}, 422, "errors.text_required"),
-        ({"grantee_type": "nurse", "grantee": "x"}, 422, "errors.choice_invalid"),
+        (grant_form(f"doctor:{uuid7()}", "basics"), 404, "grantee", "errors.grantee_not_found"),
+        (grant_form(f"clinic:{uuid7()}", "basics"), 404, "grantee", "errors.grantee_not_found"),
+        (grant_form("", "basics"), 422, "grantee", "errors.choice_invalid"),
+        (grant_form("nurse:x", "basics"), 422, "grantee", "errors.choice_invalid"),
+        (grant_form("DOCTOR"), 422, "sections", "errors.sections_required"),
+        (grant_form("DOCTOR", "basics", duration="1y"), 422, "duration", "errors.duration_invalid"),
     ],
 )
-async def test_access_page_grant_errors(client, db, patient_user, data, status, key):
+async def test_access_page_grant_errors(
+    client, db, patient_user, verified_doctor, form, status, field, key
+):
+    if form["grantee"] == "DOCTOR":
+        form = {**form, "grantee": f"doctor:{verified_doctor.id}"}
     await login(client, "pat@x.com")
-    r = await client.post("/en/patient/access", data=data)
+    r = await client.post("/en/patient/access", data=form)
     assert r.status_code == status
     assert field_errors(r.text) == [in_html(key)]
     assert await audit_rows(db) == []
@@ -426,25 +438,26 @@ async def test_access_page_unverified_doctor_reads_as_unknown(client, db, patien
     user = await make_user(db, email="pending@x.com", role=UserRole.DOCTOR, clinic_id=clinic.id)
     pending = await doctor_of(db, user)
     await login(client, "pat@x.com")
+    missing = uuid7()
     unverified = await client.post(
-        "/en/patient/access", data={"grantee_type": "doctor", "grantee": pending.pmdc_number}
+        "/en/patient/access", data=grant_form(f"doctor:{pending.id}", "basics")
     )
     unknown = await client.post(
-        "/en/patient/access", data={"grantee_type": "doctor", "grantee": "NO-SUCH"}
+        "/en/patient/access", data=grant_form(f"doctor:{missing}", "basics")
     )
     assert unverified.status_code == unknown.status_code == 404
-    assert without(unverified.text, pending.pmdc_number) == without(unknown.text, "NO-SUCH")
+    assert without(unverified.text, str(pending.id)) == without(unknown.text, str(missing))
 
 
 async def test_access_page_duplicate_and_foreign_revoke(client, db, patient_user, verified_doctor):
     other = await patient_of(db, await make_user(db, email="o@x.com", role=UserRole.PATIENT))
     foreign = await grant_to(db, other, verified_doctor)
     await login(client, "pat@x.com")
-    form = {"grantee_type": "doctor", "grantee": verified_doctor.pmdc_number}
+    form = grant_form(f"doctor:{verified_doctor.id}", "basics")
     assert (await client.post("/en/patient/access", data=form)).status_code == 303
+    # P9 BL-05: granting again keeps the existing grant and says so (was 409).
     dup = await client.post("/en/patient/access", data=form)
-    assert dup.status_code == 409
-    assert field_errors(dup.text) == [in_html("errors.already_granted")]
+    assert dup.status_code == 303 and dup.headers["location"].endswith("?saved=exists")
 
     r = await client.post(f"/en/patient/access/{foreign.id}/revoke")
     assert r.status_code == 404 and in_html("errors.not_found") in r.text

@@ -14,6 +14,7 @@ from decimal import Decimal
 
 import pytest
 import structlog.testing
+from app.consent.schemas import SECTIONS
 from app.db.models import (
     Allergy,
     AuditLog,
@@ -100,7 +101,7 @@ async def grant(db, patient, verified_doctor) -> ConsentGrant:
         patient_id=patient.id,
         grantee_type="doctor",
         grantee_id=verified_doctor.id,
-        scope_sections=[],
+        scope_sections=list(SECTIONS),
         granted_at=utcnow(),
     )
     db.add(row)
@@ -160,11 +161,11 @@ async def test_ac12_page_shows_every_section(client, db, clinic, patient, verifi
     html = r.text
     assert "Ayesha Rahim" in html
     for key in (
-        "profile.section.allergies",
-        "profile.section.conditions",
-        "profile.section.medications",
-        "doctor_patient.section.visits",
-        "doctor_patient.section.labs",
+        "section.allergies",
+        "section.conditions",
+        "section.medications",
+        "section.visits",
+        "section.lab_reports",
     ):
         assert in_html(key) in html, key
     for text in (
@@ -229,7 +230,7 @@ async def test_ac14_urdu_page_renders_rtl(client, db, clinic, patient, verified_
     r = await client.get(url(patient, "ur"))
     assert r.status_code == 200
     assert 'dir="rtl"' in r.text and 'lang="ur"' in r.text
-    for key in ("doctor_patient.section.visits", "doctor_patient.changed.first_visit"):
+    for key in ("section.visits", "doctor_patient.changed.first_visit"):
         assert in_html(key, "ur") in r.text, key
     assert missing_keys()["ur"] == []
 

@@ -11,23 +11,28 @@ place" with no client state to juggle.
 
 from __future__ import annotations
 
+import re
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Annotated, Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import segno
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 from pydantic import ValidationError
+from pydantic_core import PydanticCustomError
 from sqlalchemy import select
 from supabase_auth.errors import AuthApiError
 
+from ..admin import schemas as admin_schemas
+from ..admin import service as admin_service
 from ..audit import writer as audit
 from ..cache import cache, oauth_state_key
-from ..consent import gateway
+from ..consent import access_log as consent_access_log
+from ..consent import gateway as consent_gateway
 from ..consent import schemas as consent_schemas
 from ..consent import service as consent_service
 from ..db import types as dbtypes
@@ -36,12 +41,14 @@ from ..deps import (
     Actor,
     OptionalActorDep,
     SessionDep,
+    check_consent_search_rate,
     check_consent_write_rate,
     check_profile_write_rate,
+    check_schedule_write_rate,
     enforce_auth_rate_limit,
 )
 from ..doctor import what_changed
-from ..doctor.rows import _gender_label, age_in_years, build_rows
+from ..doctor.rows import age_in_years, build_rows, gender_label
 from ..errors import (
     AppError,
     DuplicateEntry,
@@ -49,6 +56,7 @@ from ..errors import (
     NotEditable,
     NotFound,
     RateLimited,
+    ScheduleConflict,
     Unauthenticated,
     ValidationFailed,
     message_params,
@@ -57,6 +65,7 @@ from ..i18n.catalogue import direction, normalise_locale, translate
 from ..identity import oauth, service
 from ..identity.router import clear_session_cookies, set_session_cookies
 from ..identity.schemas import (
+    MAX_CLINICS,
     DoctorOnboardingRequest,
     DoctorRegisterRequest,
     LoginRequest,
@@ -66,7 +75,12 @@ from ..identity.schemas import (
 from ..paths import TEMPLATES_DIR
 from ..profile import schemas as profile_schemas
 from ..profile import service as profile_service
+from ..schedule import engine as schedule_engine
+from ..schedule import schemas as schedule_schemas
+from ..schedule import service as schedule_service
 from ..settings import settings
+from ..verification import service as verification_service
+from ..verification.schemas import REASONS
 
 OAUTH_STATE_COOKIE = "cn_oauth_state"
 
@@ -108,17 +122,72 @@ async def _clinic_options(session: SessionDep) -> list[dict[str, str]]:
     return [{"value": str(c.id), "label": f"{c.name} — {c.city}"} for c in rows.scalars().all()]
 
 
+def _chosen_clinics(raw: list[str]) -> list[uuid.UUID] | None:
+    """The hospitals/clinics ticked on a doctor sign-up form, de-duplicated in
+    order. None when any value is not a UUID (a tampered form)."""
+    try:
+        return list(dict.fromkeys(uuid.UUID(v.strip()) for v in raw if v.strip()))
+    except ValueError:
+        return None
+
+
 def _initials(name: str) -> str:
     parts = [p for p in name.split() if p]
     return "".join(p[0].upper() for p in parts[:2]) or "?"
 
 
+# ── Where to go after signing in ─────────────────────────────────────────
+# A signed-out visitor sent to the sign-in page from a deep link carries the address they wanted
+# (`?next=`); once signed in they are taken there. The value arrives from the address bar, so it is
+# honoured only if it is one of OUR pages — a path inside the signed-in areas — and never an
+# address that could lead anywhere else (`//host`, `https://host`, a backslash, control characters).
+_NEXT_ALLOWED = re.compile(r"^/(?:en|ur)/(?:patient|doctor|admin)(?:[/?]\S*)?$")
+
+
+def safe_next(value: object) -> str | None:
+    """`value` if it is a page inside a signed-in area of this site, else `None`."""
+    if not isinstance(value, str) or not value or len(value) > 512:
+        return None
+    if value.startswith("//") or "\\" in value:
+        return None
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        return None
+    return value if _NEXT_ALLOWED.match(value) else None
+
+
+def login_redirect(loc: str, request: Request) -> RedirectResponse:
+    """Send a signed-out visitor to sign in, remembering the page they asked for — a page they
+    could simply open (GET), query string and all. A form submission has nowhere to come back to."""
+    target = None
+    if request.method == "GET":
+        path = quote(request.url.path, safe="/")
+        target = safe_next(path + (f"?{request.url.query}" if request.url.query else ""))
+    suffix = f"?next={quote(target, safe='/')}" if target else ""
+    return RedirectResponse(f"/{loc}/login{suffix}", status_code=303)
+
+
 # ── Login ────────────────────────────────────────────────────────────────
 @router.get("/{locale}/login", response_class=HTMLResponse)
-async def login_page(request: Request, locale: str, actor: OptionalActorDep) -> Response:
+async def login_page(
+    request: Request,
+    locale: str,
+    actor: OptionalActorDep,
+    next_url: Annotated[str, Query(alias="next")] = "",
+) -> Response:
+    destination = safe_next(next_url)
     if actor is not None:
-        return RedirectResponse(f"/{normalise_locale(locale)}/{_area(actor.role)}", status_code=303)
-    return _render(request, "auth/login.html", locale, role="patient", values={}, errors={})
+        return RedirectResponse(
+            destination or f"/{normalise_locale(locale)}/{_area(actor.role)}", status_code=303
+        )
+    return _render(
+        request,
+        "auth/login.html",
+        locale,
+        role="patient",
+        values={},
+        errors={},
+        next_path=destination,
+    )
 
 
 @router.post("/{locale}/login")
@@ -129,9 +198,11 @@ async def login_submit(
     email: Annotated[str, Form()] = "",
     password: Annotated[str, Form()] = "",
     role: Annotated[str, Form()] = "",
+    next_url: Annotated[str, Form(alias="next")] = "",
 ) -> Response:
     loc = normalise_locale(locale)
-    selected = role if role in ("patient", "doctor") else ""
+    selected = role if role in ("patient", "doctor", "admin") else ""
+    destination = safe_next(next_url)
 
     def fail(message_key: str, code: int = 400, **params: object) -> Response:
         return _render(
@@ -139,6 +210,7 @@ async def login_submit(
             "auth/login.html",
             loc,
             status_code=code,
+            next_path=destination,
             # Keep the toggle where the user left it, so the error makes sense.
             role=selected or "patient",
             values={"email": email},
@@ -178,7 +250,7 @@ async def login_submit(
             selected=translate(f"auth.role.{selected}", loc),
         )
 
-    response = RedirectResponse(f"/{loc}/{_area(out.role)}", status_code=303)
+    response = RedirectResponse(destination or f"/{loc}/{_area(out.role)}", status_code=303)
     set_session_cookies(response, pair)
     return response
 
@@ -215,6 +287,7 @@ async def register_submit(
     pmdc_number: Annotated[str, Form()] = "",
     specialty: Annotated[str, Form()] = "",
     primary_clinic_id: Annotated[str, Form()] = "",
+    clinic_ids: Annotated[list[str] | None, Form()] = None,
     consent: Annotated[str | None, Form()] = None,
 ) -> Response:
     loc = normalise_locale(locale)
@@ -225,7 +298,8 @@ async def register_submit(
         "phone_e164": phone_e164,
         "pmdc_number": pmdc_number,
         "specialty": specialty,
-        "primary_clinic_id": primary_clinic_id,
+        "clinic_ids": [str(c) for c in (clinic_ids or [])]
+        + ([primary_clinic_id] if primary_clinic_id else []),
         "consent": bool(consent),
     }
 
@@ -272,13 +346,18 @@ async def register_submit(
 
     try:
         if role == "doctor":
-            if not (pmdc_number.strip() and specialty.strip() and primary_clinic_id):
+            chosen = _chosen_clinics(values["clinic_ids"])
+            if chosen is None:
+                return await rerender({"clinic_ids": translate("errors.clinic_unknown", loc)})
+            if not (pmdc_number.strip() and specialty.strip() and chosen):
                 return await rerender({}, translate("errors.doctor_fields_required", loc))
+            if len(chosen) > MAX_CLINICS:
+                return await rerender({"clinic_ids": translate("errors.too_many_clinics", loc)})
             body: Any = DoctorRegisterRequest(
                 role="doctor",
                 pmdc_number=pmdc_number.strip(),
                 specialty=specialty.strip(),
-                primary_clinic_id=uuid.UUID(primary_clinic_id),
+                clinic_ids=chosen,
                 **payload,
             )
         else:
@@ -294,13 +373,118 @@ async def register_submit(
             user_agent=request.headers.get("user-agent"),
         )
     except ValidationFailed:
-        return await rerender({"primary_clinic_id": translate("errors.clinic_unknown", loc)})
+        return await rerender({"clinic_ids": translate("errors.clinic_unknown", loc)})
     except AppError:
         return await rerender({}, translate("errors.internal", loc), 500)
 
     if pair is None:
         # Duplicate email. Do not confirm the address exists — send the user to
         # sign in instead (SPEC AC-24, BL-05).
+        return RedirectResponse(f"/{loc}/login", status_code=303)
+
+    response = RedirectResponse(f"/{loc}/{_area(out.role)}", status_code=303)
+    set_session_cookies(response, pair)
+    return response
+
+
+# ── Clinic-admin sign-up (D-VERIFY v1) ───────────────────────────────────
+@router.get("/{locale}/admin/register", response_class=HTMLResponse)
+async def admin_register_page(
+    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    loc = normalise_locale(locale)
+    if actor is not None:
+        return RedirectResponse(f"/{loc}/{_area(actor.role)}", status_code=303)
+    return _render(
+        request,
+        "auth/admin_register.html",
+        loc,
+        values={},
+        errors={},
+        form_error=None,
+        clinics=await _clinic_options(session),
+    )
+
+
+@router.post("/{locale}/admin/register")
+async def admin_register_submit(
+    request: Request,
+    locale: str,
+    session: SessionDep,
+    full_name: Annotated[str, Form()] = "",
+    email: Annotated[str, Form()] = "",
+    password: Annotated[str, Form()] = "",
+    password_confirm: Annotated[str, Form()] = "",
+    clinic_id: Annotated[str, Form()] = "",
+    invite_code: Annotated[str, Form()] = "",
+    consent: Annotated[str | None, Form()] = None,
+) -> Response:
+    loc = normalise_locale(locale)
+    values = {
+        "full_name": full_name,
+        "email": email,
+        "clinic_id": clinic_id,
+        "invite_code": invite_code,
+        "consent": bool(consent),
+    }
+
+    async def rerender(
+        errors: dict[str, str], form_error: str | None = None, code: int = 422
+    ) -> Response:
+        return _render(
+            request,
+            "auth/admin_register.html",
+            loc,
+            status_code=code,
+            values=values,
+            errors=errors,
+            clinics=await _clinic_options(session),
+            form_error=form_error,
+        )
+
+    try:
+        await enforce_auth_rate_limit(request)
+    except RateLimited:
+        return await rerender({}, translate("errors.rate_limited", loc), 429)
+
+    errors: dict[str, str] = {}
+    if not full_name.strip():
+        errors["full_name"] = translate("errors.name_required", loc)
+    if len(password) < 10:
+        errors["password"] = translate("errors.password_short", loc)
+    elif password != password_confirm:
+        errors["password_confirm"] = translate("errors.password_mismatch", loc)
+    if not consent:
+        errors["consent"] = translate("errors.consent_required", loc)
+    if errors:
+        return await rerender(errors)
+
+    try:
+        body = admin_schemas.AdminRegisterRequest(
+            full_name=full_name,
+            email=email,
+            password=password,
+            clinic_id=uuid.UUID(clinic_id),
+            invite_code=invite_code,
+            preferred_locale=loc,
+        )
+    except (ValidationError, ValueError):
+        return await rerender({"email": translate("errors.email_invalid", loc)})
+
+    try:
+        out, pair = await admin_service.register_admin(
+            session,
+            body,
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except ValidationFailed as exc:
+        fields = exc.details.get("fields", {})
+        return await rerender({k: translate(v, loc) for k, v in fields.items()})
+    except AppError:
+        return await rerender({}, translate("errors.internal", loc), 500)
+
+    if pair is None:
         return RedirectResponse(f"/{loc}/login", status_code=303)
 
     response = RedirectResponse(f"/{loc}/{_area(out.role)}", status_code=303)
@@ -515,6 +699,7 @@ async def onboarding_submit(
     pmdc_number: Annotated[str, Form()] = "",
     specialty: Annotated[str, Form()] = "",
     primary_clinic_id: Annotated[str, Form()] = "",
+    clinic_ids: Annotated[list[str] | None, Form()] = None,
     consent: Annotated[str | None, Form()] = None,
 ) -> Response:
     loc = normalise_locale(locale)
@@ -529,7 +714,8 @@ async def onboarding_submit(
         "phone_e164": phone_e164,
         "pmdc_number": pmdc_number,
         "specialty": specialty,
-        "primary_clinic_id": primary_clinic_id,
+        "clinic_ids": [str(c) for c in (clinic_ids or [])]
+        + ([primary_clinic_id] if primary_clinic_id else []),
         "consent": bool(consent),
     }
 
@@ -571,13 +757,18 @@ async def onboarding_submit(
 
     try:
         if role == "doctor":
-            if not (pmdc_number.strip() and specialty.strip() and primary_clinic_id):
+            chosen = _chosen_clinics(values["clinic_ids"])
+            if chosen is None:
+                return await rerender({"clinic_ids": translate("errors.clinic_unknown", loc)})
+            if not (pmdc_number.strip() and specialty.strip() and chosen):
                 return await rerender({}, translate("errors.doctor_fields_required", loc))
+            if len(chosen) > MAX_CLINICS:
+                return await rerender({"clinic_ids": translate("errors.too_many_clinics", loc)})
             body: Any = DoctorOnboardingRequest(
                 role="doctor",
                 pmdc_number=pmdc_number.strip(),
                 specialty=specialty.strip(),
-                primary_clinic_id=uuid.UUID(primary_clinic_id),
+                clinic_ids=chosen,
                 **payload,
             )
         else:
@@ -597,7 +788,7 @@ async def onboarding_submit(
             user_agent=request.headers.get("user-agent"),
         )
     except ValidationFailed:
-        return await rerender({"primary_clinic_id": translate("errors.clinic_unknown", loc)})
+        return await rerender({"clinic_ids": translate("errors.clinic_unknown", loc)})
 
     return RedirectResponse(f"/{loc}/{_area(user.role.value)}", status_code=303)
 
@@ -618,7 +809,7 @@ async def _guarded(
 
     if actor is None:
         # Preserve the destination so the user returns after signing in.
-        return RedirectResponse(f"/{loc}/login?next={request.url.path}", status_code=303)
+        return login_redirect(loc, request)
 
     if actor.role != required_role:
         # Cross-role deep link: send them to their own area rather than a raw
@@ -636,13 +827,27 @@ async def _guarded(
 
     pending_message = ""
     show_banner = False
+    rejected_message = ""
+    show_rejected_banner = False
     if actor.role == UserRole.DOCTOR.value and not actor.is_verified_doctor:
-        show_banner = True
         clinic_name = ""
         if me.clinic_ids:
             clinic = await session.get(Clinic, me.clinic_ids[0])
             clinic_name = clinic.name if clinic else ""
-        pending_message = translate("doctor.pending_body", loc, clinic=clinic_name)
+        status, reason = await verification_service.doctor_status_for_banner(session, actor)
+        if status == "rejected":
+            show_rejected_banner = True
+            reason_text = (
+                translate(f"verify.reason.{reason}", loc)
+                if reason
+                else translate("verify.reason.other", loc)
+            )
+            rejected_message = translate(
+                "doctor.rejected_body", loc, reason=reason_text, clinic=clinic_name
+            )
+        else:
+            show_banner = True
+            pending_message = translate("doctor.pending_body", loc, clinic=clinic_name)
 
     title_key = {
         "patient": "patient.dashboard.title",
@@ -663,7 +868,8 @@ async def _guarded(
         # FR3 — an unverified doctor gets no patient-data affordance at all.
         nav_items = _doctor_nav(loc, current="dashboard")
         links = [
-            {"href": f"/{loc}/doctor/passport-lookup", "label": translate("lookup.open_link", loc)}
+            {"href": f"/{loc}/doctor/passport-lookup", "label": translate("lookup.open_link", loc)},
+            {"href": f"/{loc}/doctor/schedule", "label": translate("schedule.open_link", loc)},
         ]
         # D4 — who is listed is decided in the consent service, live, on every load.
         granted = await consent_service.list_patients_for_doctor(session, actor)
@@ -679,6 +885,11 @@ async def _guarded(
             detail={"patient_count": len(patients)},
         )
         await session.commit()
+    elif actor.role == UserRole.DOCTOR.value:
+        # A pending doctor: no patient-data affordance at all (FR3), but the
+        # schedule exposes none, so it is their one link (D7 decision 6).
+        nav_items = _doctor_nav(loc, current="dashboard", verified=False)
+        links = [{"href": f"/{loc}/doctor/schedule", "label": translate("schedule.open_link", loc)}]
     else:
         nav_items, links = [], []
 
@@ -700,6 +911,8 @@ async def _guarded(
         passport_no=me.passport_no,
         show_unverified_banner=show_banner,
         pending_message=pending_message,
+        show_rejected_banner=show_rejected_banner,
+        rejected_message=rejected_message,
         **extra,
     )
 
@@ -718,11 +931,217 @@ async def doctor_area(
     return await _guarded(request, locale, session, actor, "doctor")
 
 
+# ── Clinic-admin verification dashboard (D-VERIFY v1) ────────────────────
+_ADMIN_TABS = ("pending", "verified", "rejected")
+_ADMIN_SAVED = {
+    "approved": "verify.saved.approved",
+    "rejected": "verify.saved.rejected",
+    "revoked": "verify.saved.revoked",
+}
+
+
+def _admin_nav(loc: str, *, current: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "href": f"/{loc}/admin?tab={t}",
+            "label": translate(f"verify.tab.{t}", loc),
+            "current": current == t,
+        }
+        for t in _ADMIN_TABS
+    ]
+
+
+def _admin_page_guard(request: Request, locale: str, actor: Actor | None) -> Response | None:
+    loc = normalise_locale(locale)
+    if actor is None:
+        return RedirectResponse(f"/{loc}/login?next={request.url.path}", status_code=303)
+    if actor.role != UserRole.CLINIC_ADMIN.value:
+        return RedirectResponse(f"/{loc}/{_area(actor.role)}", status_code=303)
+    return None
+
+
+async def _render_admin(
+    request: Request,
+    loc: str,
+    session: SessionDep,
+    actor: Actor,
+    *,
+    tab: str,
+    status_code: int = 200,
+    saved: str | None = None,
+    page_error: str | None = None,
+) -> Response:
+    if tab not in _ADMIN_TABS:
+        tab = "pending"
+    doctors = await verification_service.list_doctors_for_clinic(session, actor, tab)
+    decisions = await verification_service.latest_decisions_for(session, [d.id for d in doctors])
+    return _render(
+        request,
+        "admin/dashboard.html",
+        loc,
+        status_code=status_code,
+        path_suffix="/admin",
+        crumb=translate("admin.dashboard.title", loc),
+        page_title=translate("admin.dashboard.title", loc),
+        nav_items=_admin_nav(loc, current=tab),
+        tab=tab,
+        doctors=doctors,
+        decisions=decisions,
+        reasons=REASONS,
+        saved=saved,
+        page_error=page_error,
+    )
+
+
+async def _admin_failure(
+    request: Request,
+    loc: str,
+    session: SessionDep,
+    actor: Actor,
+    exc: Exception,
+    *,
+    tab: str,
+) -> Response:
+    await session.rollback()
+    if isinstance(exc, ValidationFailed):
+        fields = exc.details.get("fields", {})
+        msg = (
+            translate(next(iter(fields.values())), loc)
+            if fields
+            else translate("errors.validation_failed", loc)
+        )
+        return await _render_admin(
+            request, loc, session, actor, tab=tab, status_code=422, page_error=msg
+        )
+    if isinstance(exc, NotFound):
+        return await _render_admin(
+            request,
+            loc,
+            session,
+            actor,
+            tab=tab,
+            status_code=404,
+            page_error=translate("errors.not_found", loc),
+        )
+    if isinstance(exc, RateLimited):
+        return await _render_admin(
+            request,
+            loc,
+            session,
+            actor,
+            tab=tab,
+            status_code=429,
+            page_error=translate("errors.rate_limited", loc),
+        )
+    return await _render_admin(
+        request,
+        loc,
+        session,
+        actor,
+        tab=tab,
+        status_code=500,
+        page_error=translate("errors.internal", loc),
+    )
+
+
 @router.get("/{locale}/admin", response_class=HTMLResponse)
 async def admin_area(
-    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+    request: Request,
+    locale: str,
+    session: SessionDep,
+    actor: OptionalActorDep,
+    tab: str = "pending",
+    saved: str | None = None,
 ) -> Response:
-    return await _guarded(request, locale, session, actor, "admin")
+    if (redirect := _admin_page_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    banner = translate(_ADMIN_SAVED[saved], loc) if saved in _ADMIN_SAVED else None
+    return await _render_admin(request, loc, session, actor, tab=tab, saved=banner)
+
+
+@router.post("/{locale}/admin/doctors/{doctor_id}/approve")
+async def admin_approve_submit(
+    request: Request, locale: str, doctor_id: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _admin_page_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    form = await request.form()
+    source_tab = str(form.get("source_tab", "pending"))
+    try:
+        parsed_id = _parse_entry_id(doctor_id)
+        if parsed_id is None:
+            raise NotFound()
+        await verification_service.approve(
+            session,
+            actor,
+            parsed_id,
+            checked_number=form.get("checked_number") is not None,
+            checked_name=form.get("checked_name") is not None,
+            checked_licence=form.get("checked_licence") is not None,
+            note=str(form.get("note", "")).strip() or None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped to the page
+        return await _admin_failure(request, loc, session, actor, exc, tab=source_tab)
+    return RedirectResponse(f"/{loc}/admin?tab=verified&saved=approved", status_code=303)
+
+
+@router.post("/{locale}/admin/doctors/{doctor_id}/reject")
+async def admin_reject_submit(
+    request: Request, locale: str, doctor_id: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _admin_page_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    form = await request.form()
+    source_tab = str(form.get("source_tab", "pending"))
+    try:
+        parsed_id = _parse_entry_id(doctor_id)
+        if parsed_id is None:
+            raise NotFound()
+        await verification_service.reject(
+            session,
+            actor,
+            parsed_id,
+            reason=str(form.get("reason", "")),
+            note=str(form.get("note", "")).strip() or None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return await _admin_failure(request, loc, session, actor, exc, tab=source_tab)
+    return RedirectResponse(f"/{loc}/admin?tab=pending&saved=rejected", status_code=303)
+
+
+@router.post("/{locale}/admin/doctors/{doctor_id}/revoke")
+async def admin_revoke_submit(
+    request: Request, locale: str, doctor_id: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _admin_page_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    form = await request.form()
+    source_tab = str(form.get("source_tab", "verified"))
+    try:
+        parsed_id = _parse_entry_id(doctor_id)
+        if parsed_id is None:
+            raise NotFound()
+        await verification_service.revoke(
+            session,
+            actor,
+            parsed_id,
+            reason=str(form.get("reason", "")),
+            note=str(form.get("note", "")).strip() or None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return await _admin_failure(request, loc, session, actor, exc, tab=source_tab)
+    return RedirectResponse(f"/{loc}/admin?tab=verified&saved=revoked", status_code=303)
 
 
 # ── Patient profile (FR2, profile SPEC §4.7–4.8) ────────────────────────
@@ -747,6 +1166,11 @@ def _patient_nav(loc: str, *, current: str) -> list[dict[str, Any]]:
             "href": f"/{loc}/patient/access",
             "label": translate("nav.access", loc),
             "current": current == "access",
+        },
+        {
+            "href": f"/{loc}/patient/documents",
+            "label": translate("nav.documents", loc),
+            "current": current == "documents",
         },
     ]
 
@@ -1240,9 +1664,38 @@ async def patient_passport_page(
     )
 
 
-# BL-31 pattern — the only `saved` values honoured; user input is never reflected.
-_ACCESS_SAVED = {"granted": "access.saved.granted", "revoked": "access.saved.revoked"}
-_GRANTEE_TYPES = ("doctor", "clinic")
+# BL-25 / profile BL-31 pattern — the only `saved` values honoured; user input
+# is never reflected.
+_ACCESS_SAVED = {
+    "granted": "access.saved.granted",
+    "exists": "access.saved.exists",
+    "changed": "access.saved.changed",
+    "revoked": "access.saved.revoked",
+}
+_DURATIONS = tuple(consent_schemas.DURATIONS)
+_LATER_SECTIONS = frozenset({"prescriptions", "lab_reports", "visits"})  # filled by P2/P3
+
+
+def _pkt(ts: datetime | None) -> str:
+    """A stored UTC timestamp as Pakistan time, `YYYY-MM-DD HH:MM`."""
+    if ts is None:
+        return ""
+    if ts.tzinfo is None:  # SQLite returns naive datetimes; every stored value is UTC
+        ts = ts.replace(tzinfo=UTC)
+    return ts.astimezone(dbtypes.PKT).strftime("%Y-%m-%d %H:%M")
+
+
+def _pkt_date(ts: datetime | None) -> str:
+    return _pkt(ts)[:10]
+
+
+def _parse_grantee(value: str) -> tuple[str, uuid.UUID] | None:
+    """`doctor:<uuid>` / `clinic:<uuid>` from the search result radios."""
+    kind, _, raw = value.partition(":")
+    if kind not in ("doctor", "clinic"):
+        return None
+    parsed = _parse_entry_id(raw)
+    return (kind, parsed) if parsed is not None else None
 
 
 async def _render_access(
@@ -1252,12 +1705,16 @@ async def _render_access(
     actor: Actor,
     *,
     status_code: int = 200,
+    q: str = "",
+    q_error: str | None = None,
+    results: list[consent_schemas.GranteeOut] | None = None,
     form_state: dict[str, Any] | None = None,
     saved: str | None = None,
     page_error: str | None = None,
 ) -> Response:
     try:
-        grants = await consent_service.list_grants(session, actor)
+        every = await consent_service.list_grants(session, actor, include_revoked=True)
+        log = await consent_access_log.list_access_log(session, actor)
     except NotFound:
         return RedirectResponse(f"/{loc}/onboarding", status_code=303)
     return _render(
@@ -1270,12 +1727,38 @@ async def _render_access(
         crumb=translate("auth.role.patient", loc),
         page_title=translate("access.title", loc),
         nav_items=_patient_nav(loc, current="access"),
-        grants=grants,
-        grantee_types=_GRANTEE_TYPES,
-        form_state=form_state or {"values": {"grantee_type": "doctor"}, "errors": {}},
+        grants=[g for g in every if g.active],
+        past=[g for g in every if not g.active],
+        log=log.items,
+        sections=consent_schemas.SECTIONS,
+        later_sections=_LATER_SECTIONS,
+        durations=_DURATIONS,
+        q=q,
+        q_error=q_error,
+        results=results,
+        form_state=form_state
+        or {"values": {"sections": [], "duration": consent_schemas.DEFAULT_DURATION}, "errors": {}},
         saved=saved,
         page_error=page_error,
+        pkt=_pkt,
+        pkt_date=_pkt_date,
     )
+
+
+async def _search(
+    session: SessionDep, actor: Actor, loc: str, q: str, *, count: bool
+) -> tuple[list[consent_schemas.GranteeOut] | None, str | None]:
+    """Grantee results for `q`, or a field error. `count` draws on the search
+    budget; a re-render after a failed grant re-shows results without it."""
+    if not q:
+        return None, None
+    try:
+        cleaned = consent_schemas.clean_query(q)
+    except PydanticCustomError as exc:
+        return None, translate(exc.message_template, loc, **(exc.context or {}))
+    if count:
+        await check_consent_search_rate(actor)
+    return await consent_service.search_grantees(session, actor, cleaned), None
 
 
 async def _access_failure(
@@ -1285,29 +1768,45 @@ async def _access_failure(
     actor: Actor,
     exc: Exception,
     *,
-    values: dict[str, str],
+    values: dict[str, Any],
+    q: str = "",
 ) -> Response:
-    """Map a failed grant (`values` set) or revoke (`values` empty) onto the
-    re-rendered page."""
+    """Map a failed grant (`values` set) or a failed change/revoke (`values`
+    empty) onto the re-rendered page (spec §4.12)."""
     await session.rollback()
+    results, _ = await _search(session, actor, loc, q, count=False) if values else (None, None)
 
     async def page(code: int, errors: dict[str, str] | None = None, **kw: Any) -> Response:
         state = {"values": values, "errors": errors or {}} if values else None
         return await _render_access(
-            request, loc, session, actor, status_code=code, form_state=state, **kw
+            request,
+            loc,
+            session,
+            actor,
+            status_code=code,
+            q=q,
+            results=results,
+            form_state=state,
+            **kw,
         )
 
     if isinstance(exc, ValidationError):
-        # Whichever field the schema names, the page has one input for it.
-        first = next(iter(_field_errors(exc, loc).values()))
-        return await page(422, {"grantee": first})
+        errors: dict[str, str] = {}
+        for err in exc.errors():
+            field = str(err["loc"][0]) if err["loc"] else "grantee"
+            # The id fields come from the chosen radio, so they report on it.
+            field = "grantee" if field in ("doctor_id", "clinic_id") else field
+            msg = err["msg"] if str(err["msg"]).startswith("errors.") else "errors.choice_invalid"
+            errors.setdefault(field, translate(msg, loc))
+        if not values:
+            return await page(422, page_error=next(iter(errors.values())))
+        return await page(422, errors)
     if isinstance(exc, ValidationFailed):
         fields = exc.details.get("fields", {})
         return await page(422, {k: translate(v, loc) for k, v in fields.items()})
     if isinstance(exc, NotFound):
-        if values:  # a grant whose grantee wasn't found — unknown ≡ unverified (BL-02)
-            key = f"errors.grantee_{values['grantee_type']}_not_found"
-            return await page(404, {"grantee": translate(key, loc)})
+        if values:  # the chosen grantee isn't grantable — unknown ≡ unverified (BL-01)
+            return await page(404, {"grantee": translate("errors.grantee_not_found", loc)})
         return await page(404, page_error=translate("errors.not_found", loc))
     if isinstance(exc, DuplicateEntry):
         return await page(409, {"grantee": translate("errors.already_granted", loc)})
@@ -1323,13 +1822,39 @@ async def patient_access_page(
     session: SessionDep,
     actor: OptionalActorDep,
     saved: str | None = None,
+    q: str = "",
 ) -> Response:
     if (redirect := _patient_page_guard(request, locale, actor, "access")) is not None:
         return redirect
     assert actor is not None
     loc = normalise_locale(locale)
     banner = translate(_ACCESS_SAVED[saved], loc) if saved in _ACCESS_SAVED else None
-    return await _render_access(request, loc, session, actor, saved=banner)
+    q = q[:200]
+    try:
+        results, q_error = await _search(session, actor, loc, q, count=True)
+    except RateLimited:
+        return await _render_access(
+            request,
+            loc,
+            session,
+            actor,
+            status_code=429,
+            q=q,
+            page_error=translate("errors.rate_limited", loc),
+        )
+    except NotFound:
+        return RedirectResponse(f"/{loc}/onboarding", status_code=303)
+    return await _render_access(
+        request,
+        loc,
+        session,
+        actor,
+        status_code=422 if q_error else 200,
+        q=q,
+        q_error=q_error,
+        results=results,
+        saved=banner,
+    )
 
 
 @router.post("/{locale}/patient/access")
@@ -1341,30 +1866,69 @@ async def patient_access_grant_submit(
     assert actor is not None
     loc = normalise_locale(locale)
     form = await request.form()
-    values = {
-        "grantee_type": str(form.get("grantee_type", "")),
+    values: dict[str, Any] = {
         "grantee": str(form.get("grantee", "")),
+        "sections": [str(s) for s in form.getlist("sections")],
+        "duration": str(form.get("duration", "")),
     }
+    q = str(form.get("q", ""))[:200]
 
     try:
         await check_consent_write_rate(actor)
-        grantee_type = values["grantee_type"]
-        if grantee_type not in _GRANTEE_TYPES:
-            raise ValidationFailed({"fields": {"grantee_type": "errors.choice_invalid"}})
-        if not values["grantee"].strip():
-            raise ValidationFailed({"fields": {"grantee": "errors.text_required"}})
-        field = "pmdc_number" if grantee_type == "doctor" else "clinic_name"
-        body = consent_schemas.GrantCreate.model_validate({field: values["grantee"]})
-        await consent_service.grant_consent(
+        grantee = _parse_grantee(values["grantee"])
+        if grantee is None:
+            raise ValidationFailed({"fields": {"grantee": "errors.choice_invalid"}})
+        kind, grantee_id = grantee
+        body = consent_schemas.GrantCreate.model_validate(
+            {
+                f"{kind}_id": grantee_id,
+                "sections": values["sections"],
+                "duration": values["duration"],
+            }
+        )
+        _, created = await consent_service.grant_consent(
             session,
             actor,
-            pmdc_number=body.pmdc_number,
-            clinic_name=body.clinic_name,
+            sections=body.sections,
+            duration=body.duration,
+            doctor_id=body.doctor_id,
+            clinic_id=body.clinic_id,
             user_agent=request.headers.get("user-agent"),
         )
     except Exception as exc:  # noqa: BLE001 — every outcome is mapped to the page
-        return await _access_failure(request, loc, session, actor, exc, values=values)
-    return RedirectResponse(f"/{loc}/patient/access?saved=granted", status_code=303)
+        return await _access_failure(request, loc, session, actor, exc, values=values, q=q)
+    saved = "granted" if created else "exists"  # BL-05: an active grant is returned as is
+    return RedirectResponse(f"/{loc}/patient/access?saved={saved}", status_code=303)
+
+
+@router.post("/{locale}/patient/access/{grant_id}/sections")
+async def patient_access_sections_submit(
+    request: Request, locale: str, grant_id: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _patient_page_guard(request, locale, actor, "access")) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    parsed_id = _parse_entry_id(grant_id)
+    form = await request.form()
+
+    try:
+        if parsed_id is None:
+            raise NotFound()  # a malformed id is NotFound on the web, not a raw 422
+        await check_consent_write_rate(actor)
+        body = consent_schemas.SectionsUpdate.model_validate(
+            {"sections": [str(s) for s in form.getlist("sections")]}
+        )
+        await consent_service.change_sections(
+            session,
+            actor,
+            parsed_id,
+            sections=body.sections,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped to the page
+        return await _access_failure(request, loc, session, actor, exc, values={})
+    return RedirectResponse(f"/{loc}/patient/access?saved=changed", status_code=303)
 
 
 @router.post("/{locale}/patient/access/{grant_id}/revoke")
@@ -1391,19 +1955,32 @@ async def patient_access_revoke_submit(
 
 
 # ── Doctor passport lookup (D2, BL-07, BL-09, BL-10) ─────────────────────
-def _doctor_nav(loc: str, *, current: str) -> list[dict[str, Any]]:
-    return [
+def _doctor_nav(loc: str, *, current: str, verified: bool = True) -> list[dict[str, Any]]:
+    """A pending doctor gets no passport lookup (FR3); every doctor gets the
+    schedule (D7)."""
+    items = [
         {
             "href": f"/{loc}/doctor",
             "label": translate("nav.dashboard", loc),
             "current": current == "dashboard",
         },
-        {
-            "href": f"/{loc}/doctor/passport-lookup",
-            "label": translate("nav.lookup", loc),
-            "current": current == "lookup",
-        },
     ]
+    if verified:
+        items.append(
+            {
+                "href": f"/{loc}/doctor/passport-lookup",
+                "label": translate("nav.lookup", loc),
+                "current": current == "lookup",
+            }
+        )
+    items.append(
+        {
+            "href": f"/{loc}/doctor/schedule",
+            "label": translate("nav.schedule", loc),
+            "current": current == "schedule",
+        }
+    )
+    return items
 
 
 def _doctor_page_guard(request: Request, locale: str, actor: Actor | None) -> Response | None:
@@ -1495,31 +2072,48 @@ async def doctor_patient_page(
     try:
         if parsed_id is None:
             raise NotFound()
-        # Re-checked on every view: a revoke takes effect on the next request (BL-07).
-        patient = await consent_service.patient_for_doctor(session, actor, parsed_id)
-        # Plain values: the gateway commits, which expires ORM instances.
-        header = {
-            "passport_no": patient.passport_no,
-            "emergency_contact": patient.emergency_contact,
-        }
-        # Before the read: the gateway writes this request's own record.read row.
+        # Before the reads: the gateway writes this request's own record.read row.
         since = await what_changed.last_read_at(session, actor.user_id, parsed_id)
-        record = await gateway.load_patient_for_doctor(
+        # Profile sections go through the consent gateway, re-checked on every
+        # view (BL-07): only shared sections are read, each read is logged (P9).
+        view = await consent_gateway.read_sections(
+            session, actor, parsed_id, purpose="doctor.patient_view"
+        )
+        # Visits and lab reports (D2): shown only when the patient shared them.
+        record = await consent_gateway.load_patient_for_doctor(
             session, actor, parsed_id, user_agent=request.headers.get("user-agent")
         )
-    except NotFound:
+    except NotFound:  # includes ConsentDenied — one D2 response for every refusal
         return _render_lookup(
             request, loc, status_code=404, error=translate("lookup.not_found", loc)
         )
-    changes = None if since is None else await what_changed.changes_since(session, parsed_id, since)
-    clinic_ids = {e.clinic_id for e in record.encounters}
+    shared = dict(view.sections)
+    basics = shared["basics"]
+    if basics is not None:
+        age = age_in_years(basics["date_of_birth"], dbtypes.today_pk())
+        basics = {
+            **basics,
+            "age": str(age) if age is not None else "—",
+            "gender": gender_label(basics["gender"], loc),
+        }
+    shared["basics"] = basics
+    changes = None
+    if since is not None:
+        changes = await what_changed.changes_since(
+            session,
+            parsed_id,
+            since,
+            frozenset(
+                k for k in ("allergies", "conditions", "medications") if shared[k] is not None
+            ),
+        )
     clinic_names: dict[uuid.UUID, str] = {}
+    clinic_ids = {e.clinic_id for e in record.encounters} if shared["visits"] is not None else set()
     if clinic_ids:
         rows = await session.execute(
             select(Clinic.id, Clinic.name).where(Clinic.id.in_(clinic_ids))
         )
         clinic_names = {cid: name for cid, name in rows.all()}
-    age = age_in_years(record.patient.date_of_birth, dbtypes.today_pk())
     return _render(
         request,
         "doctor/patient.html",
@@ -1527,13 +2121,566 @@ async def doctor_patient_page(
         crumb=translate("auth.role.doctor", loc),
         page_title=translate("doctor_patient.title", loc),
         nav_items=_doctor_nav(loc, current="lookup"),
+        passport_no=view.passport_no,
+        sections=consent_schemas.SECTIONS,
+        shared=shared,
         record=record,
-        passport_no=header["passport_no"],
-        emergency_contact=header["emergency_contact"],
-        age=age,
-        gender_label=_gender_label(record.patient.gender, loc),
         changes=changes,
         clinic_names=clinic_names,
         severity_badge=lambda s: _SEVERITY_BADGE.get(s, "badge--neutral"),
         severity_label=_severity_label(loc),
     )
+
+
+# ── Doctor schedule (D7) ─────────────────────────────────────────────────
+# Any doctor, verified or pending (spec §3, decision 6). The role gate is the
+# guard below plus `DoctorDep` semantics; never `VerifiedDoctorDep`.
+_SCHEDULE_SAVED = (
+    "slot_added",
+    "slot_updated",
+    "slot_removed",
+    "time_off_added",
+    "extra_added",
+    "exception_removed",
+    "hospitals_added",
+)
+_SLOT_FIELDS = ("clinic_id", "start_time", "end_time", "slot_minutes", "max_tokens")
+_TIME_OFF_FIELDS = ("exception_date", "clinic_id", "start_time", "end_time", "emergency", "reason")
+_EXTRA_FIELDS = ("exception_date", "clinic_id", "start_time", "end_time", "max_tokens", "reason")
+_CLINIC_COLOURS = 4  # .clinic-c0 … .clinic-c3 in app.css, all design tokens
+
+
+def _doctor_schedule_guard(request: Request, locale: str, actor: Actor | None) -> Response | None:
+    """Like `_doctor_page_guard`, but an unverified doctor is let through: the
+    schedule exposes no patient data (spec §3)."""
+    loc = normalise_locale(locale)
+    if actor is None:
+        return RedirectResponse(f"/{loc}/login?next=/{loc}/doctor/schedule", status_code=303)
+    if actor.role != UserRole.DOCTOR.value:
+        return RedirectResponse(f"/{loc}/{_area(actor.role)}", status_code=303)
+    if not actor.onboarding_complete:
+        return RedirectResponse(f"/{loc}/onboarding", status_code=303)
+    return None
+
+
+def _form_values(form: Any, fields: tuple[str, ...]) -> dict[str, str]:
+    """Only the named fields are read; a missing field is "" so the schema
+    reports its own i18n key instead of pydantic's English."""
+    return {f: str(form.get(f, "")) for f in fields}
+
+
+def _week_start(raw: str | None, today: date) -> date:
+    """The first of the seven days shown. By default the view starts TODAY and
+    runs a week forward, so late in a calendar week it still shows the coming
+    days instead of a row of past ones. `?week=` starts it on that date."""
+    try:
+        return date.fromisoformat(raw) if raw else today
+    except ValueError:
+        return today
+
+
+def _weekday_label(loc: str, weekday: int) -> str:
+    return translate(f"weekday.{weekday}", loc)
+
+
+def _hhmm(value: Any) -> str:
+    return value.strftime("%H:%M") if value else ""
+
+
+def _conflict_message(loc: str, exc: ScheduleConflict) -> str:
+    d = exc.details
+    day = _weekday_label(loc, int(d.get("day", 0)))
+    if d.get("date"):
+        day = f"{day} {d['date']}"
+    clinic = d.get("clinic", "")
+    if d.get("clinic_inactive"):
+        clinic = f"{clinic} ({translate('schedule.inactive_clinic', loc)})"
+    return translate(exc.message_key, loc, day=day, start=d["start"], end=d["end"], clinic=clinic)
+
+
+def _slot_prefill(values: dict[str, str]) -> dict[str, str]:
+    """R13: a blank cap is shown as the calculated value after a failed submit."""
+    if values.get("max_tokens", "").strip():
+        return values
+    try:
+        start = schedule_schemas.parse_time(values.get("start_time", ""))
+        end = schedule_schemas.parse_time(values.get("end_time", ""))
+        minutes = schedule_schemas.parse_slot_minutes(values.get("slot_minutes", ""))
+    except PydanticCustomError:
+        return values
+    if end <= start or schedule_schemas.minutes_between(start, end) < minutes:
+        return values
+    return {**values, "max_tokens": str(schedule_schemas.calc_max_tokens(start, end, minutes))}
+
+
+async def _render_schedule(
+    request: Request,
+    loc: str,
+    session: SessionDep,
+    actor: Actor,
+    *,
+    status_code: int = 200,
+    form_state: dict[str, Any] | None = None,
+    saved: str | None = None,
+    page_error: str | None = None,
+    week: str | None = None,
+    clinic: str | None = None,
+    edit: str | None = None,
+) -> Response:
+    doctor = await schedule_service.my_doctor(session, actor)
+    loaded = await schedule_service.load(session, doctor)
+    today = loaded.today
+    week_start = _week_start(week, today)
+    week_end = week_start + timedelta(days=6)
+
+    # Clinics: every affiliated clinic for names and colours; live ones for forms.
+    clinics = sorted(loaded.clinics.values(), key=lambda c: c.name)
+    colour = {c.id: f"clinic-c{i % _CLINIC_COLOURS}" for i, c in enumerate(clinics)}
+    live_clinic_ids = {
+        a.clinic_id for a in loaded.affiliations.values() if loaded.affiliation_live(a)
+    }
+    live_clinics = [c for c in clinics if c.id in live_clinic_ids]
+    clinic_filter = next((c.id for c in clinics if str(c.id) == clinic), None)
+
+    # Your hospitals: one line per clinic — linked (an active link at an active
+    # clinic) or not (ended link, or a closed clinic).
+    hospitals = [
+        {
+            "name": c.name,
+            "colour": colour[c.id],
+            "state": "linked" if c.id in live_clinic_ids else "ended",
+        }
+        for c in clinics
+    ]
+    # Every active clinic the doctor is not actively linked to; re-adding one
+    # with an ended link reactivates it (identity.service.link_doctor_clinics).
+    addable = (
+        await session.execute(select(Clinic).where(Clinic.status == "active").order_by(Clinic.name))
+    ).scalars()
+    hospital_options = [
+        {"value": str(c.id), "label": f"{c.name} — {c.city}" if c.city else c.name}
+        for c in addable
+        if c.id not in live_clinic_ids
+    ]
+
+    # The week view reads availability only through the service (spec §6).
+    windows: list[schedule_engine.EffectiveWindow] = []
+    if week_end >= today:
+        windows = await schedule_service.get_effective_availability(
+            session, doctor.id, max(week_start, today), week_end, clinic_filter
+        )
+    days = []
+    for offset in range(7):
+        day = week_start + timedelta(days=offset)
+        blocks = [
+            {
+                "clinic": loaded.clinics[w.clinic_id].name,
+                "colour": colour[w.clinic_id],
+                "start": _hhmm(w.start),
+                "end": _hhmm(w.end),
+                "extra": w.is_extra,
+                "capacity": translate(
+                    "schedule.capacity_inherited" if w.inherited else "schedule.capacity",
+                    loc,
+                    count=w.max_tokens,
+                    day=_weekday_label(loc, w.anchor_weekday),
+                ),
+            }
+            for w in windows
+            if w.day == day
+        ]
+        days.append(
+            {
+                "label": _weekday_label(loc, day.weekday()),
+                "date": day.isoformat(),
+                "past": day < today,
+                "today": day == today,
+                "blocks": blocks,
+            }
+        )
+
+    live_slots = sorted(
+        (r for r in loaded.slot_rows.values() if r.status == schedule_service.LIVE),
+        key=lambda r: (r.weekday, r.start_time),
+    )
+    locked = await schedule_service.booked_slot_ids(session, [r.id for r in live_slots])
+    slots = []
+    for row in live_slots:
+        slot_clinic = loaded.clinic_of(row)
+        slots.append(
+            {
+                "id": str(row.id),
+                "day": _weekday_label(loc, row.weekday),
+                "start": _hhmm(row.start_time),
+                "end": _hhmm(row.end_time),
+                "clinic": slot_clinic.name,
+                "colour": colour[slot_clinic.id],
+                "inactive": not loaded.affiliation_live(loaded.affiliations[row.affiliation_id]),
+                "locked": row.id in locked,
+                "meta": translate(
+                    "schedule.slot_meta", loc, minutes=row.slot_minutes, count=row.max_tokens
+                ),
+                "calc": schedule_schemas.calc_max_tokens(
+                    row.start_time, row.end_time, row.slot_minutes
+                ),
+                "values": {
+                    "clinic_id": str(slot_clinic.id),
+                    "weekday": str(row.weekday),
+                    "start_time": _hhmm(row.start_time),
+                    "end_time": _hhmm(row.end_time),
+                    "slot_minutes": str(row.slot_minutes),
+                    "max_tokens": str(row.max_tokens),
+                },
+            }
+        )
+
+    upcoming = sorted(
+        loaded.exception_rows.values(),
+        key=lambda e: (e.exception_date, e.start_time or time.min),
+    )
+    exceptions = []
+    for row in upcoming:
+        anchor = loaded.slot_rows[row.schedule_id]
+        anchor_clinic = loaded.clinic_of(anchor)
+        is_extra = row.kind.value == schedule_engine.EXTRA
+        whole = row.start_time is None
+        entry = {
+            "id": str(row.id),
+            "date": row.exception_date.isoformat(),
+            "day": _weekday_label(loc, row.exception_date.weekday()),
+            "kind": translate(f"schedule.kind.{row.kind.value}", loc),
+            "extra": is_extra,
+            "window": translate("schedule.whole_slot", loc)
+            if whole
+            else f"{_hhmm(row.start_time)}–{_hhmm(row.end_time)}",
+            "clinic": anchor_clinic.name,
+            "colour": colour[anchor_clinic.id],
+            "covers": None
+            if is_extra
+            else translate(
+                "schedule.covers_slot",
+                loc,
+                day=_weekday_label(loc, anchor.weekday),
+                start=_hhmm(anchor.start_time),
+                end=_hhmm(anchor.end_time),
+            ),
+            "reason": row.reason,
+            "capacity": None,
+        }
+        if is_extra:
+            inherited = row.max_tokens is None
+            entry["capacity"] = translate(
+                "schedule.capacity_inherited" if inherited else "schedule.capacity",
+                loc,
+                count=anchor.max_tokens if inherited else row.max_tokens,
+                day=_weekday_label(loc, anchor.weekday),
+            )
+        exceptions.append(entry)
+
+    inherit_hints = []
+    for c in live_clinics:
+        anchor_value = schedule_engine.choose_anchor(c.id, loaded.slots)
+        if anchor_value is not None:
+            hint = translate(
+                "schedule.extra_max_tokens_inherit",
+                loc,
+                count=anchor_value.max_tokens,
+                day=_weekday_label(loc, anchor_value.weekday),
+            )
+            inherit_hints.append(f"{c.name}: {hint}")
+
+    user = await session.get(Profile, actor.user_id)
+    full_name = (user.full_name if user else None) or doctor.full_name
+    week_param = f"&clinic={clinic_filter}" if clinic_filter else ""
+    edit_id = edit if edit and any(s["id"] == edit and not s["locked"] for s in slots) else None
+
+    return _render(
+        request,
+        "doctor/schedule.html",
+        loc,
+        status_code=status_code,
+        nav_items=_doctor_nav(loc, current="schedule", verified=actor.is_verified_doctor),
+        crumb=translate(ROLE_LABEL["doctor"], loc),
+        page_title=translate("schedule.title", loc),
+        full_name=full_name,
+        initials=_initials(full_name),
+        role_label=translate(ROLE_LABEL["doctor"], loc),
+        today=today.isoformat(),
+        week_label=translate("schedule.week_of", loc, date=week_start.isoformat()),
+        prev_week=f"/{loc}/doctor/schedule?week={(week_start - timedelta(days=7)).isoformat()}{week_param}",
+        next_week=f"/{loc}/doctor/schedule?week={(week_start + timedelta(days=7)).isoformat()}{week_param}",
+        this_week=f"/{loc}/doctor/schedule?week={today.isoformat()}{week_param}",
+        week_value=week_start.isoformat(),
+        days=days,
+        legend=[{"name": c.name, "colour": colour[c.id]} for c in clinics],
+        clinic_filter=str(clinic_filter) if clinic_filter else "",
+        filter_options=[{"value": str(c.id), "label": c.name} for c in clinics],
+        clinic_options=[{"value": str(c.id), "label": c.name} for c in live_clinics],
+        weekday_options=[{"value": str(i), "label": _weekday_label(loc, i)} for i in range(7)],
+        minutes_options=[
+            {"value": str(m), "label": translate("schedule.minutes_option", loc, n=m)}
+            for m in schedule_schemas.SLOT_MINUTES_CHOICES
+        ],
+        slots=slots,
+        exceptions=exceptions,
+        inherit_hints=inherit_hints,
+        can_add=bool(live_clinics),
+        hospitals=hospitals,
+        hospital_options=hospital_options,
+        edit_id=edit_id,
+        form_state=form_state,
+        saved=translate(f"schedule.saved.{saved}", loc) if saved in _SCHEDULE_SAVED else None,
+        page_error=page_error,
+        max_tokens_max=schedule_schemas.MAX_TOKENS_MAX,
+    )
+
+
+async def _schedule_failure(
+    request: Request,
+    loc: str,
+    session: SessionDep,
+    actor: Actor,
+    exc: Exception,
+    *,
+    form: str,
+    values: dict[str, Any],
+) -> Response:
+    """Map a failed schedule write onto the re-rendered page."""
+    await session.rollback()
+
+    def state(errors: dict[str, str], banner: str | None = None) -> dict[str, Any]:
+        if form.startswith("slot"):
+            shown = _slot_prefill({k: v for k, v in values.items() if isinstance(v, str)})
+            shown_values = {**values, **shown}
+        else:
+            shown_values = values
+        return {"form": form, "values": shown_values, "errors": errors, "banner": banner}
+
+    async def page(code: int, **kw: Any) -> Response:
+        edit = (
+            form.removeprefix("slot-") if form.startswith("slot-") and form != "slot-new" else None
+        )
+        return await _render_schedule(
+            request, loc, session, actor, status_code=code, edit=edit, **kw
+        )
+
+    if isinstance(exc, ValidationError):
+        return await page(422, form_state=state(_field_errors(exc, loc)))
+    if isinstance(exc, ValidationFailed):
+        fields = {k: translate(v, loc) for k, v in exc.details.get("fields", {}).items()}
+        banner = fields.pop("__all__", None)
+        return await page(422, form_state=state(fields, banner))
+    if isinstance(exc, ScheduleConflict):
+        return await page(409, form_state=state({}, _conflict_message(loc, exc)))
+    if isinstance(exc, ListFull):
+        banner = translate(exc.message_key, loc, **message_params(exc))
+        return await page(422, form_state=state({}, banner))
+    if isinstance(exc, NotFound):
+        return await page(404, page_error=translate("errors.not_found", loc))
+    if isinstance(exc, RateLimited):
+        return await page(429, page_error=translate("errors.rate_limited", loc))
+    return await page(500, page_error=translate("errors.internal", loc))
+
+
+def _schedule_saved(loc: str, key: str, anchor: str) -> Response:
+    return RedirectResponse(f"/{loc}/doctor/schedule?saved={key}#{anchor}", status_code=303)
+
+
+@router.get("/{locale}/doctor/schedule", response_class=HTMLResponse)
+async def doctor_schedule_page(
+    request: Request,
+    locale: str,
+    session: SessionDep,
+    actor: OptionalActorDep,
+    week: str | None = None,
+    clinic: str | None = None,
+    saved: str | None = None,
+    edit: str | None = None,
+) -> Response:
+    if (redirect := _doctor_schedule_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    return await _render_schedule(
+        request,
+        normalise_locale(locale),
+        session,
+        actor,
+        week=week,
+        clinic=clinic,
+        saved=saved,
+        edit=edit,
+    )
+
+
+@router.post("/{locale}/doctor/schedule/slots")
+async def doctor_schedule_add_slots(
+    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _doctor_schedule_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    form = await request.form()
+    values: dict[str, Any] = {
+        **_form_values(form, _SLOT_FIELDS),
+        "weekdays": [str(v) for v in form.getlist("weekdays")],
+    }
+    try:
+        await check_schedule_write_rate(actor)
+        body = schedule_schemas.SlotCreate.model_validate(values)
+        await schedule_service.add_slots(
+            session, actor, body, user_agent=request.headers.get("user-agent")
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped onto the page
+        return await _schedule_failure(
+            request, loc, session, actor, exc, form="slot-new", values=values
+        )
+    return _schedule_saved(loc, "slot_added", "slots")
+
+
+@router.post("/{locale}/doctor/schedule/slots/{slot_id}")
+async def doctor_schedule_edit_slot(
+    request: Request, locale: str, slot_id: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _doctor_schedule_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    parsed = _parse_entry_id(slot_id)
+    if parsed is None:  # a malformed id is NotFound on the web, not a raw 422
+        return await _schedule_failure(
+            request, loc, session, actor, NotFound(), form="slots", values={}
+        )
+    form = await request.form()
+    values: dict[str, Any] = _form_values(form, (*_SLOT_FIELDS, "weekday"))
+    try:
+        await check_schedule_write_rate(actor)
+        body = schedule_schemas.SlotUpdate.model_validate(values)
+        await schedule_service.update_slot(
+            session, actor, parsed, body, user_agent=request.headers.get("user-agent")
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped onto the page
+        return await _schedule_failure(
+            request, loc, session, actor, exc, form=f"slot-{parsed}", values=values
+        )
+    return _schedule_saved(loc, "slot_updated", "slots")
+
+
+@router.post("/{locale}/doctor/schedule/slots/{slot_id}/remove")
+async def doctor_schedule_remove_slot(
+    request: Request, locale: str, slot_id: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _doctor_schedule_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    parsed = _parse_entry_id(slot_id)
+    try:
+        if parsed is None:
+            raise NotFound()
+        await check_schedule_write_rate(actor)
+        await schedule_service.remove_slot(
+            session, actor, parsed, user_agent=request.headers.get("user-agent")
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped onto the page
+        return await _schedule_failure(request, loc, session, actor, exc, form="slots", values={})
+    return _schedule_saved(loc, "slot_removed", "slots")
+
+
+@router.post("/{locale}/doctor/schedule/time-off")
+async def doctor_schedule_add_time_off(
+    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _doctor_schedule_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    values: dict[str, Any] = _form_values(await request.form(), _TIME_OFF_FIELDS)
+    try:
+        await check_schedule_write_rate(actor)
+        body = schedule_schemas.TimeOffCreate.model_validate(values)
+        await schedule_service.add_time_off(
+            session, actor, body, user_agent=request.headers.get("user-agent")
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped onto the page
+        return await _schedule_failure(
+            request, loc, session, actor, exc, form="time-off", values=values
+        )
+    return _schedule_saved(loc, "time_off_added", "exceptions")
+
+
+@router.post("/{locale}/doctor/schedule/extra")
+async def doctor_schedule_add_extra(
+    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _doctor_schedule_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    values: dict[str, Any] = _form_values(await request.form(), _EXTRA_FIELDS)
+    try:
+        await check_schedule_write_rate(actor)
+        body = schedule_schemas.ExtraCreate.model_validate(values)
+        await schedule_service.add_extra(
+            session, actor, body, user_agent=request.headers.get("user-agent")
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped onto the page
+        return await _schedule_failure(
+            request, loc, session, actor, exc, form="extra", values=values
+        )
+    return _schedule_saved(loc, "extra_added", "exceptions")
+
+
+@router.post("/{locale}/doctor/schedule/hospitals")
+async def doctor_schedule_add_hospitals(
+    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    """A doctor links themselves to more hospitals they work at. Each link is
+    pending: usable for the schedule, never for patient access (consent counts
+    active links only)."""
+    if (redirect := _doctor_schedule_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    raw = [str(v) for v in (await request.form()).getlist("clinic_ids")]
+    values: dict[str, Any] = {"clinic_ids": raw}
+    try:
+        await check_schedule_write_rate(actor)
+        chosen = _chosen_clinics(raw)
+        if chosen is None:
+            raise ValidationFailed({"fields": {"clinic_ids": "errors.clinic_unknown"}})
+        await service.add_doctor_clinics(
+            session,
+            actor.user_id,
+            chosen,
+            ip=actor.ip_address,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped onto the page
+        return await _schedule_failure(
+            request, loc, session, actor, exc, form="hospitals", values=values
+        )
+    return _schedule_saved(loc, "hospitals_added", "hospitals")
+
+
+@router.post("/{locale}/doctor/schedule/exceptions/{exception_id}/remove")
+async def doctor_schedule_remove_exception(
+    request: Request, locale: str, exception_id: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _doctor_schedule_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    parsed = _parse_entry_id(exception_id)
+    try:
+        if parsed is None:
+            raise NotFound()
+        await check_schedule_write_rate(actor)
+        await schedule_service.remove_exception(
+            session, actor, parsed, user_agent=request.headers.get("user-agent")
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped onto the page
+        return await _schedule_failure(
+            request, loc, session, actor, exc, form="exceptions", values={}
+        )
+    return _schedule_saved(loc, "exception_removed", "exceptions")

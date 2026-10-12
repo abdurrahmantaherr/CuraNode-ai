@@ -1,0 +1,28 @@
+{#- The pill step indicator shared by every document screen (DESIGN.md §4
+    "Workflow / stepper"). `current` is 1..4: Upload, Read, Review, Saved.
+    Steps before it read as done, the current one is highlighted, and the
+    rest are muted. Purely presentational — the server decides the state. -#}
+{% macro steps(current) %}
+  {% set names = ['upload', 'read', 'review', 'saved'] %}
+  <ol class="steps" aria-label="{{ t('documents.title') }}">
+    {% for n in names %}
+      {% set idx = loop.index %}
+      <li class="step {% if idx < current %}step--done{% endif %}"
+          {% if idx == current %}aria-current="step"{% endif %}>
+        <span aria-hidden="true">{% if idx < current %}✓{% else %}{{ idx }}{% endif %}</span>
+        {{ t('documents.step.' ~ n) }}
+      </li>
+    {% endfor %}
+  </ol>
+{% endmacro %}
+
+{#- The AI-state chip used across OCR / extraction (artifact: `ai-state`). -#}
+{% macro state_chip(status) %}
+  {% set kind = {'uploaded': 'processing', 'processing': 'processing',
+                 'awaiting_review': 'verify', 'finalized': 'complete',
+                 'failed': 'error', 'cancelled': 'neutral'}[status] %}
+  <span class="ai-state ai-state--{{ kind }}">
+    {% if status == 'processing' %}<i class="spinner spinner--dark" aria-hidden="true"></i>{% endif %}
+    {{ t('documents.status.' ~ status) }}
+  </span>
+{% endmacro %}

@@ -11,12 +11,14 @@
       {#- Copy follows the toggle. This is the ONLY thing the login toggle
           does — it is never sent to the server (SPEC AC-23, BL-19). -#}
       <p class="auth-sub" id="login-sub">
-        {{ t('auth.login.subtitle_patient') if role == 'patient' else t('auth.login.subtitle_doctor') }}
+        {{ t('auth.login.subtitle_' ~ (role if role in ['patient', 'doctor', 'admin'] else 'patient')) }}
       </p>
     </div>
 
     <form class="card" method="post" action="/{{ locale }}/login" novalidate>
       {{ f.form_banner(form_error) }}
+      {#- Where the visitor was going (already checked by the server): they return there. -#}
+      {% if next_path %}<input type="hidden" name="next" value="{{ next_path }}">{% endif %}
 
       {#- Real radio inputs, not buttons: the browser submits `role` natively,
           keyboard and screen-reader behaviour come free, and the toggle still
@@ -24,7 +26,7 @@
       <fieldset class="role-fieldset">
         <legend class="eyebrow">{{ t('auth.login.i_am_a') }}</legend>
         <div class="role-group">
-          {% for r in ['patient', 'doctor'] %}
+          {% for r in ['patient', 'doctor', 'admin'] %}
             <label class="role-tile role-tile--compact">
               <input class="role-tile__radio js-role" type="radio" name="role"
                      value="{{ r }}" data-sub="{{ t('auth.login.subtitle_' ~ r) }}"

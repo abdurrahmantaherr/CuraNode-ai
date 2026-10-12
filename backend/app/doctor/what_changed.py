@@ -19,7 +19,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import writer as audit
-from ..db.models import Allergy, AuditLog, ChronicCondition, PatientMedication
+from ..consent import gateway
+from ..db.models import AuditLog
 
 Change = tuple[str, str]
 
@@ -38,44 +39,11 @@ async def last_read_at(
 
 
 async def changes_since(
-    session: AsyncSession, patient_id: uuid.UUID, since: datetime
+    session: AsyncSession,
+    patient_id: uuid.UUID,
+    since: datetime,
+    sections: frozenset[str] = frozenset({"allergies", "conditions", "medications"}),
 ) -> list[Change]:
-    out: list[Change] = []
-
-    allergies = (
-        await session.scalars(select(Allergy).where(Allergy.patient_id == patient_id))
-    ).all()
-    for a in sorted(allergies, key=lambda x: x.recorded_at):
-        if a.removed_at is None and a.recorded_at > since:
-            out.append(("new_allergy", a.substance))
-        elif a.removed_at is not None and a.removed_at > since and a.recorded_at <= since:
-            out.append(("removed_allergy", a.substance))
-
-    conditions = (
-        await session.scalars(
-            select(ChronicCondition).where(ChronicCondition.patient_id == patient_id)
-        )
-    ).all()
-    for c in sorted(conditions, key=lambda x: x.recorded_at):
-        if c.status != "resolved" and c.recorded_at > since:
-            out.append(("new_condition", c.name))
-        elif (
-            c.status == "resolved"
-            and c.updated_at is not None
-            and c.updated_at > since
-            and c.recorded_at <= since
-        ):
-            out.append(("resolved_condition", c.name))
-
-    meds = (
-        await session.scalars(
-            select(PatientMedication).where(PatientMedication.patient_id == patient_id)
-        )
-    ).all()
-    for m in sorted(meds, key=lambda x: x.recorded_at):
-        if m.removed_at is None and m.recorded_at > since:
-            out.append(("new_medication", m.name))
-        elif m.removed_at is not None and m.removed_at > since and m.recorded_at <= since:
-            out.append(("removed_medication", m.name))
-
-    return out
+    """Delegates to the consent gateway, the only reader of those tables; pass
+    only the sections the patient shared with this doctor."""
+    return await gateway.profile_changes_since(session, patient_id, since, sections)

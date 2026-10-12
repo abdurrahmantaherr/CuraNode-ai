@@ -303,6 +303,8 @@ CREATE UNIQUE INDEX uq_consent_one_active ON consent_grants (patient_id, grantee
 
 Grants are all-or-nothing over the patient's record. Partial scoping (share prescriptions but not lab reports) is **not** implemented — it multiplies the consent gateway's complexity and the PRD does not require it. Revocation sets `revoked_at`; grant rows are never deleted, so the history of who had access when survives.
 
+> **Amended 2026-10-08 (P9, `.claude/specs/privacy_access_spec.md`).** Grants are now **per section**: the live table is `consent_grant` (singular) and its `scope_sections` jsonb lists the shared sections (`basics`, `allergies`, `conditions`, `medications`, `prescriptions`, `lab_reports`, `visits`); `[]` means nothing is shared. Expiry is 24 h / 7 d / 30 d (default) / until revoked. Changing sections revokes the grant and creates a replacement linked by `replaced_by`. `revoked_by`, `replaced_by` and the unique active index `uq_consent_grant_one_active` are added by migration `dba968144fb4`. Reads are logged per section in the shared `access_log`, not `audit_log`. Where this section and the P9 spec disagree, the spec wins.
+
 ### 3.5 Clinical records — append-only
 
 ```sql
@@ -422,6 +424,8 @@ CREATE TABLE extraction_reviews (                     -- FR12
 `fields_changed` exists solely to produce the PRD's "corrections required per extracted document ≤ 2" metric without a manual labelling exercise. Every correction a patient makes is a free data point.
 
 ### 3.7 Scheduling and queue
+
+> **Amended 2026-10-10 (D7, `.claude/specs/D7-multi-hospital-schedule.md`).** The live tables are `doctor_schedule` and `schedule_exception` (singular), not the two below. A weekly slot belongs to a `doctor_affiliation` (which gives doctor and clinic), carries `slot_minutes` (5–60 in steps of 5, set by the doctor; the booked-appointment grid only) and `max_tokens` (entered by the doctor, ≥ 1 by CHECK, ≤ 200 in the app; the cap on booked plus walk-in patients per session per date), and is removed by `status = 'inactive'`. A `schedule_exception` hangs off one slot: `leave`/`emergency` time off (whole slot, or a window in D7's `start_time`/`end_time`) or `extra` hours with an optional own `max_tokens` (NULL inherits the anchor slot's cap, read live); it is soft-removed with `removed_at`. There is no `valid_from`/`valid_to` and no one-exception-per-day rule. No two effective windows of one doctor may overlap at any clinic. D7's additions are migration `291c06a2b86f`. Where this section and the D7 spec disagree, the spec wins.
 
 ```sql
 CREATE TABLE doctor_schedules (                       -- FR18
@@ -1251,6 +1255,8 @@ ClinicAdminDep    = Annotated[Actor, Depends(require_role("clinic_admin"))]
 | Schedules | R | R | R (own) | R (own) | RW (own clinic) |
 | Queue | R (own entry) | — | R (own) | — | RW (own clinic) |
 | Doctor verification | — | — | — | — | W (own clinic) |
+
+> **Amended 2026-10-10 (D7).** "Schedules": a doctor, verified or unverified, has RW on their **own** schedule (`DoctorDep`; the schedule exposes no patient data). Clinic-admin RW (FR18) and patient R (FR15) remain planned, not built.
 
 Clinic admins have **no** access to clinical records. They manage schedules and queues, which requires patient names and appointment times, not medical history. This is least privilege and it is also what NFR16 requires — there is no administrative override.
 

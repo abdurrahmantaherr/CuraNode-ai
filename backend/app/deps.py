@@ -1,6 +1,6 @@
 """Actor resolution and role gates (TDD 7.2).
 
-Exactly four dependencies exist, and **no endpoint anywhere may perform an
+Exactly five dependencies exist, and **no endpoint anywhere may perform an
 ad-hoc role check**. Centralising it here is what makes the authorisation model
 reviewable in one place instead of twenty.
 
@@ -57,6 +57,18 @@ class Actor:
     onboarding_complete: bool = True
 
 
+def remember_patient_id(session: AsyncSession, user_id: uuid.UUID, patient_id: uuid.UUID) -> None:
+    """Keep a patient's id for the rest of this request's session. The id is derived from the
+    verified user id every request (never trusted from a client), and a session lives for one
+    request, so this saves repeated identical lookups — each one is a network round trip to the
+    database — without changing who may see what."""
+    session.info[("patient_id", user_id)] = patient_id
+
+
+def remembered_patient_id(session: AsyncSession, user_id: uuid.UUID) -> uuid.UUID | None:
+    return session.info.get(("patient_id", user_id))
+
+
 async def _load_actor(request: Request, session: AsyncSession) -> Actor | None:
     token = request.cookies.get(settings.access_cookie_name)
     if not token:
@@ -81,6 +93,8 @@ async def _load_actor(request: Request, session: AsyncSession) -> Actor | None:
             await session.execute(select(Patient.id).where(Patient.user_id == user.id))
         ).scalar_one_or_none()
         onboarding_complete = patient is not None
+        if patient is not None:
+            remember_patient_id(session, user.id, patient)
     elif user.role == UserRole.DOCTOR:
         doctor = (
             await session.execute(select(Doctor).where(Doctor.user_id == user.id))
@@ -157,11 +171,16 @@ async def require_verified_doctor(
 # cache resolves it once even when a route and its rate-limit dependency both
 # ask for a patient.
 _require_patient = require_role("patient")
+# Any doctor, verified or pending (D7). Only for features that expose no
+# patient data — the doctor's own schedule. Everything clinical stays behind
+# `VerifiedDoctorDep`.
+_require_doctor = require_role("doctor")
 
 ActorDep = Annotated[Actor, Depends(current_actor)]
 OptionalActorDep = Annotated[Actor | None, Depends(optional_actor)]
 PatientDep = Annotated[Actor, Depends(_require_patient)]
 VerifiedDoctorDep = Annotated[Actor, Depends(require_verified_doctor)]
+DoctorDep = Annotated[Actor, Depends(_require_doctor)]
 ClinicAdminDep = Annotated[Actor, Depends(require_role("admin"))]
 
 
@@ -208,3 +227,56 @@ async def enforce_consent_write_rate_limit(actor: PatientDep) -> None:
 
 
 ConsentWriteRateLimit = Depends(enforce_consent_write_rate_limit)
+
+
+# ── Grantee search budget (P9) ───────────────────────────────────────────
+async def check_consent_search_rate(actor: Actor) -> None:
+    """Counts one grantee search. Shared by the API and the access page."""
+    count = await cache.incr(ratelimit_key("consent_search", str(actor.user_id)), 60)
+    if count > settings.consent_search_rate_limit_per_minute:
+        raise RateLimited(retry_after_s=60)
+
+
+async def enforce_consent_search_rate_limit(actor: PatientDep) -> None:
+    """Depends on PatientDep so 401/403 surface before 429."""
+    await check_consent_search_rate(actor)
+
+
+ConsentSearchRateLimit = Depends(enforce_consent_search_rate_limit)
+
+
+# ── Doctor schedule write budget (D7) ────────────────────────────────────
+async def check_schedule_write_rate(actor: Actor) -> None:
+    """Counts one schedule write attempt by a doctor. Called by every schedule
+    POST handler (D7 has no JSON API, so there is no dependency wrapper)."""
+    count = await cache.incr(ratelimit_key("schedule_write", str(actor.user_id)), 60)
+    if count > settings.schedule_write_rate_limit_per_minute:
+        raise RateLimited(retry_after_s=60)
+
+
+# ── Medical-document write budget (FR10) ─────────────────────────────────
+async def check_document_write_rate(actor: Actor) -> None:
+    """Counts one document write attempt (upload, process, confirm, cancel).
+    Shared by the API dependency below and the web handlers. Processing calls
+    a paid OCR model, so this is also the cost guard."""
+    count = await cache.incr(ratelimit_key("document_write", str(actor.user_id)), 60)
+    if count > settings.document_write_rate_limit_per_minute:
+        raise RateLimited(retry_after_s=60)
+
+
+async def enforce_document_write_rate_limit(actor: PatientDep) -> None:
+    """Depends on PatientDep so 401/403 surface before 429."""
+    await check_document_write_rate(actor)
+
+
+DocumentWriteRateLimit = Depends(enforce_document_write_rate_limit)
+
+
+async def enforce_doctor_document_write_rate_limit(actor: VerifiedDoctorDep) -> None:
+    """Same budget/mechanism as `DocumentWriteRateLimit` (`check_document_write_rate`),
+    just gated by `VerifiedDoctorDep` instead of `PatientDep` for the
+    doctor-generated document endpoint."""
+    await check_document_write_rate(actor)
+
+
+DoctorDocumentWriteRateLimit = Depends(enforce_doctor_document_write_rate_limit)

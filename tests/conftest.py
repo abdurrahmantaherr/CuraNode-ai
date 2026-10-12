@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import secrets
 from collections.abc import AsyncIterator
+from datetime import date, timedelta
 
 os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
@@ -17,6 +18,7 @@ os.environ.setdefault("COOKIE_SECURE", "true")
 import pytest
 from app.cache import InMemoryCache
 from app.db import session as session_mod
+from app.db import types as dbtypes
 from app.db.models import (
     AccountStatus,
     Base,
@@ -35,6 +37,7 @@ from app.db.types import utcnow, uuid7
 from app.identity import security as identity_security
 from app.identity.security import generate_passport_no
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -69,6 +72,24 @@ def fresh_cache(monkeypatch):
     monkeypatch.setattr("app.identity.service.cache", c)
     monkeypatch.setattr("app.deps.cache", c)
     return c
+
+
+@pytest.fixture(autouse=True)
+def no_ai_providers(monkeypatch):
+    """No test may reach a real AI provider: `Settings` reads `.env` even
+    under test, so a developer's real Gemini/Groq/OpenRouter keys would
+    otherwise turn on live network calls (and burn free-tier quota) in any
+    test that runs the document pipeline. Tests that exercise a provider set
+    their own fake key. The cooldown ledger is process-wide, so it is also
+    cleared — one test's simulated 429 must not skip a provider in the next."""
+    from app.documents import ai_providers
+    from app.settings import settings as app_settings
+
+    for field in ("gemini_api_key", "groq_api_key", "openrouter_api_key"):
+        monkeypatch.setattr(app_settings, field, "")
+    ai_providers.reset_state()
+    yield
+    ai_providers.reset_state()
 
 
 @pytest.fixture(autouse=True)
@@ -204,3 +225,65 @@ async def make_user(
 
     await db.commit()
     return user
+
+
+# ── Doctor schedule (D7): more than one clinic ───────────────────────────
+@pytest.fixture
+async def second_clinic(db) -> Clinic:
+    c = Clinic(
+        id=uuid7(), name="Maroof International", city="Islamabad", address="F-10", type="hospital"
+    )
+    db.add(c)
+    await db.commit()
+    return c
+
+
+@pytest.fixture
+async def inactive_clinic(db) -> Clinic:
+    c = Clinic(
+        id=uuid7(),
+        name="Closed Clinic",
+        city="Lahore",
+        address="Gulberg",
+        type="clinic",
+        status="inactive",
+    )
+    db.add(c)
+    await db.commit()
+    return c
+
+
+async def doctor_of(db, user: Profile) -> Doctor:
+    return (await db.execute(select(Doctor).where(Doctor.user_id == user.id))).scalar_one()
+
+
+async def add_affiliation(db, doctor_id, clinic_id, status: str = "active") -> DoctorAffiliation:
+    """A further affiliation for an existing doctor (`make_user` adds at most one)."""
+    aff = DoctorAffiliation(
+        id=uuid7(),
+        doctor_id=doctor_id,
+        clinic_id=clinic_id,
+        start_date=utcnow().date(),
+        status=status,
+    )
+    db.add(aff)
+    await db.commit()
+    return aff
+
+
+@pytest.fixture
+async def schedule_doctor(db, clinic, second_clinic) -> Profile:
+    """A pending doctor (D7 decision 6) affiliated with `clinic` and `second_clinic`."""
+    user = await make_user(
+        db, email="schedule.doctor@x.com", role=UserRole.DOCTOR, clinic_id=clinic.id
+    )
+    await add_affiliation(db, (await doctor_of(db, user)).id, second_clinic.id)
+    return user
+
+
+def next_weekday(weekday: int, start: date | None = None) -> date:
+    """The first date on or after `start` (default: `today_pk()`) falling on
+    `weekday` (0 = Monday). Tests freeze "today" by monkeypatching
+    `app.db.types.today_pk`, never the wall clock."""
+    start = start or dbtypes.today_pk()
+    return start + timedelta(days=(weekday - start.weekday()) % 7)
