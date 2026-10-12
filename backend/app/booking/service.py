@@ -44,8 +44,10 @@ from .schemas import (
     HORIZON_DAYS,
     LEAD_MINUTES,
     SEARCH_LIMIT,
+    AppointmentRow,
     ClinicRef,
     DayOptions,
+    DayRow,
     DoctorCard,
 )
 
@@ -381,3 +383,150 @@ async def book(
     return await _place(
         session, actor, doctor_id, clinic_id, slot_start, replacing=None, user_agent=user_agent
     )
+
+
+# ── Cancel and reschedule ────────────────────────────────────────────────
+async def _own_appointment(
+    session: AsyncSession, patient_id: uuid.UUID, appointment_id: uuid.UUID
+) -> Appointment:
+    appointment = (
+        await session.execute(
+            select(Appointment).where(
+                Appointment.id == appointment_id, Appointment.patient_id == patient_id
+            )
+        )
+    ).scalar_one_or_none()
+    if appointment is None:
+        raise NotFound()
+    return appointment
+
+
+async def cancel(
+    session: AsyncSession,
+    actor: Actor,
+    appointment_id: uuid.UUID,
+    *,
+    user_agent: str | None = None,
+) -> None:
+    """Cancel the caller's own `booked` appointment, any time before it starts.
+    The row is kept (`cancelled`); the time and the cap are freed."""
+    patient = await _patient(session, actor)
+    appointment = await _own_appointment(session, patient.id, appointment_id)
+    await schedule_service.lock_doctor(session, appointment.doctor_id)
+    await session.refresh(appointment)
+    if appointment.status != "booked" or slots.as_utc(appointment.slot_start) <= _now():
+        raise BookingRefused("not_cancellable")
+    appointment.status = "cancelled"
+    await audit.write(
+        session,
+        action=audit.APPOINTMENT_CANCEL,
+        actor_user_id=actor.user_id,
+        actor_role=actor.role,
+        subject_patient_id=patient.id,
+        resource_type="appointment",
+        ip_address=actor.ip_address,
+        user_agent=user_agent,
+        detail={
+            "appointment_id": str(appointment.id),
+            "doctor_id": str(appointment.doctor_id),
+            "clinic_id": str(appointment.clinic_id),
+        },
+    )
+    await session.commit()
+
+
+async def reschedule(
+    session: AsyncSession,
+    actor: Actor,
+    appointment_id: uuid.UUID,
+    clinic_id: uuid.UUID,
+    slot_start: datetime,
+    *,
+    user_agent: str | None = None,
+) -> Appointment:
+    """Move the caller's own appointment to `slot_start` with the same doctor
+    (at any of their live hospitals): book the new time and cancel the old one
+    in one transaction. A refused new time leaves the old booking untouched."""
+    patient = await _patient(session, actor)
+    old = await _own_appointment(session, patient.id, appointment_id)
+    return await _place(
+        session, actor, old.doctor_id, clinic_id, slot_start, replacing=old, user_agent=user_agent
+    )
+
+
+# ── Lists ────────────────────────────────────────────────────────────────
+async def _patient_rows(session: AsyncSession, patient_id: uuid.UUID) -> list[AppointmentRow]:
+    stmt = (
+        select(Appointment, Doctor, Clinic)
+        .join(Doctor, Doctor.id == Appointment.doctor_id)
+        .join(Clinic, Clinic.id == Appointment.clinic_id)
+        .where(Appointment.patient_id == patient_id)
+        .order_by(Appointment.slot_start)
+    )
+    now = _now()
+    rows: list[AppointmentRow] = []
+    for appointment, doctor, clinic in (await session.execute(stmt)).all():
+        start = slots.as_utc(appointment.slot_start)
+        rows.append(
+            AppointmentRow(
+                id=appointment.id,
+                doctor_id=doctor.id,
+                doctor_name=doctor.full_name,
+                specialty=doctor.specialty,
+                clinic_id=clinic.id,
+                clinic_name=clinic.name,
+                starts_at=start.astimezone(dbtypes.PKT),
+                status=appointment.status,
+                upcoming=appointment.status in HELD_STATUSES and start >= now,
+                can_change=appointment.status == "booked" and start > now,
+            )
+        )
+    return rows
+
+
+async def my_appointments(
+    session: AsyncSession, actor: Actor
+) -> tuple[list[AppointmentRow], list[AppointmentRow]]:
+    """(upcoming, past) for the caller. Upcoming: booked or checked in and not
+    yet started, soonest first. Past: everything else, newest first."""
+    patient = await _patient(session, actor)
+    rows = await _patient_rows(session, patient.id)
+    upcoming = [r for r in rows if r.upcoming]
+    past = sorted((r for r in rows if not r.upcoming), key=lambda r: r.starts_at, reverse=True)
+    return upcoming, past
+
+
+async def appointment_for_patient(
+    session: AsyncSession, actor: Actor, appointment_id: uuid.UUID
+) -> AppointmentRow:
+    patient = await _patient(session, actor)
+    for row in await _patient_rows(session, patient.id):
+        if row.id == appointment_id:
+            return row
+    raise NotFound()
+
+
+async def doctor_day(session: AsyncSession, actor: Actor, day: date) -> list[DayRow]:
+    """A verified doctor's appointments on one Pakistan day, by time: name, time
+    and status only (booking never grants record access). Anyone else, and a
+    doctor who is not verified, gets `NotFound`."""
+    if actor.role != UserRole.DOCTOR.value:
+        raise NotFound()
+    doctor = await schedule_service.my_doctor(session, actor)
+    if doctor.verification_status != VerificationStatus.VERIFIED:
+        raise NotFound()
+    lo = slots.to_utc(day, time(0, 0))
+    stmt = (
+        select(Appointment.slot_start, Appointment.status, Patient.full_name)
+        .join(Patient, Patient.id == Appointment.patient_id)
+        .where(
+            Appointment.doctor_id == doctor.id,
+            Appointment.slot_start >= lo,
+            Appointment.slot_start < lo + timedelta(days=1),
+        )
+        .order_by(Appointment.slot_start)
+    )
+    return [
+        DayRow(starts_at=slots.to_local(start), patient_name=name, status=status)
+        for start, status, name in (await session.execute(stmt)).all()
+    ]
