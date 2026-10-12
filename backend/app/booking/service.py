@@ -192,11 +192,56 @@ async def _active_starts(
     return grouped
 
 
+# The longest turn D7 allows (R12), so an appointment that starts this long before a
+# time can still overlap it.
+_LOOKBACK = timedelta(minutes=60)
+
+
+async def _doctor_held(
+    session: AsyncSession,
+    doctor_id: uuid.UUID,
+    lo: datetime,
+    hi: datetime,
+    *,
+    exclude: uuid.UUID | None = None,
+) -> list[tuple[datetime, int]]:
+    """(start, minutes) of the doctor's active appointments starting in `[lo, hi)`,
+    whatever schedule row they hang off. Taken and full are counted per session
+    (`_active_starts`), but the doctor still sees one patient at a time: D7 R10's
+    "time off plus extra hours" moves a day onto another row (an extra hangs off the
+    doctor's earliest slot), and what was booked before must stay taken."""
+    stmt = (
+        select(Appointment.slot_start, DoctorSchedule.slot_minutes)
+        .join(DoctorSchedule, DoctorSchedule.id == Appointment.schedule_id, isouter=True)
+        .where(
+            Appointment.doctor_id == doctor_id,
+            Appointment.status.in_(ACTIVE_STATUSES),
+            Appointment.slot_start >= lo,
+            Appointment.slot_start < hi,
+        )
+    )
+    if exclude is not None:
+        stmt = stmt.where(Appointment.id != exclude)
+    return [
+        (slots.as_utc(start), minutes or DEFAULT_MINUTES)
+        for start, minutes in (await session.execute(stmt)).all()
+    ]
+
+
+def _clashes(start: datetime, minutes: int, held: list[tuple[datetime, int]]) -> bool:
+    return any(slots.overlap(start, minutes, other, other_minutes) for other, other_minutes in held)
+
+
 async def list_options(
-    session: AsyncSession, doctor_id: uuid.UUID, clinic_id: uuid.UUID
+    session: AsyncSession,
+    doctor_id: uuid.UUID,
+    clinic_id: uuid.UUID,
+    *,
+    exclude: uuid.UUID | None = None,
 ) -> list[DayOptions]:
     """The free times at one hospital for the next 14 days, only days that have
-    any. Read-only: it books nothing and takes no lock."""
+    any. Read-only: it books nothing and takes no lock. `exclude` leaves one
+    appointment out of what is taken and of the cap: the booking being moved."""
     found = await _visible_doctors(session, doctor_id)
     if doctor_id not in found or clinic_id not in found[doctor_id][1]:
         raise NotFound()
@@ -212,11 +257,20 @@ async def list_options(
         {w.schedule_id for w in windows},
         min(lo for lo, _ in bounds),
         max(hi for _, hi in bounds),
+        exclude=exclude,
+    )
+    held = await _doctor_held(
+        session,
+        doctor_id,
+        min(lo for lo, _ in bounds) - _LOOKBACK,
+        max(hi for _, hi in bounds),
+        exclude=exclude,
     )
     by_day: dict[date, list[datetime]] = {}
     for window, (lo, hi) in zip(windows, bounds, strict=True):
         booked = [s for s in taken[window.schedule_id] if lo <= s < hi]
         times = slots.bookable_times(window, booked, earliest=earliest, last_day=last_day)
+        times = [t for t in times if not _clashes(t, window.slot_minutes, held)]
         if times:
             by_day.setdefault(window.day, []).extend(times)
     return [DayOptions(day=d, times=tuple(sorted(ts))) for d, ts in sorted(by_day.items())]
@@ -320,6 +374,15 @@ async def _place(
     reason = slots.refusal(window, booked, start, earliest=earliest, last_day=last_day)
     if reason is not None:
         raise BookingRefused(reason)
+    held = await _doctor_held(
+        session,
+        doctor_id,
+        start - _LOOKBACK,
+        start + timedelta(minutes=window.slot_minutes),
+        exclude=ignore,
+    )
+    if _clashes(start, window.slot_minutes, held):
+        raise BookingRefused("taken")
     await _check_patient_rules(
         session, patient.id, doctor_id, start, window.slot_minutes, ignore=ignore
     )

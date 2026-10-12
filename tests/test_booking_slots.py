@@ -79,7 +79,16 @@ def test_parse_and_format_local_round_trip():
 
 
 @pytest.mark.parametrize(
-    "bad", ["", "nonsense", "2026-10-14", "2026-10-14T10:30:00", "2026-13-01T10:00"]
+    "bad",
+    [
+        "",
+        "nonsense",
+        "2026-10-14",
+        "2026-10-14T10:30:00",
+        "2026-13-01T10:00",
+        "0001-01-01T00:00",  # before UTC year 1 once Pakistan time is converted
+        "0001-01-01T04:59",
+    ],
 )
 def test_parse_local_rejects_anything_else(bad):
     with pytest.raises(ValueError):

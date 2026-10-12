@@ -384,3 +384,35 @@ async def test_a_move_with_a_bad_time_goes_back_to_move_mode(patient_client, db,
     r = await move(patient_client, old, clinic, "junk")
     assert r.status_code == 303
     assert r.headers["location"] == f"/en/patient/doctors/{doctor.id}?moving={old.id}"
+
+
+async def test_moving_inside_a_full_session_offers_times_but_not_the_old_one(
+    patient_client, db, clinic, me
+):
+    # Final review: the service lets a move reuse the booking's own place; the pages must too.
+    doctor, session = await world(db, clinic, cap=1)
+    old = await add_appointment(db, me, doctor, clinic, session, at(WED, "10:00"))
+    page = await patient_client.get(f"{FIND}/{doctor.id}?moving={old.id}")
+    assert "at=2026-10-14T10:15" in page.text and "at=2026-10-14T10:00" not in page.text
+    ok = await patient_client.get(confirm_url(doctor, clinic, "2026-10-14T10:15", moving=old))
+    assert ok.status_code == 200 and "Confirm new time" in ok.text
+    same = await patient_client.get(confirm_url(doctor, clinic, "2026-10-14T10:00", moving=old))
+    assert same.status_code == 409  # the time it already has is not a new time
+    moved = await move(patient_client, old, clinic, "2026-10-14T10:15")
+    assert moved.status_code == 303 and "saved=rescheduled" in moved.headers["location"]
+
+
+@pytest.mark.parametrize("when", ["0001-01-01T00:00", "0001-01-01T04:59"])
+async def test_a_time_in_the_first_hours_of_year_one_is_just_malformed(
+    patient_client, db, clinic, me, when
+):
+    doctor, session = await world(db, clinic)
+    mine = await add_appointment(db, me, doctor, clinic, session, at(WED, "10:00"))
+    back = f"/en/patient/doctors/{doctor.id}"
+    r = await patient_client.get(confirm_url(doctor, clinic, when))
+    assert r.status_code == 303 and r.headers["location"] == back
+    r = await patient_client.post(BOOK, data=book_form(doctor, clinic, when))
+    assert r.status_code == 303 and r.headers["location"] == back
+    r = await move(patient_client, mine, clinic, when)
+    assert r.status_code == 303 and r.headers["location"] == f"{back}?moving={mine.id}"
+    assert [a.status for a in await appointments(db)] == ["booked"]

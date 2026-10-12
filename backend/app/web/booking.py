@@ -17,7 +17,7 @@ from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from ..booking import display, service, slots
-from ..booking.schemas import AppointmentRow, ClinicRef
+from ..booking.schemas import AppointmentRow, ClinicRef, DayOptions
 from ..db.models import UserRole
 from ..deps import Actor, OptionalActorDep, SessionDep, check_booking_write_rate
 from ..errors import BookingRefused, NotFound, RateLimited
@@ -152,6 +152,15 @@ async def _moving_row(
     return row if row.can_change and row.doctor_id == doctor_id else None
 
 
+def _without_own_time(days: list[DayOptions], moving: AppointmentRow | None) -> list[DayOptions]:
+    """In move mode the booking's own time is not a new time: leave it out of the offer."""
+    if moving is None:
+        return days
+    own = slots.as_utc(moving.starts_at)
+    kept = [DayOptions(day=d.day, times=tuple(t for t in d.times if t != own)) for d in days]
+    return [d for d in kept if d.times]
+
+
 def _confirm_url(
     loc: str,
     doctor_id: uuid.UUID,
@@ -183,7 +192,12 @@ async def _render_doctor(
         return await _find_not_found(request, loc, session)
     clinic = next((c for c in doctor.clinics if str(c.id) == clinic_raw), doctor.clinics[0])
     moving = await _moving_row(session, actor, doctor_id, moving_raw)
-    days = await service.list_options(session, doctor_id, clinic.id)
+    days = _without_own_time(
+        await service.list_options(
+            session, doctor_id, clinic.id, exclude=moving.id if moving is not None else None
+        ),
+        moving,
+    )
 
     def clinic_href(other: ClinicRef) -> str:
         params = {"clinic": str(other.id)}
@@ -278,8 +292,17 @@ async def confirm_page(
     chosen = next((c for c in doctor.clinics if c.id == clinic_id), None)
     if chosen is None:
         return RedirectResponse(doctor_url, status_code=303)
+    moving_row = await _moving_row(session, actor, parsed, moving)
     try:
-        options = await service.list_options(session, parsed, clinic_id)
+        options = _without_own_time(
+            await service.list_options(
+                session,
+                parsed,
+                clinic_id,
+                exclude=moving_row.id if moving_row is not None else None,
+            ),
+            moving_row,
+        )
     except NotFound:  # the doctor changed between the two reads
         return await _find_not_found(request, loc, session)
     if start not in {moment for day in options for moment in day.times}:
@@ -294,7 +317,6 @@ async def confirm_page(
             status_code=409,
             page_error=translate("errors.booking_not_offered", loc),
         )
-    moving_row = await _moving_row(session, actor, parsed, moving)
     back = {"clinic": str(clinic_id)}
     if moving_row is not None:
         back["moving"] = str(moving_row.id)

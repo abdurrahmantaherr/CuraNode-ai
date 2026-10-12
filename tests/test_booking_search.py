@@ -249,3 +249,43 @@ async def test_a_time_after_midnight_in_pakistan_is_listed_under_its_pakistan_da
     assert first == at(thursday, "00:00")
     assert first.date() == date(2026, 10, 14)  # the UTC date is the day before
     assert first.astimezone(dbtypes.PKT).date() == thursday
+
+
+async def test_options_hide_times_the_doctor_already_holds_under_another_schedule_row(db, clinic):
+    # Final review: see test_a_time_held_under_another_schedule_row_of_the_doctor_is_taken.
+    doctor = await verified_doctor(db, clinic)
+    wednesday = await add_session(db, doctor, clinic, minutes=20)
+    monday = await add_session(db, doctor, clinic, weekday=MONDAY, start="09:00", end="13:00")
+    _, patient, _ = await make_patient(db)
+    await add_appointment(db, patient, doctor, clinic, wednesday, at(WED, "10:00"))
+    db.add(
+        ScheduleException(
+            schedule_id=wednesday.id, exception_date=WED, kind=ScheduleExceptionType.LEAVE
+        )
+    )
+    db.add(
+        ScheduleException(
+            schedule_id=monday.id,
+            exception_date=WED,
+            kind=ScheduleExceptionType.EXTRA,
+            start_time=time(9, 0),
+            end_time=time(13, 0),
+        )
+    )
+    await db.commit()
+    days = await service.list_options(db, doctor.id, clinic.id)
+    times = [t for d in days if d.day == WED for t in d.times]
+    assert at(WED, "10:00") not in times and at(WED, "10:15") not in times
+    assert at(WED, "09:45") in times and at(WED, "10:30") in times
+
+
+async def test_options_can_leave_out_the_booking_being_moved(db, clinic):
+    doctor = await verified_doctor(db, clinic)
+    session = await add_session(db, doctor, clinic, cap=1)
+    _, patient, _ = await make_patient(db)
+    mine = await add_appointment(db, patient, doctor, clinic, session, at(WED, "10:00"))
+    full = await service.list_options(db, doctor.id, clinic.id)
+    assert WED not in [d.day for d in full]  # the session is at its cap
+    moving = await service.list_options(db, doctor.id, clinic.id, exclude=mine.id)
+    wednesday = next(d for d in moving if d.day == WED)
+    assert len(wednesday.times) == 16 and at(WED, "10:00") in wednesday.times

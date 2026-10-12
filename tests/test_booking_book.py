@@ -325,8 +325,21 @@ async def test_the_index_is_the_backstop_if_a_race_slips_past_the_checks(db, cli
     async def blind(*args, **kwargs):  # a concurrent booking the checks did not see
         return {session.id: []}
 
+    async def blind_held(*args, **kwargs):  # ... neither per session nor per doctor
+        return []
+
+    rollbacks = []
+    real_rollback = db.rollback
+
+    async def spy_rollback():
+        rollbacks.append(True)
+        await real_rollback()
+
     monkeypatch.setattr(service, "_active_starts", blind)
+    monkeypatch.setattr(service, "_doctor_held", blind_held)
+    monkeypatch.setattr(db, "rollback", spy_rollback)
     await expect_refusal("taken", service.book(db, actor, doctor.id, clinic.id, at(WED, "10:00")))
+    assert rollbacks == [True]  # it was the index that refused, not a check
     assert len(await stored(db)) == 1
 
 
@@ -345,3 +358,33 @@ async def test_a_booking_writes_one_audit_row_with_ids_only(db, clinic):
         "clinic_id": str(clinic.id),
     }
     assert rows[0].subject_patient_id == patient.id and rows[0].actor_role == "patient"
+
+
+async def test_a_time_held_under_another_schedule_row_of_the_doctor_is_taken(db, clinic):
+    # Final review: D7 R10 tells a doctor whose slot has bookings to use time off plus
+    # extra hours. The extra hangs off another schedule row, but the doctor still sees
+    # one patient at a time, so what is already booked must stay taken.
+    doctor, wednesday, _, actor = await world(db, clinic, minutes=20)  # Wednesdays 09:00-13:00
+    monday = await add_session(db, doctor, clinic, weekday=MONDAY, start="09:00", end="13:00")
+    _, p2 = await another_patient(db, 2)
+    held = await service.book(db, p2, doctor.id, clinic.id, at(WED, "10:00"))  # 10:00-10:20
+    db.add(
+        ScheduleException(
+            schedule_id=wednesday.id, exception_date=WED, kind=ScheduleExceptionType.LEAVE
+        )
+    )
+    db.add(
+        ScheduleException(
+            schedule_id=monday.id,
+            exception_date=WED,
+            kind=ScheduleExceptionType.EXTRA,
+            start_time=time(9, 0),
+            end_time=time(13, 0),
+        )
+    )
+    await db.commit()
+    await expect_refusal("taken", service.book(db, actor, doctor.id, clinic.id, at(WED, "10:00")))
+    # 10:15-10:30 overlaps the 10:00-10:20 turn that is already booked.
+    await expect_refusal("taken", service.book(db, actor, doctor.id, clinic.id, at(WED, "10:15")))
+    appt = await service.book(db, actor, doctor.id, clinic.id, at(WED, "10:30"))
+    assert appt.status == "booked" and held.status == "booked"

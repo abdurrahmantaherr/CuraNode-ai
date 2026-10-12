@@ -49,8 +49,11 @@ def to_local(value: datetime) -> datetime:
 def parse_local(value: str) -> datetime:
     """`2026-10-14T10:30` (Pakistan time) as an aware UTC instant. Anything else,
     seconds included, is a `ValueError`."""
-    naive = datetime.strptime(value, "%Y-%m-%dT%H:%M")  # noqa: DTZ007 - made aware on the next line
-    return naive.replace(tzinfo=PKT).astimezone(UTC)
+    naive = datetime.strptime(value, "%Y-%m-%dT%H:%M")  # noqa: DTZ007 - made aware below
+    try:
+        return naive.replace(tzinfo=PKT).astimezone(UTC)
+    except OverflowError:  # the first hours of year 1 have no UTC equivalent
+        raise ValueError(value) from None
 
 
 def format_local(value: datetime) -> str:
