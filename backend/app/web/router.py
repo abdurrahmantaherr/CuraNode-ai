@@ -27,6 +27,8 @@ from pydantic_core import PydanticCustomError
 from sqlalchemy import select
 from supabase_auth.errors import AuthApiError
 
+from ..admin import schemas as admin_schemas
+from ..admin import service as admin_service
 from ..audit import writer as audit
 from ..cache import cache, oauth_state_key
 from ..consent import access_log as consent_access_log
@@ -76,6 +78,8 @@ from ..schedule import engine as schedule_engine
 from ..schedule import schemas as schedule_schemas
 from ..schedule import service as schedule_service
 from ..settings import settings
+from ..verification import service as verification_service
+from ..verification.schemas import REASONS
 
 OAUTH_STATE_COOKIE = "cn_oauth_state"
 
@@ -196,7 +200,7 @@ async def login_submit(
     next_url: Annotated[str, Form(alias="next")] = "",
 ) -> Response:
     loc = normalise_locale(locale)
-    selected = role if role in ("patient", "doctor") else ""
+    selected = role if role in ("patient", "doctor", "admin") else ""
     destination = safe_next(next_url)
 
     def fail(message_key: str, code: int = 400, **params: object) -> Response:
@@ -375,6 +379,111 @@ async def register_submit(
     if pair is None:
         # Duplicate email. Do not confirm the address exists — send the user to
         # sign in instead (SPEC AC-24, BL-05).
+        return RedirectResponse(f"/{loc}/login", status_code=303)
+
+    response = RedirectResponse(f"/{loc}/{_area(out.role)}", status_code=303)
+    set_session_cookies(response, pair)
+    return response
+
+
+# ── Clinic-admin sign-up (D-VERIFY v1) ───────────────────────────────────
+@router.get("/{locale}/admin/register", response_class=HTMLResponse)
+async def admin_register_page(
+    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    loc = normalise_locale(locale)
+    if actor is not None:
+        return RedirectResponse(f"/{loc}/{_area(actor.role)}", status_code=303)
+    return _render(
+        request,
+        "auth/admin_register.html",
+        loc,
+        values={},
+        errors={},
+        form_error=None,
+        clinics=await _clinic_options(session),
+    )
+
+
+@router.post("/{locale}/admin/register")
+async def admin_register_submit(
+    request: Request,
+    locale: str,
+    session: SessionDep,
+    full_name: Annotated[str, Form()] = "",
+    email: Annotated[str, Form()] = "",
+    password: Annotated[str, Form()] = "",
+    password_confirm: Annotated[str, Form()] = "",
+    clinic_id: Annotated[str, Form()] = "",
+    invite_code: Annotated[str, Form()] = "",
+    consent: Annotated[str | None, Form()] = None,
+) -> Response:
+    loc = normalise_locale(locale)
+    values = {
+        "full_name": full_name,
+        "email": email,
+        "clinic_id": clinic_id,
+        "invite_code": invite_code,
+        "consent": bool(consent),
+    }
+
+    async def rerender(
+        errors: dict[str, str], form_error: str | None = None, code: int = 422
+    ) -> Response:
+        return _render(
+            request,
+            "auth/admin_register.html",
+            loc,
+            status_code=code,
+            values=values,
+            errors=errors,
+            clinics=await _clinic_options(session),
+            form_error=form_error,
+        )
+
+    try:
+        await enforce_auth_rate_limit(request)
+    except RateLimited:
+        return await rerender({}, translate("errors.rate_limited", loc), 429)
+
+    errors: dict[str, str] = {}
+    if not full_name.strip():
+        errors["full_name"] = translate("errors.name_required", loc)
+    if len(password) < 10:
+        errors["password"] = translate("errors.password_short", loc)
+    elif password != password_confirm:
+        errors["password_confirm"] = translate("errors.password_mismatch", loc)
+    if not consent:
+        errors["consent"] = translate("errors.consent_required", loc)
+    if errors:
+        return await rerender(errors)
+
+    try:
+        body = admin_schemas.AdminRegisterRequest(
+            full_name=full_name,
+            email=email,
+            password=password,
+            clinic_id=uuid.UUID(clinic_id),
+            invite_code=invite_code,
+            preferred_locale=loc,
+        )
+    except (ValidationError, ValueError):
+        return await rerender({"email": translate("errors.email_invalid", loc)})
+
+    try:
+        out, pair = await admin_service.register_admin(
+            session,
+            body,
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except ValidationFailed as exc:
+        fields = exc.details.get("fields", {})
+        return await rerender({k: translate(v, loc) for k, v in fields.items()})
+    except AppError:
+        return await rerender({}, translate("errors.internal", loc), 500)
+
+    if pair is None:
         return RedirectResponse(f"/{loc}/login", status_code=303)
 
     response = RedirectResponse(f"/{loc}/{_area(out.role)}", status_code=303)
@@ -717,13 +826,27 @@ async def _guarded(
 
     pending_message = ""
     show_banner = False
+    rejected_message = ""
+    show_rejected_banner = False
     if actor.role == UserRole.DOCTOR.value and not actor.is_verified_doctor:
-        show_banner = True
         clinic_name = ""
         if me.clinic_ids:
             clinic = await session.get(Clinic, me.clinic_ids[0])
             clinic_name = clinic.name if clinic else ""
-        pending_message = translate("doctor.pending_body", loc, clinic=clinic_name)
+        status, reason = await verification_service.doctor_status_for_banner(session, actor)
+        if status == "rejected":
+            show_rejected_banner = True
+            reason_text = (
+                translate(f"verify.reason.{reason}", loc)
+                if reason
+                else translate("verify.reason.other", loc)
+            )
+            rejected_message = translate(
+                "doctor.rejected_body", loc, reason=reason_text, clinic=clinic_name
+            )
+        else:
+            show_banner = True
+            pending_message = translate("doctor.pending_body", loc, clinic=clinic_name)
 
     title_key = {
         "patient": "patient.dashboard.title",
@@ -787,6 +910,8 @@ async def _guarded(
         passport_no=me.passport_no,
         show_unverified_banner=show_banner,
         pending_message=pending_message,
+        show_rejected_banner=show_rejected_banner,
+        rejected_message=rejected_message,
         **extra,
     )
 
@@ -805,11 +930,217 @@ async def doctor_area(
     return await _guarded(request, locale, session, actor, "doctor")
 
 
+# ── Clinic-admin verification dashboard (D-VERIFY v1) ────────────────────
+_ADMIN_TABS = ("pending", "verified", "rejected")
+_ADMIN_SAVED = {
+    "approved": "verify.saved.approved",
+    "rejected": "verify.saved.rejected",
+    "revoked": "verify.saved.revoked",
+}
+
+
+def _admin_nav(loc: str, *, current: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "href": f"/{loc}/admin?tab={t}",
+            "label": translate(f"verify.tab.{t}", loc),
+            "current": current == t,
+        }
+        for t in _ADMIN_TABS
+    ]
+
+
+def _admin_page_guard(request: Request, locale: str, actor: Actor | None) -> Response | None:
+    loc = normalise_locale(locale)
+    if actor is None:
+        return RedirectResponse(f"/{loc}/login?next={request.url.path}", status_code=303)
+    if actor.role != UserRole.CLINIC_ADMIN.value:
+        return RedirectResponse(f"/{loc}/{_area(actor.role)}", status_code=303)
+    return None
+
+
+async def _render_admin(
+    request: Request,
+    loc: str,
+    session: SessionDep,
+    actor: Actor,
+    *,
+    tab: str,
+    status_code: int = 200,
+    saved: str | None = None,
+    page_error: str | None = None,
+) -> Response:
+    if tab not in _ADMIN_TABS:
+        tab = "pending"
+    doctors = await verification_service.list_doctors_for_clinic(session, actor, tab)
+    decisions = await verification_service.latest_decisions_for(session, [d.id for d in doctors])
+    return _render(
+        request,
+        "admin/dashboard.html",
+        loc,
+        status_code=status_code,
+        path_suffix="/admin",
+        crumb=translate("admin.dashboard.title", loc),
+        page_title=translate("admin.dashboard.title", loc),
+        nav_items=_admin_nav(loc, current=tab),
+        tab=tab,
+        doctors=doctors,
+        decisions=decisions,
+        reasons=REASONS,
+        saved=saved,
+        page_error=page_error,
+    )
+
+
+async def _admin_failure(
+    request: Request,
+    loc: str,
+    session: SessionDep,
+    actor: Actor,
+    exc: Exception,
+    *,
+    tab: str,
+) -> Response:
+    await session.rollback()
+    if isinstance(exc, ValidationFailed):
+        fields = exc.details.get("fields", {})
+        msg = (
+            translate(next(iter(fields.values())), loc)
+            if fields
+            else translate("errors.validation_failed", loc)
+        )
+        return await _render_admin(
+            request, loc, session, actor, tab=tab, status_code=422, page_error=msg
+        )
+    if isinstance(exc, NotFound):
+        return await _render_admin(
+            request,
+            loc,
+            session,
+            actor,
+            tab=tab,
+            status_code=404,
+            page_error=translate("errors.not_found", loc),
+        )
+    if isinstance(exc, RateLimited):
+        return await _render_admin(
+            request,
+            loc,
+            session,
+            actor,
+            tab=tab,
+            status_code=429,
+            page_error=translate("errors.rate_limited", loc),
+        )
+    return await _render_admin(
+        request,
+        loc,
+        session,
+        actor,
+        tab=tab,
+        status_code=500,
+        page_error=translate("errors.internal", loc),
+    )
+
+
 @router.get("/{locale}/admin", response_class=HTMLResponse)
 async def admin_area(
-    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep
+    request: Request,
+    locale: str,
+    session: SessionDep,
+    actor: OptionalActorDep,
+    tab: str = "pending",
+    saved: str | None = None,
 ) -> Response:
-    return await _guarded(request, locale, session, actor, "admin")
+    if (redirect := _admin_page_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    banner = translate(_ADMIN_SAVED[saved], loc) if saved in _ADMIN_SAVED else None
+    return await _render_admin(request, loc, session, actor, tab=tab, saved=banner)
+
+
+@router.post("/{locale}/admin/doctors/{doctor_id}/approve")
+async def admin_approve_submit(
+    request: Request, locale: str, doctor_id: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _admin_page_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    form = await request.form()
+    source_tab = str(form.get("source_tab", "pending"))
+    try:
+        parsed_id = _parse_entry_id(doctor_id)
+        if parsed_id is None:
+            raise NotFound()
+        await verification_service.approve(
+            session,
+            actor,
+            parsed_id,
+            checked_number=form.get("checked_number") is not None,
+            checked_name=form.get("checked_name") is not None,
+            checked_licence=form.get("checked_licence") is not None,
+            note=str(form.get("note", "")).strip() or None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except Exception as exc:  # noqa: BLE001 — every outcome is mapped to the page
+        return await _admin_failure(request, loc, session, actor, exc, tab=source_tab)
+    return RedirectResponse(f"/{loc}/admin?tab=verified&saved=approved", status_code=303)
+
+
+@router.post("/{locale}/admin/doctors/{doctor_id}/reject")
+async def admin_reject_submit(
+    request: Request, locale: str, doctor_id: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _admin_page_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    form = await request.form()
+    source_tab = str(form.get("source_tab", "pending"))
+    try:
+        parsed_id = _parse_entry_id(doctor_id)
+        if parsed_id is None:
+            raise NotFound()
+        await verification_service.reject(
+            session,
+            actor,
+            parsed_id,
+            reason=str(form.get("reason", "")),
+            note=str(form.get("note", "")).strip() or None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return await _admin_failure(request, loc, session, actor, exc, tab=source_tab)
+    return RedirectResponse(f"/{loc}/admin?tab=pending&saved=rejected", status_code=303)
+
+
+@router.post("/{locale}/admin/doctors/{doctor_id}/revoke")
+async def admin_revoke_submit(
+    request: Request, locale: str, doctor_id: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    if (redirect := _admin_page_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    form = await request.form()
+    source_tab = str(form.get("source_tab", "verified"))
+    try:
+        parsed_id = _parse_entry_id(doctor_id)
+        if parsed_id is None:
+            raise NotFound()
+        await verification_service.revoke(
+            session,
+            actor,
+            parsed_id,
+            reason=str(form.get("reason", "")),
+            note=str(form.get("note", "")).strip() or None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return await _admin_failure(request, loc, session, actor, exc, tab=source_tab)
+    return RedirectResponse(f"/{loc}/admin?tab=verified&saved=revoked", status_code=303)
 
 
 # ── Patient profile (FR2, profile SPEC §4.7–4.8) ────────────────────────

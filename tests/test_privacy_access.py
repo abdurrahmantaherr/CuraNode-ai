@@ -146,9 +146,10 @@ def test_ac29_revision_chain_is_single_and_unbroken():
     config = Config()
     config.set_main_option("script_location", str(ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["291c06a2b86f"]
+    assert script.get_heads() == ["a7d3c89106f9"]
     chain = [rev.revision for rev in script.walk_revisions("base", "heads")]
     assert chain == [
+        "a7d3c89106f9",  # D-VERIFY v1
         "291c06a2b86f",  # D7
         "dba968144fb4",
         "e3a52c8d7f14",  # the document / OCR codebase's real files, in the order the
