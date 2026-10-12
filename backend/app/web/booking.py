@@ -448,3 +448,164 @@ async def reschedule_submit(
         await session.rollback()
         return RedirectResponse(list_url, status_code=303)
     return RedirectResponse(f"{list_url}/{moved.id}?saved=rescheduled", status_code=303)
+
+
+# ── My appointments ──────────────────────────────────────────────────────
+# `?saved=` values the list and the confirmation understand (anything else is ignored).
+_SAVED = {
+    "booked": "booking.saved.booked",
+    "rescheduled": "booking.saved.rescheduled",
+    "cancelled": "booking.saved.cancelled",
+}
+
+
+async def _render_list(
+    request: Request,
+    loc: str,
+    session: SessionDep,
+    actor: Actor,
+    *,
+    status_code: int = 200,
+    saved: str = "",
+    page_error: str | None = None,
+) -> Response:
+    upcoming, past = await service.my_appointments(session, actor)
+    key = _SAVED.get(saved)
+    return _render(
+        request,
+        "booking/list.html",
+        loc,
+        status_code=status_code,
+        path_suffix="/patient/appointments",
+        upcoming=upcoming,
+        past=past,
+        saved=translate(key, loc) if key else None,
+        page_error=page_error,
+        **_ctx(loc, "booking.list.title", current="appointments"),
+    )
+
+
+@router.get("/{locale}/patient/appointments", response_class=HTMLResponse)
+async def list_page(
+    request: Request,
+    locale: str,
+    session: SessionDep,
+    actor: OptionalActorDep,
+    saved: str = "",
+) -> Response:
+    if (redirect := _guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    return await _render_list(request, normalise_locale(locale), session, actor, saved=saved)
+
+
+@router.get("/{locale}/patient/appointments/{appointment_id}", response_class=HTMLResponse)
+async def appointment_page(
+    request: Request,
+    locale: str,
+    appointment_id: str,
+    session: SessionDep,
+    actor: OptionalActorDep,
+    saved: str = "",
+) -> Response:
+    if (redirect := _guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    list_url = f"/{loc}/patient/appointments"
+    parsed = _parse_id(appointment_id)
+    if parsed is None:
+        return RedirectResponse(list_url, status_code=303)
+    try:
+        row = await service.appointment_for_patient(session, actor, parsed)
+    except NotFound:  # not theirs and not there look the same
+        return RedirectResponse(list_url, status_code=303)
+    key = _SAVED.get(saved)
+    return _render(
+        request,
+        "booking/appointment.html",
+        loc,
+        path_suffix=f"/patient/appointments/{row.id}",
+        row=row,
+        saved=translate(key, loc) if key else None,
+        **_ctx(loc, "booking.appointment.title", current="appointments"),
+    )
+
+
+@router.post("/{locale}/patient/appointments/{appointment_id}/cancel")
+async def cancel_submit(
+    request: Request,
+    locale: str,
+    appointment_id: str,
+    session: SessionDep,
+    actor: OptionalActorDep,
+) -> Response:
+    if (redirect := _guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    list_url = f"/{loc}/patient/appointments"
+    parsed = _parse_id(appointment_id)
+    if parsed is None:
+        return RedirectResponse(list_url, status_code=303)
+    try:
+        await check_booking_write_rate(actor)
+    except RateLimited:
+        return await _render_list(
+            request,
+            loc,
+            session,
+            actor,
+            status_code=429,
+            page_error=translate("errors.rate_limited", loc),
+        )
+    try:
+        await service.cancel(session, actor, parsed, user_agent=request.headers.get("user-agent"))
+    except BookingRefused as exc:
+        await session.rollback()
+        return await _render_list(
+            request,
+            loc,
+            session,
+            actor,
+            status_code=exc.http_status,
+            page_error=translate(exc.message_key, loc),
+        )
+    except NotFound:
+        await session.rollback()
+        return RedirectResponse(list_url, status_code=303)
+    return RedirectResponse(f"{list_url}?saved=cancelled", status_code=303)
+
+
+@router.get("/{locale}/patient/appointments/{appointment_id}/reschedule")
+async def reschedule_page(
+    request: Request,
+    locale: str,
+    appointment_id: str,
+    session: SessionDep,
+    actor: OptionalActorDep,
+) -> Response:
+    """The way into "move this booking": the doctor page, in move mode."""
+    if (redirect := _guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    list_url = f"/{loc}/patient/appointments"
+    parsed = _parse_id(appointment_id)
+    if parsed is None:
+        return RedirectResponse(list_url, status_code=303)
+    try:
+        row = await service.appointment_for_patient(session, actor, parsed)
+    except NotFound:
+        return RedirectResponse(list_url, status_code=303)
+    if not row.can_change:
+        return await _render_list(
+            request,
+            loc,
+            session,
+            actor,
+            status_code=409,
+            page_error=translate("errors.booking_not_cancellable", loc),
+        )
+    params = urlencode({"clinic": str(row.clinic_id), "moving": str(row.id)})
+    return RedirectResponse(f"/{loc}/patient/doctors/{row.doctor_id}?{params}", status_code=303)

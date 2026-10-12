@@ -1,0 +1,16 @@
+{#- Reschedule and Cancel for one appointment `r` (an AppointmentRow). Shown only
+    while `r.can_change`. Cancel is a two-step <details> confirmation, so it works
+    without JavaScript. -#}
+{% if r.can_change %}
+  <div class="entry-row__actions">
+    <a class="btn btn--secondary btn--sm" href="/{{ locale }}/patient/appointments/{{ r.id }}/reschedule">{{ t('booking.action.reschedule') }}</a>
+    <details class="confirm">
+      <summary class="btn btn--secondary btn--sm">{{ t('booking.action.cancel') }}</summary>
+      <form method="post" action="/{{ locale }}/patient/appointments/{{ r.id }}/cancel">
+        <p class="field-help">{{ t('booking.cancel_hint') }}</p>
+        <button class="btn btn--danger btn--sm" type="submit"
+                data-label="{{ t('booking.action.confirm_cancel') }}">{{ t('booking.action.confirm_cancel') }}</button>
+      </form>
+    </details>
+  </div>
+{% endif %}

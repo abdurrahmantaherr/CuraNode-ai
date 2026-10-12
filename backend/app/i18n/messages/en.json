@@ -692,5 +692,20 @@
   "booking.confirm.action_move": "Confirm new time",
   "booking.confirm.change": "Choose a different time",
   "booking.confirm.hint": "You can cancel any time before the appointment starts.",
-  "booking.confirm.replaces": "This replaces your appointment on {date} at {time}."
+  "booking.confirm.replaces": "This replaces your appointment on {date} at {time}.",
+  "nav.appointments": "Appointments",
+  "booking.list.title": "My appointments",
+  "booking.list.upcoming": "Upcoming",
+  "booking.list.past": "Past",
+  "booking.list.empty_upcoming": "You have no upcoming appointments.",
+  "booking.list.empty_past": "Nothing here yet.",
+  "booking.action.reschedule": "Reschedule",
+  "booking.action.cancel": "Cancel",
+  "booking.action.confirm_cancel": "Yes, cancel it",
+  "booking.cancel_hint": "This frees the time for someone else.",
+  "booking.saved.booked": "Your appointment is confirmed.",
+  "booking.saved.rescheduled": "Your appointment has been moved.",
+  "booking.saved.cancelled": "Your appointment was cancelled.",
+  "booking.appointment.title": "Your appointment",
+  "booking.appointment.all": "See all my appointments"
 }

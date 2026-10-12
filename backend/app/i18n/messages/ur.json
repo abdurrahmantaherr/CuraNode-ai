@@ -692,5 +692,20 @@
   "booking.confirm.action_move": "نئے وقت کی تصدیق کریں",
   "booking.confirm.change": "کوئی اور وقت منتخب کریں",
   "booking.confirm.hint": "اپائنٹمنٹ شروع ہونے سے پہلے آپ کسی بھی وقت اسے منسوخ کر سکتے ہیں۔",
-  "booking.confirm.replaces": "یہ {date} کو {time} بجے کی آپ کی اپائنٹمنٹ کی جگہ لے گی۔"
+  "booking.confirm.replaces": "یہ {date} کو {time} بجے کی آپ کی اپائنٹمنٹ کی جگہ لے گی۔",
+  "nav.appointments": "اپائنٹمنٹس",
+  "booking.list.title": "میری اپائنٹمنٹس",
+  "booking.list.upcoming": "آنے والی",
+  "booking.list.past": "گزشتہ",
+  "booking.list.empty_upcoming": "آپ کی کوئی آنے والی اپائنٹمنٹ نہیں۔",
+  "booking.list.empty_past": "ابھی یہاں کچھ نہیں۔",
+  "booking.action.reschedule": "وقت بدلیں",
+  "booking.action.cancel": "منسوخ کریں",
+  "booking.action.confirm_cancel": "جی ہاں، منسوخ کریں",
+  "booking.cancel_hint": "اس سے یہ وقت کسی اور کے لیے خالی ہو جائے گا۔",
+  "booking.saved.booked": "آپ کی اپائنٹمنٹ کنفرم ہو گئی ہے۔",
+  "booking.saved.rescheduled": "آپ کی اپائنٹمنٹ کا وقت بدل دیا گیا ہے۔",
+  "booking.saved.cancelled": "آپ کی اپائنٹمنٹ منسوخ کر دی گئی ہے۔",
+  "booking.appointment.title": "آپ کی اپائنٹمنٹ",
+  "booking.appointment.all": "میری تمام اپائنٹمنٹس دیکھیں"
 }
