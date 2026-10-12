@@ -1171,6 +1171,11 @@ def _patient_nav(loc: str, *, current: str) -> list[dict[str, Any]]:
             "label": translate("nav.documents", loc),
             "current": current == "documents",
         },
+        {
+            "href": f"/{loc}/patient/doctors",
+            "label": translate("nav.find_doctor", loc),
+            "current": current == "doctors",
+        },
     ]
 
 

@@ -20,7 +20,7 @@ from app.db.models import (
 from app.deps import Actor
 from sqlalchemy import select
 
-from tests.conftest import make_user
+from tests.conftest import TEST_PASSWORD, make_user
 
 NOW = datetime(2026, 10, 12, 8, 0, tzinfo=UTC)  # Monday 13:00 in Pakistan
 TODAY = date(2026, 10, 12)
@@ -117,3 +117,9 @@ async def add_appointment(
     db.add(row)
     await db.commit()
     return row
+
+
+async def login(client, email: str) -> None:
+    """Sign in through the real login endpoint; the client keeps the cookies."""
+    r = await client.post("/api/v1/auth/login", json={"email": email, "password": TEST_PASSWORD})
+    assert r.status_code == 200, r.text

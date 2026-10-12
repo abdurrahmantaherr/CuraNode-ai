@@ -65,6 +65,7 @@ from app.log_config import configure_logging, get_logger
 from app.paths import STATIC_DIR, TEMPLATES_DIR
 from app.profile.router import router as profile_router
 from app.settings import settings
+from app.web.booking import router as web_booking_router
 from app.web.documents import router as web_documents_router
 from app.web.router import router as web_router
 from app.web.unavailable import (
@@ -190,6 +191,7 @@ app.include_router(consent_router)
 app.include_router(documents_router)
 app.include_router(doctor_documents_router)
 app.include_router(web_documents_router)
+app.include_router(web_booking_router)
 app.include_router(web_router)
 
 
