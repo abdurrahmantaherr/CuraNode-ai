@@ -434,10 +434,10 @@ class ScheduleException(Base):
 class Appointment(Base):
     """appointment — shared, pre-existing; owned by the booking work (P5).
 
-    Mapped only so D7 can COUNT upcoming bookings against a slot (spec R10)
-    and so the SQLite test schema has the table. D7 never writes it and never
-    reads a patient column; columns and CHECK follow the live table
-    (verified 2026-10-10).
+    Mapped so D7 can COUNT upcoming bookings against a slot (spec R10) and so
+    the SQLite test schema has the table. D7 never writes it and never reads a
+    patient column; `booking/service.py` (P5) is what writes it. Columns and
+    CHECK follow the live table (verified 2026-10-10).
     """
 
     __tablename__ = "appointment"
@@ -466,6 +466,17 @@ class Appointment(Base):
             name="appointment_status_check",
         ),
         Index("idx_appointment_schedule_id", "schedule_id"),
+        # P5: at most one non-cancelled appointment per schedule time. The booking
+        # service refuses a taken time under a per-doctor lock; this makes the
+        # database refuse it too. `schedule_id` is nullable and NULLs never clash.
+        Index(
+            "uq_appointment_active_slot",
+            "schedule_id",
+            "slot_start",
+            unique=True,
+            postgresql_where=text("status <> 'cancelled'"),
+            sqlite_where=text("status <> 'cancelled'"),
+        ),
     )
 
 
