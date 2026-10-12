@@ -10,17 +10,17 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from ..booking import display, service, slots
 from ..booking.schemas import AppointmentRow, ClinicRef
 from ..db.models import UserRole
-from ..deps import Actor, OptionalActorDep, SessionDep
-from ..errors import NotFound
+from ..deps import Actor, OptionalActorDep, SessionDep, check_booking_write_rate
+from ..errors import BookingRefused, NotFound, RateLimited
 from ..i18n.catalogue import normalise_locale, translate
 from .router import _area, _patient_nav, _render, login_redirect
 
@@ -238,3 +238,213 @@ async def doctor_page(
     return await _render_doctor(
         request, loc, session, actor, parsed, clinic_raw=clinic, moving_raw=moving
     )
+
+
+# ── Confirm ──────────────────────────────────────────────────────────────
+def _parse_slot(value: str) -> datetime | None:
+    """`YYYY-MM-DDTHH:MM` (Pakistan time) as an aware UTC instant, else None."""
+    try:
+        return slots.parse_local(value)
+    except ValueError:
+        return None
+
+
+@router.get("/{locale}/patient/doctors/{doctor_id}/confirm", response_class=HTMLResponse)
+async def confirm_page(
+    request: Request,
+    locale: str,
+    doctor_id: str,
+    session: SessionDep,
+    actor: OptionalActorDep,
+    clinic: str = "",
+    at: str = "",
+    moving: str = "",
+) -> Response:
+    if (redirect := _guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    parsed = _parse_id(doctor_id)
+    if parsed is None:
+        return await _find_not_found(request, loc, session)
+    doctor_url = f"/{loc}/patient/doctors/{parsed}"
+    clinic_id, start = _parse_id(clinic), _parse_slot(at)
+    if clinic_id is None or start is None:
+        return RedirectResponse(doctor_url, status_code=303)
+    try:
+        doctor = await service.get_doctor(session, parsed)
+    except NotFound:
+        return await _find_not_found(request, loc, session)
+    chosen = next((c for c in doctor.clinics if c.id == clinic_id), None)
+    if chosen is None:
+        return RedirectResponse(doctor_url, status_code=303)
+    try:
+        options = await service.list_options(session, parsed, clinic_id)
+    except NotFound:  # the doctor changed between the two reads
+        return await _find_not_found(request, loc, session)
+    if start not in {moment for day in options for moment in day.times}:
+        return await _render_doctor(
+            request,
+            loc,
+            session,
+            actor,
+            parsed,
+            clinic_raw=clinic,
+            moving_raw=moving,
+            status_code=409,
+            page_error=translate("errors.booking_not_offered", loc),
+        )
+    moving_row = await _moving_row(session, actor, parsed, moving)
+    back = {"clinic": str(clinic_id)}
+    if moving_row is not None:
+        back["moving"] = str(moving_row.id)
+    local = slots.to_local(start)
+    return _render(
+        request,
+        "booking/confirm.html",
+        loc,
+        path_suffix=f"/patient/doctors/{parsed}",
+        doctor=doctor,
+        clinic=chosen,
+        day=local.date(),
+        start=start,
+        moving=moving_row,
+        replaces_text=(
+            translate(
+                "booking.confirm.replaces",
+                loc,
+                date=moving_row.starts_at.date().isoformat(),
+                time=display.hhmm(moving_row.starts_at),
+            )
+            if moving_row is not None
+            else ""
+        ),
+        action=(
+            f"/{loc}/patient/appointments/{moving_row.id}/reschedule"
+            if moving_row is not None
+            else f"/{loc}/patient/appointments"
+        ),
+        back_href=f"{doctor_url}?{urlencode(back)}",
+        **_ctx(
+            loc,
+            "booking.confirm.title_move" if moving_row is not None else "booking.confirm.title",
+            current="doctors",
+        ),
+    )
+
+
+# ── Book ─────────────────────────────────────────────────────────────────
+@router.post("/{locale}/patient/appointments")
+async def book_submit(
+    request: Request,
+    locale: str,
+    session: SessionDep,
+    actor: OptionalActorDep,
+    doctor_id: Annotated[str, Form()] = "",
+    clinic_id: Annotated[str, Form()] = "",
+    slot: Annotated[str, Form()] = "",
+) -> Response:
+    if (redirect := _guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    doctor = _parse_id(doctor_id)
+    if doctor is None:
+        return await _find_not_found(request, loc, session)
+    clinic, start = _parse_id(clinic_id), _parse_slot(slot)
+    if clinic is None or start is None:
+        return RedirectResponse(f"/{loc}/patient/doctors/{doctor}", status_code=303)
+
+    async def again(code: int, message: str) -> Response:
+        return await _render_doctor(
+            request,
+            loc,
+            session,
+            actor,
+            doctor,
+            clinic_raw=clinic_id,
+            status_code=code,
+            page_error=message,
+        )
+
+    try:
+        await check_booking_write_rate(actor)
+    except RateLimited:
+        return await again(429, translate("errors.rate_limited", loc))
+    try:
+        appointment = await service.book(
+            session, actor, doctor, clinic, start, user_agent=request.headers.get("user-agent")
+        )
+    except BookingRefused as exc:
+        await session.rollback()  # let go of the doctor lock before drawing the page
+        return await again(exc.http_status, translate(exc.message_key, loc))
+    except NotFound:
+        await session.rollback()
+        return RedirectResponse(f"/{loc}/patient/doctors?notice=unavailable", status_code=303)
+    return RedirectResponse(
+        f"/{loc}/patient/appointments/{appointment.id}?saved=booked", status_code=303
+    )
+
+
+# ── Move a booking ───────────────────────────────────────────────────────
+@router.post("/{locale}/patient/appointments/{appointment_id}/reschedule")
+async def reschedule_submit(
+    request: Request,
+    locale: str,
+    appointment_id: str,
+    session: SessionDep,
+    actor: OptionalActorDep,
+    clinic_id: Annotated[str, Form()] = "",
+    slot: Annotated[str, Form()] = "",
+) -> Response:
+    if (redirect := _guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    list_url = f"/{loc}/patient/appointments"
+    parsed = _parse_id(appointment_id)
+    if parsed is None:
+        return RedirectResponse(list_url, status_code=303)
+    try:
+        row = await service.appointment_for_patient(session, actor, parsed)
+    except NotFound:  # not theirs and not there look the same
+        return RedirectResponse(list_url, status_code=303)
+    clinic, start = _parse_id(clinic_id), _parse_slot(slot)
+    if clinic is None or start is None:
+        return RedirectResponse(
+            f"/{loc}/patient/doctors/{row.doctor_id}?moving={row.id}", status_code=303
+        )
+
+    async def again(code: int, message: str) -> Response:
+        return await _render_doctor(
+            request,
+            loc,
+            session,
+            actor,
+            row.doctor_id,
+            clinic_raw=clinic_id,
+            moving_raw=str(row.id),
+            status_code=code,
+            page_error=message,
+        )
+
+    try:
+        await check_booking_write_rate(actor)
+    except RateLimited:
+        return await again(429, translate("errors.rate_limited", loc))
+    try:
+        moved = await service.reschedule(
+            session,
+            actor,
+            parsed,
+            clinic,
+            start,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except BookingRefused as exc:
+        await session.rollback()
+        return await again(exc.http_status, translate(exc.message_key, loc))
+    except NotFound:
+        await session.rollback()
+        return RedirectResponse(list_url, status_code=303)
+    return RedirectResponse(f"{list_url}/{moved.id}?saved=rescheduled", status_code=303)

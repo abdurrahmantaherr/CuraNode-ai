@@ -685,5 +685,12 @@
   "booking.doctor.no_times": "No free times at this hospital in the next 14 days.",
   "booking.doctor.back": "Back to doctors",
   "booking.doctor.moving": "Moving your appointment on {date} at {time}. Pick a new time.",
-  "booking.doctor.keep": "Keep my current appointment"
+  "booking.doctor.keep": "Keep my current appointment",
+  "booking.confirm.title": "Confirm your appointment",
+  "booking.confirm.title_move": "Confirm the new time",
+  "booking.confirm.action": "Confirm booking",
+  "booking.confirm.action_move": "Confirm new time",
+  "booking.confirm.change": "Choose a different time",
+  "booking.confirm.hint": "You can cancel any time before the appointment starts.",
+  "booking.confirm.replaces": "This replaces your appointment on {date} at {time}."
 }

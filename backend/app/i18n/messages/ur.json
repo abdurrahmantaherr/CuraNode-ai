@@ -685,5 +685,12 @@
   "booking.doctor.no_times": "اس ہسپتال میں اگلے 14 دنوں میں کوئی خالی وقت نہیں۔",
   "booking.doctor.back": "ڈاکٹروں کی فہرست پر واپس",
   "booking.doctor.moving": "آپ {date} کو {time} بجے کی اپائنٹمنٹ کا وقت بدل رہے ہیں۔ نیا وقت منتخب کریں۔",
-  "booking.doctor.keep": "موجودہ اپائنٹمنٹ برقرار رکھیں"
+  "booking.doctor.keep": "موجودہ اپائنٹمنٹ برقرار رکھیں",
+  "booking.confirm.title": "اپنی اپائنٹمنٹ کی تصدیق کریں",
+  "booking.confirm.title_move": "نئے وقت کی تصدیق کریں",
+  "booking.confirm.action": "بکنگ کی تصدیق کریں",
+  "booking.confirm.action_move": "نئے وقت کی تصدیق کریں",
+  "booking.confirm.change": "کوئی اور وقت منتخب کریں",
+  "booking.confirm.hint": "اپائنٹمنٹ شروع ہونے سے پہلے آپ کسی بھی وقت اسے منسوخ کر سکتے ہیں۔",
+  "booking.confirm.replaces": "یہ {date} کو {time} بجے کی آپ کی اپائنٹمنٹ کی جگہ لے گی۔"
 }
