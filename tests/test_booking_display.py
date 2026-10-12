@@ -6,6 +6,8 @@ from datetime import datetime
 
 import pytest
 from app.booking import display
+from app.booking.schemas import DayRow
+from app.db import types as dbtypes
 
 from tests.booking_helpers import WED, at
 
@@ -43,3 +45,44 @@ def test_hhmm_is_pakistan_time():
 def test_hhmm_reads_a_naive_value_as_utc():
     naive = datetime(2026, 10, 14, 5, 0)  # noqa: DTZ001 - SQLite hands back naive stamps
     assert display.hhmm(naive) == "10:00"
+
+
+def test_build_day_rows_has_name_time_and_status_only():
+    rows = [
+        DayRow(
+            starts_at=at(WED, "10:00").astimezone(dbtypes.PKT),
+            patient_name="Ayesha Raza",
+            status="booked",
+        ),
+        DayRow(
+            starts_at=at(WED, "00:15").astimezone(dbtypes.PKT),
+            patient_name="Bilal Khan",
+            status="cancelled",
+        ),
+    ]
+    out = display.build_day_rows(rows, "en")
+    assert out == [
+        display.DayRowOut(
+            time="10:00", name="Ayesha Raza", status="Confirmed", badge="badge--ok", cancelled=False
+        ),
+        display.DayRowOut(
+            time="00:15",
+            name="Bilal Khan",
+            status="Cancelled",
+            badge="badge--err",
+            cancelled=True,
+        ),
+    ]
+    assert set(display.DayRowOut.__dataclass_fields__) == {
+        "time",
+        "name",
+        "status",
+        "badge",
+        "cancelled",
+    }
+
+
+def test_build_day_rows_speaks_urdu_and_handles_nothing():
+    row = DayRow(starts_at=at(WED, "10:00"), patient_name="X", status="done")
+    assert display.build_day_rows([row], "ur")[0].status == "مکمل"
+    assert display.build_day_rows([], "en") == []

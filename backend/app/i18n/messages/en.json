@@ -707,5 +707,16 @@
   "booking.saved.rescheduled": "Your appointment has been moved.",
   "booking.saved.cancelled": "Your appointment was cancelled.",
   "booking.appointment.title": "Your appointment",
-  "booking.appointment.all": "See all my appointments"
+  "booking.appointment.all": "See all my appointments",
+  "booking.doctor_day.title": "Appointments",
+  "booking.doctor_day.note": "Name, time and status only. Opening a record still needs the patient's permission.",
+  "booking.doctor_day.show": "Show",
+  "booking.doctor_day.prev": "Previous day",
+  "booking.doctor_day.next": "Next day",
+  "booking.doctor_day.today": "Today",
+  "booking.doctor_day.empty": "No appointments on this day.",
+  "booking.col.patient": "Patient",
+  "booking.today.title": "Appointments today",
+  "booking.today.empty": "No appointments today.",
+  "booking.today.all": "See all appointments"
 }

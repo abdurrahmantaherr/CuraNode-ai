@@ -30,6 +30,8 @@ from supabase_auth.errors import AuthApiError
 from ..admin import schemas as admin_schemas
 from ..admin import service as admin_service
 from ..audit import writer as audit
+from ..booking import display as booking_display
+from ..booking import service as booking_service
 from ..cache import cache, oauth_state_key
 from ..consent import access_log as consent_access_log
 from ..consent import gateway as consent_gateway
@@ -856,6 +858,7 @@ async def _guarded(
 
     is_patient = actor.role == UserRole.PATIENT.value
     patients = None
+    appointments_today = None
     if is_patient:
         nav_items = _patient_nav(loc, current="dashboard")
         links = [
@@ -884,6 +887,10 @@ async def _guarded(
             detail={"patient_count": len(patients)},
         )
         await session.commit()
+        # P5: today's appointments, name, time and status only (booking is not consent).
+        appointments_today = booking_display.build_day_rows(
+            await booking_service.doctor_day(session, actor, booking_service.current_day()), loc
+        )
     elif actor.role == UserRole.DOCTOR.value:
         # A pending doctor: no patient-data affordance at all (FR3), but the
         # schedule exposes none, so it is their one link (D7 decision 6).
@@ -896,6 +903,8 @@ async def _guarded(
     extra: dict[str, Any] = {}
     if patients is not None:
         extra["patients"] = patients
+    if appointments_today is not None:
+        extra["appointments_today"] = appointments_today
     return _render(
         request,
         "shell.html",
@@ -1980,6 +1989,13 @@ def _doctor_nav(loc: str, *, current: str, verified: bool = True) -> list[dict[s
                 "href": f"/{loc}/doctor/passport-lookup",
                 "label": translate("nav.lookup", loc),
                 "current": current == "lookup",
+            }
+        )
+        items.append(
+            {
+                "href": f"/{loc}/doctor/appointments",
+                "label": translate("nav.appointments", loc),
+                "current": current == "appointments",
             }
         )
     items.append(

@@ -9,11 +9,11 @@ and a refused action shows the same page again with fresh times and the reason.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Annotated, Any
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from ..booking import display, service, slots
@@ -22,7 +22,7 @@ from ..db.models import UserRole
 from ..deps import Actor, OptionalActorDep, SessionDep, check_booking_write_rate
 from ..errors import BookingRefused, NotFound, RateLimited
 from ..i18n.catalogue import normalise_locale, translate
-from .router import _area, _patient_nav, _render, login_redirect
+from .router import _area, _doctor_nav, _patient_nav, _render, login_redirect
 
 router = APIRouter(tags=["web-booking"])
 
@@ -609,3 +609,67 @@ async def reschedule_page(
         )
     params = urlencode({"clinic": str(row.clinic_id), "moving": str(row.id)})
     return RedirectResponse(f"/{loc}/patient/doctors/{row.doctor_id}?{params}", status_code=303)
+
+
+# ── The doctor's day ─────────────────────────────────────────────────────
+_DAY_SPAN = 366  # a date further than this from today shows today instead
+
+
+def _doctor_guard(request: Request, locale: str, actor: Actor | None) -> Response | None:
+    """Signed out goes to sign-in and back here, another role goes to its own area,
+    and a doctor who is not verified goes to their dashboard (where the banner
+    explains why): booking shows a doctor's patients, so it is for verified doctors."""
+    loc = normalise_locale(locale)
+    if actor is None:
+        return login_redirect(loc, request)
+    if actor.role != UserRole.DOCTOR.value:
+        return RedirectResponse(f"/{loc}/{_area(actor.role)}", status_code=303)
+    if not actor.onboarding_complete:
+        return RedirectResponse(f"/{loc}/onboarding", status_code=303)
+    if not actor.is_verified_doctor:
+        return RedirectResponse(f"/{loc}/doctor", status_code=303)
+    return None
+
+
+def _pick_day(raw: str, today: date) -> date:
+    """The day asked for; today when it is missing, malformed or more than a year away."""
+    try:
+        parsed = date.fromisoformat(raw)
+    except ValueError:
+        return today
+    return parsed if abs((parsed - today).days) <= _DAY_SPAN else today
+
+
+@router.get("/{locale}/doctor/appointments", response_class=HTMLResponse)
+async def doctor_day_page(
+    request: Request,
+    locale: str,
+    session: SessionDep,
+    actor: OptionalActorDep,
+    day_raw: Annotated[str, Query(alias="date")] = "",
+) -> Response:
+    if (redirect := _doctor_guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    loc = normalise_locale(locale)
+    day = _pick_day(day_raw, service.current_day())
+    try:
+        found = await service.doctor_day(session, actor, day)
+    except NotFound:
+        return RedirectResponse(f"/{loc}/doctor", status_code=303)
+    base = f"/{loc}/doctor/appointments"
+    return _render(
+        request,
+        "booking/doctor_day.html",
+        loc,
+        path_suffix=f"/doctor/appointments?date={day.isoformat()}",
+        crumb=translate("auth.role.doctor", loc),
+        page_title=translate("booking.doctor_day.title", loc),
+        nav_items=_doctor_nav(loc, current="appointments"),
+        day=day,
+        weekday_name=translate(f"weekday.{day.weekday()}", loc),
+        rows=display.build_day_rows(found, loc),
+        prev_href=f"{base}?date={(day - timedelta(days=1)).isoformat()}",
+        next_href=f"{base}?date={(day + timedelta(days=1)).isoformat()}",
+        today_href=base,
+    )

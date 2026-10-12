@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{#- A verified doctor's appointments for one day (P5 spec 3.3). Name, time and
+    status only: a booking is not consent, so opening a record still needs the
+    patient's own grant (FR4). Works without JavaScript: the date picker is a GET form.
+
+    Context (built in web/booking.py::doctor_day_page):
+      day, weekday_name   the Pakistan date shown and its weekday name
+      rows                list[DayRowOut]
+      prev_href, next_href, today_href -#}
+
+{% block title %}{{ t('booking.doctor_day.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    <div class="panel stack">
+      <p class="lead">{{ t('booking.doctor_day.note') }}</p>
+      <form class="stack" method="get" action="/{{ locale }}/doctor/appointments">
+        <label class="field" for="f-date">
+          <span class="field-label">{{ t('booking.field.date') }}</span>
+          <input class="input" id="f-date" name="date" type="date" value="{{ day.isoformat() }}">
+        </label>
+        <div class="btn-row">
+          <button class="btn btn--primary" type="submit">{{ t('booking.doctor_day.show') }}</button>
+          <a class="btn btn--secondary btn--sm" href="{{ prev_href }}">{{ t('booking.doctor_day.prev') }}</a>
+          <a class="btn btn--secondary btn--sm" href="{{ today_href }}">{{ t('booking.doctor_day.today') }}</a>
+          <a class="btn btn--secondary btn--sm" href="{{ next_href }}">{{ t('booking.doctor_day.next') }}</a>
+        </div>
+      </form>
+    </div>
+
+    <div class="panel">
+      <div class="panel__label">{{ weekday_name }} <bdi>{{ day.isoformat() }}</bdi></div>
+      {% if rows %}
+        {% set day_rows = rows %}
+        {% include "booking/_day_table.html" %}
+      {% else %}
+        <p class="empty-state">{{ t('booking.doctor_day.empty') }}</p>
+      {% endif %}
+    </div>
+  </main>
+</div>
+{% endblock %}

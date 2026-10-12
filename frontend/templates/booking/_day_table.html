@@ -1,0 +1,21 @@
+{#- A doctor's appointments for one day. Expects `day_rows` (list[DayRowOut]).
+    Name, time and status only. Names are autoescaped; never use |safe here.
+    The time is forced left-to-right on the Urdu page. -#}
+<table class="patient-table">
+  <thead>
+    <tr>
+      <th scope="col">{{ t('booking.field.time') }}</th>
+      <th scope="col">{{ t('booking.col.patient') }}</th>
+      <th scope="col">{{ t('booking.field.status') }}</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in day_rows %}
+      <tr{% if row.cancelled %} style="color:var(--muted)"{% endif %}>
+        <td dir="ltr" class="mono">{{ row.time }}</td>
+        <td>{{ row.name }}</td>
+        <td><span class="badge {{ row.badge }}">{{ row.status }}</span></td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>

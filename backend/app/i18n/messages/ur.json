@@ -707,5 +707,16 @@
   "booking.saved.rescheduled": "آپ کی اپائنٹمنٹ کا وقت بدل دیا گیا ہے۔",
   "booking.saved.cancelled": "آپ کی اپائنٹمنٹ منسوخ کر دی گئی ہے۔",
   "booking.appointment.title": "آپ کی اپائنٹمنٹ",
-  "booking.appointment.all": "میری تمام اپائنٹمنٹس دیکھیں"
+  "booking.appointment.all": "میری تمام اپائنٹمنٹس دیکھیں",
+  "booking.doctor_day.title": "اپائنٹمنٹس",
+  "booking.doctor_day.note": "صرف نام، وقت اور حالت۔ ریکارڈ کھولنے کے لیے پھر بھی مریض کی اجازت درکار ہے۔",
+  "booking.doctor_day.show": "دکھائیں",
+  "booking.doctor_day.prev": "پچھلا دن",
+  "booking.doctor_day.next": "اگلا دن",
+  "booking.doctor_day.today": "آج",
+  "booking.doctor_day.empty": "اس دن کوئی اپائنٹمنٹ نہیں۔",
+  "booking.col.patient": "مریض",
+  "booking.today.title": "آج کی اپائنٹمنٹس",
+  "booking.today.empty": "آج کوئی اپائنٹمنٹ نہیں۔",
+  "booking.today.all": "تمام اپائنٹمنٹس دیکھیں"
 }

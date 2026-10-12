@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime
 
 from ..i18n.catalogue import translate
 from . import slots
+from .schemas import DayRow
 
 STATUS_BADGE = {
     "booked": "badge--ok",
@@ -30,3 +33,28 @@ def status_badge(status: str) -> str:
 def hhmm(value: datetime) -> str:
     """The Pakistan wall-clock time of a stored instant, `HH:MM`."""
     return slots.to_local(value).strftime("%H:%M")
+
+
+@dataclass(frozen=True)
+class DayRowOut:
+    """One line of a doctor's day, ready to draw. Name, time and status only: a
+    booking is not consent, so nothing else about the patient is read here."""
+
+    time: str
+    name: str
+    status: str  # translated
+    badge: str  # a CSS class
+    cancelled: bool
+
+
+def build_day_rows(rows: Iterable[DayRow], locale: str) -> list[DayRowOut]:
+    return [
+        DayRowOut(
+            time=hhmm(row.starts_at),
+            name=row.patient_name,
+            status=status_label(row.status, locale),
+            badge=status_badge(row.status),
+            cancelled=row.status == "cancelled",
+        )
+        for row in rows
+    ]

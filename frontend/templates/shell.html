@@ -57,6 +57,10 @@
       {% endif %}
     </div>
 
+    {% if appointments_today is defined %}
+      {% include "doctor/_appointments_today.html" %}
+    {% endif %}
+
     {% if patients is defined %}
       {% include "doctor/_patient_list.html" %}
     {% endif %}
