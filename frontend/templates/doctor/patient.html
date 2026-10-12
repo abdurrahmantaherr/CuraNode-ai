@@ -9,7 +9,8 @@
       passport_no   the patient's passport number
       sections      canonical section keys
       shared        {section: data | None}; None = not shared,
-                    [] = shared but nothing recorded -#}
+                    [] = shared but nothing recorded
+      patient_id    the patient's id (for the medical timeline link) -#}
 
 {% block title %}{{ t('doctor_patient.title') }} · {{ t('app.name') }}{% endblock %}
 
@@ -45,14 +46,17 @@
               <li class="entry-row">
                 <div class="entry-row__main">
                   <div class="entry-row__title">{{ row.substance or row.name }}</div>
-                  <div class="field-help">
-                    {%- set parts = [] -%}
-                    {%- for k in ('reaction', 'severity', 'strength', 'frequency') if row.get(k) -%}
+                  {% set parts = [] -%}
+                  {#- the line under the title: what is known about the entry, nothing when nothing is -#}
+                  {%- set line -%}
+                    {%- for k in ('reaction', 'severity', 'strength', 'frequency', 'detail') if row.get(k) -%}
                       {%- set _ = parts.append(row[k]) -%}
                     {%- endfor -%}
-                    {%- if row.get('since') -%}{%- set _ = parts.append(t('doctor_patient.since', date=row.since.isoformat())) -%}{%- endif -%}
+                    {#- a visit, prescription or lab report happened ON a day; a condition or medicine runs SINCE one -#}
+                    {%- if row.get('since') -%}{%- set _ = parts.append(t('doctor_patient.on' if s in ('visits', 'prescriptions', 'lab_reports') else 'doctor_patient.since', date=row.since.isoformat())) -%}{%- endif -%}
                     {{ parts | join(' · ') }}
-                  </div>
+                  {%- endset -%}
+                  {% if line | trim %}<div class="field-help">{{ line | trim }}</div>{% endif %}
                 </div>
               </li>
             {% endfor %}
@@ -61,7 +65,8 @@
       </section>
     {% endfor %}
 
-    <div>
+    <div class="btn-row">
+      <a class="btn btn--primary" href="/{{ locale }}/doctor/patient/{{ patient_id }}/timeline">{{ t('doctor_patient.timeline') }}</a>
       <a class="btn btn--secondary" href="/{{ locale }}/doctor/passport-lookup">{{ t('doctor_patient.back') }}</a>
     </div>
   </main>

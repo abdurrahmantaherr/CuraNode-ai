@@ -1245,6 +1245,137 @@ async def list_in_progress(
     return [to_out(d, actor.user_id) for d in (await session.execute(stmt)).scalars().all()]
 
 
+@dataclass(frozen=True)
+class FinalizedDocument:
+    """One SAVED document as the medical timeline reads it (P3): the document, who wrote it
+    (`source`), the rows of its main table that may be relied on, and its structured sections.
+    Everything is computed from stored data — nothing new is stored."""
+
+    doc: Document
+    source: str  # SOURCE_PATIENT_UPLOAD | SOURCE_DOCTOR_GENERATED
+    rows: list[RowOut]
+    parsed: sections.DocumentSections | None
+    # Prescription items some other feature made out of this document's cells (`ocr_extraction
+    # .item_id`): when present, the document is the source of those prescriptions and the
+    # timeline lists them once. Empty for every document this app has produced so far.
+    item_ids: frozenset[uuid.UUID] = frozenset()
+
+
+async def finalized_documents(
+    session: AsyncSession, patient: Patient, doc_types: tuple[str, ...]
+) -> list[FinalizedDocument]:
+    """Every FINALIZED document of these types belonging to ONE patient, newest upload first —
+    in two queries however many there are (the documents with their OCR job, and their extracted
+    cells).
+
+    Scoped by `patient.id` alone: the caller is the consent gateway (or the patient reading their
+    own record), which has already decided this reader may see them. Only SAVED documents: an
+    upload still awaiting review is not a record (see "An upload is never a record").
+
+    What counts as confirmed: a document the patient uploaded and saved shows only the rows the
+    patient reviewed (`reviewed_at` set — a table the review step never covered stays a mere
+    proposal and is left out); a document a doctor wrote has no extraction to confirm, so all its
+    rows stand."""
+    found = (
+        await session.execute(
+            select(Document, OcrJob)
+            .outerjoin(OcrJob, OcrJob.document_id == Document.id)  # one job per document
+            .where(
+                Document.patient_id == patient.id,
+                Document.status == DocumentStatus.FINALIZED.value,
+                Document.doc_type.in_(doc_types),
+            )
+            .order_by(Document.uploaded_at.desc(), Document.id)
+        )
+    ).all()
+    if not found:
+        return []
+    docs = [doc for doc, _ in found]
+    jobs = [job for _, job in found if job is not None]
+    job_by_doc = {job.document_id: job for job in jobs}
+    cells_by_job: dict[uuid.UUID, list[OcrExtraction]] = {}
+    if jobs:
+        for cell in (
+            (
+                await session.execute(
+                    select(OcrExtraction)
+                    .where(OcrExtraction.job_id.in_([job.id for job in jobs]))
+                    .order_by(OcrExtraction.row_index, OcrExtraction.id)
+                )
+            )
+            .scalars()
+            .all()
+        ):
+            cells_by_job.setdefault(cell.job_id, []).append(cell)
+    out: list[FinalizedDocument] = []
+    for doc in docs:
+        job = job_by_doc.get(doc.id)
+        source = _document_source(doc, patient.user_id)
+        rows = _build_rows(
+            cells_by_job.get(job.id, []) if job else [],
+            extractors.FIELDS[doc.doc_type],
+            only_kept=True,
+            doc_type=doc.doc_type,
+            ocr_text=doc.ocr_text,
+        )
+        if source == SOURCE_PATIENT_UPLOAD:
+            rows = [r for r in rows if any(f.status == "human_verified" for f in r.fields)]
+        parsed = (
+            sections.apply_ai_sections(
+                sections.structure_document(doc.ocr_text, doc.doc_type),
+                job.ai_sections if job else None,
+            )
+            if doc.ocr_text
+            else None
+        )
+        item_ids = frozenset(
+            cell.item_id for cell in (cells_by_job.get(job.id, []) if job else []) if cell.item_id
+        )
+        out.append(
+            FinalizedDocument(doc=doc, source=source, rows=rows, parsed=parsed, item_ids=item_ids)
+        )
+    return out
+
+
+@dataclass(frozen=True)
+class InProgressDocument:
+    """An upload that is not a record yet — all the timeline may show of it: what it is, what it is
+    called, when it was uploaded and where it stands. Never what was read from it."""
+
+    id: uuid.UUID
+    doc_type: str
+    status: str
+    failure_code: str | None
+    name: str | None
+    uploaded_at: datetime
+
+
+IN_PROGRESS_LIMIT = 100
+
+
+async def in_progress_documents(
+    session: AsyncSession, patient: Patient
+) -> list[InProgressDocument]:
+    """The patient's uploads that are still being read, waiting for their review, or failed —
+    newest first, in one query. An upload is not a record until the patient confirms it, so the
+    timeline lists these apart from the saved history and without any extracted value."""
+    statuses = [s.value for s in IN_PROGRESS_STATUSES]
+    rows = await session.execute(
+        select(
+            Document.id,
+            Document.doc_type,
+            Document.status,
+            Document.failure_code,
+            Document.original_filename,
+            Document.uploaded_at,
+        )
+        .where(Document.patient_id == patient.id, Document.status.in_(statuses))
+        .order_by(Document.uploaded_at.desc(), Document.id)
+        .limit(IN_PROGRESS_LIMIT)
+    )
+    return [InProgressDocument(*row) for row in rows.all()]
+
+
 async def get_file(
     session: AsyncSession, actor: Actor, document_id: uuid.UUID
 ) -> tuple[bytes, str, str]:
