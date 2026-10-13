@@ -469,6 +469,140 @@ class Appointment(Base):
     )
 
 
+# ── Clinical visits (P3 — read-only) ─────────────────────────────────────
+# The shared schema's doctor-owned visit tables (ERD: ENCOUNTER, DIAGNOSIS, PRESCRIPTION,
+# PRESCRIPTION_ITEM, MEDICINE). They are mapped ONLY so the medical timeline (P3) can read a
+# patient's visits, diagnoses and prescriptions; this codebase never writes them — the
+# consultation feature that does is a later one. Columns and CHECKs follow the live tables
+# (verified against information_schema 2026-10-11); the live tables were empty then. A visit
+# is read only through `consent/gateway.py`, like the profile tables (see `timeline/sources.py`).
+class Encounter(Base):
+    """encounter — one doctor visit (a consultation). Doctor-owned; read-only here."""
+
+    __tablename__ = "encounter"
+
+    id: Mapped[uuid.UUID] = mapped_column("encounter_id", Uuid, primary_key=True, default=uuid7)
+    appointment_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("appointment.appointment_id"), nullable=True
+    )
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient.patient_id"), nullable=False
+    )
+    doctor_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("doctor.doctor_id"), nullable=False
+    )
+    clinic_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("clinic.clinic_id"), nullable=False
+    )
+    visit_datetime: Mapped[datetime] = _ts(nullable=False)
+    chief_complaint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    clinical_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # A model-written summary of the visit (never the doctor's own words) — the timeline labels
+    # it as AI-generated wherever it is shown.
+    ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (Index("idx_encounter_patient_visit", "patient_id", "visit_datetime"),)
+
+
+class Diagnosis(Base):
+    """diagnosis — a diagnosis made during one encounter. Doctor-owned; read-only here."""
+
+    __tablename__ = "diagnosis"
+
+    id: Mapped[uuid.UUID] = mapped_column("diagnosis_id", Uuid, primary_key=True, default=uuid7)
+    encounter_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("encounter.encounter_id"), nullable=False
+    )
+    icd10_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    severity: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    is_chronic: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class Medicine(Base):
+    """medicine — the shared catalogue a prescription item points at. Read-only here."""
+
+    __tablename__ = "medicine"
+
+    id: Mapped[uuid.UUID] = mapped_column("medicine_id", Uuid, primary_key=True, default=uuid7)
+    generic_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    brand_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    strength: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    form: Mapped[str | None] = mapped_column(String(60), nullable=True)
+
+
+class Prescription(Base):
+    """prescription — a doctor's prescription, bound to an encounter. Read-only here.
+
+    A patient's own uploaded prescription is NOT in this table (it has no encounter or
+    prescribing doctor): it is a finalized `document`, and the timeline reads it from there.
+    """
+
+    __tablename__ = "prescription"
+
+    id: Mapped[uuid.UUID] = mapped_column("prescription_id", Uuid, primary_key=True, default=uuid7)
+    encounter_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("encounter.encounter_id"), nullable=False
+    )
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient.patient_id"), nullable=False
+    )
+    doctor_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("doctor.doctor_id"), nullable=False
+    )
+    issue_date: Mapped[date] = mapped_column(nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="digital")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    created_at: Mapped[datetime] = _ts(nullable=False, default=utcnow)
+
+    __table_args__ = (
+        CheckConstraint("source IN ('digital', 'ocr_upload')", name="prescription_source_check"),
+    )
+
+
+class PrescriptionItem(Base):
+    """prescription_item — one medicine on a prescription. Read-only here."""
+
+    __tablename__ = "prescription_item"
+
+    id: Mapped[uuid.UUID] = mapped_column("item_id", Uuid, primary_key=True, default=uuid7)
+    prescription_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("prescription.prescription_id"), nullable=False
+    )
+    medicine_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("medicine.medicine_id"), nullable=False
+    )
+    dosage: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    frequency: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    duration_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    route: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class LabReport(Base):
+    """lab_report — the structured record of one lab report. Read-only here.
+
+    `document_id` is NOT NULL: every lab report is backed by a `document`, and that document is
+    what the timeline lists (so a lab report is never listed twice). The row contributes only
+    the visit it belongs to (`encounter_id`) and a fallback clinical date (`report_date`)."""
+
+    __tablename__ = "lab_report"
+
+    id: Mapped[uuid.UUID] = mapped_column("report_id", Uuid, primary_key=True, default=uuid7)
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient.patient_id"), nullable=False
+    )
+    encounter_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("encounter.encounter_id"), nullable=True
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("document.document_id"), nullable=False
+    )
+    lab_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    report_date: Mapped[date | None] = mapped_column(nullable=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending")
+
+
 # ── Patient profile (FR2) ────────────────────────────────────────────────
 class Allergy(Base):
     """A patient's known allergy.
@@ -695,7 +829,8 @@ class Document(Base):
     the column read as records; this app always writes it explicitly.
     `object_key` points into the private `medical-documents` bucket; the file
     is never moved or copied, finalizing only changes `status`.
-    `encounter_id` exists in the shared table but is never written here.
+    `encounter_id` (a document attached to a doctor's visit) is never written by this app;
+    it is mapped read-only so the medical timeline can show the relationship.
     """
 
     __tablename__ = "document"
@@ -703,6 +838,9 @@ class Document(Base):
     id: Mapped[uuid.UUID] = mapped_column("document_id", Uuid, primary_key=True, default=uuid7)
     patient_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("patient.patient_id", ondelete="CASCADE"), nullable=False
+    )
+    encounter_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("encounter.encounter_id"), nullable=True
     )
     doc_type: Mapped[str] = mapped_column(String(10), nullable=False)
     object_key: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -779,6 +917,12 @@ class OcrExtraction(Base):
     id: Mapped[uuid.UUID] = mapped_column("extraction_id", Uuid, primary_key=True, default=uuid7)
     job_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("ocr_job.job_id", ondelete="CASCADE"), nullable=False
+    )
+    # The prescription item this cell became, when another feature turned the document into a
+    # structured prescription. Never written here; read by the timeline to avoid listing one
+    # prescription twice (as the prescription and as the document it came from).
+    item_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("prescription_item.item_id"), nullable=True
     )
     field_name: Mapped[str] = mapped_column(String(20), nullable=False)
     extracted_value: Mapped[str | None] = mapped_column(String(255), nullable=True)

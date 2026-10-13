@@ -1172,6 +1172,11 @@ def _patient_nav(loc: str, *, current: str) -> list[dict[str, Any]]:
             "label": translate("nav.documents", loc),
             "current": current == "documents",
         },
+        {
+            "href": f"/{loc}/patient/timeline",
+            "label": translate("nav.timeline", loc),
+            "current": current == "timeline",
+        },
     ]
 
 
@@ -2122,6 +2127,7 @@ async def doctor_patient_page(
         page_title=translate("doctor_patient.title", loc),
         nav_items=_doctor_nav(loc, current="lookup"),
         passport_no=view.passport_no,
+        patient_id=parsed_id,
         sections=consent_schemas.SECTIONS,
         shared=shared,
         record=record,

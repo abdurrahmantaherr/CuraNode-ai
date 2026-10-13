@@ -41,6 +41,12 @@ transaction (BL-18). If that write fails the caller gets an exception, never
 data. `purpose` is mandatory on every call (BL-20); the shared `access_log`
 has no column for it, so it is part of the call contract only.
 
+Two forms of a section exist. The COMPACT form (`_READERS`) is what a doctor's patient page
+lists. The RICH form (`_RICH_READERS`, `read_section(..., rich=True)`) carries what the medical
+timeline (P3) needs — ids, dates, who recorded an entry; it is gated and logged exactly the
+same way. `visits`, `prescriptions` and `lab_reports` are read by `timeline/sources.py` — the
+only module besides this one that may select a patient's visits or prescriptions.
+
 Section contents are clinical PHI: nothing here logs them.
 """
 
@@ -90,6 +96,7 @@ from ..db.models import (
 )
 from ..deps import Actor
 from ..errors import ConsentDenied
+from ..timeline import sources as timeline_sources
 from . import service
 from .schemas import SECTIONS
 from .service import DOCTOR, _active, doctor_grant_filter, live_doctor
@@ -244,9 +251,16 @@ async def allowed_sections(
 
 
 async def read_section(
-    session: AsyncSession, actor: Actor, access: Access, section: str, *, purpose: str
+    session: AsyncSession,
+    actor: Actor,
+    access: Access,
+    section: str,
+    *,
+    purpose: str,
+    rich: bool = False,
 ) -> Any:
-    """One section's data, logged first for a non-owner. Does not commit."""
+    """One section's data, logged first for a non-owner. Does not commit. `rich` asks for the
+    form the medical timeline builds on (same permission check, same one log row)."""
     _require_purpose(purpose)
     if section not in access.sections:
         raise ConsentDenied()
@@ -264,7 +278,8 @@ async def read_section(
             )
         )
         await session.flush()  # a failed log write raises here, before any data leaves
-    return await _READERS[section](session, access.patient)
+    reader = _RICH_READERS.get(section) if rich else None
+    return await (reader or _READERS[section])(session, access.patient)
 
 
 async def read_sections(
@@ -331,10 +346,85 @@ async def _medications(session: AsyncSession, patient: Patient) -> list[dict[str
     ]
 
 
-async def _not_built_yet(session: AsyncSession, patient: Patient) -> list[dict[str, Any]]:
-    """Prescriptions, lab reports and visits arrive with P2/P3; until then an
-    allowed section is simply empty (shown as "Nothing recorded")."""
-    return []
+def _by(recorded_by: uuid.UUID | None, patient: Patient) -> str | None:
+    """Who wrote a profile entry: the patient, someone else (a clinician), or nobody on record."""
+    if recorded_by is None:
+        return None
+    return "patient" if recorded_by == patient.user_id else "clinician"
+
+
+async def _visits(session: AsyncSession, patient: Patient) -> list[dict[str, Any]]:
+    return timeline_sources.compact_visits(await timeline_sources.visits(session, patient))
+
+
+async def _prescriptions(session: AsyncSession, patient: Patient) -> list[dict[str, Any]]:
+    return timeline_sources.compact_prescriptions(
+        await timeline_sources.prescriptions(session, patient)
+    )
+
+
+async def _lab_reports(session: AsyncSession, patient: Patient) -> list[dict[str, Any]]:
+    return timeline_sources.compact_lab_reports(
+        await timeline_sources.lab_reports(session, patient)
+    )
+
+
+# ── Rich readers (the timeline's form: ids, dates, authorship) ───────────
+async def _allergies_rich(session: AsyncSession, patient: Patient) -> list[dict[str, Any]]:
+    rows = await session.execute(
+        select(Allergy)
+        .where(Allergy.patient_id == patient.id, Allergy.removed_at.is_(None))
+        .order_by(Allergy.recorded_at, Allergy.id)
+    )
+    return [
+        {
+            "id": a.id,
+            "substance": a.substance,
+            "reaction": a.reaction,
+            "severity": a.severity,
+            "recorded_at": a.recorded_at,
+            "by": _by(a.recorded_by, patient),
+        }
+        for a in rows.scalars().all()
+    ]
+
+
+async def _conditions_rich(session: AsyncSession, patient: Patient) -> list[dict[str, Any]]:
+    rows = await session.execute(
+        select(ChronicCondition)
+        .where(ChronicCondition.patient_id == patient.id, ChronicCondition.status != "resolved")
+        .order_by(ChronicCondition.recorded_at, ChronicCondition.id)
+    )
+    return [
+        {
+            "id": c.id,
+            "name": c.name,
+            "onset": c.onset_date,
+            "recorded_at": c.recorded_at,
+            "by": _by(c.recorded_by, patient),
+        }
+        for c in rows.scalars().all()
+    ]
+
+
+async def _medications_rich(session: AsyncSession, patient: Patient) -> list[dict[str, Any]]:
+    rows = await session.execute(
+        select(PatientMedication)
+        .where(PatientMedication.patient_id == patient.id, PatientMedication.removed_at.is_(None))
+        .order_by(PatientMedication.recorded_at, PatientMedication.id)
+    )
+    return [
+        {
+            "id": m.id,
+            "name": m.name,
+            "strength": m.strength,
+            "frequency": m.frequency,
+            "started_on": m.started_on,
+            "recorded_at": m.recorded_at,
+            "by": _by(m.recorded_by, patient),
+        }
+        for m in rows.scalars().all()
+    ]
 
 
 _READERS = {
@@ -342,12 +432,21 @@ _READERS = {
     "allergies": _allergies,
     "conditions": _conditions,
     "medications": _medications,
-    "prescriptions": _not_built_yet,
-    "lab_reports": _not_built_yet,
-    "visits": _not_built_yet,
+    "prescriptions": _prescriptions,
+    "lab_reports": _lab_reports,
+    "visits": _visits,
 }
 assert set(_READERS) == set(SECTIONS)
 
+# What the medical timeline reads (P3). `basics` has no timeline form: it is not an event.
+_RICH_READERS = {
+    "allergies": _allergies_rich,
+    "conditions": _conditions_rich,
+    "medications": _medications_rich,
+    "prescriptions": timeline_sources.prescriptions,
+    "lab_reports": timeline_sources.lab_reports,
+    "visits": timeline_sources.visits,
+}
 
 async def _encounters(session: AsyncSession, pid: uuid.UUID) -> list[EncounterOut]:
     encs = (

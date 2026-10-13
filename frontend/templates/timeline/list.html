@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{#- The medical history timeline (P3 — FR8, FR9), laid out like the prototype's Medical Timeline:
+    tabs, then a rail with a dot per event, the date above each card, the provenance at the right
+    of the card's title and "View details →" under it.
+
+    Every SAVED event of one patient's record, newest first, placed on the day it HAPPENED (a
+    visit's date, a prescription's issue date, the date a document itself states) — never the day
+    it was uploaded. Events with no date at all are listed apart, last. Uploads that are not saved
+    yet are NOT events: they are listed in "Documents in progress", with where they stand and
+    nothing read from them.
+
+    The same page serves the patient and a verified doctor the patient shared with
+    (web/timeline.py); a doctor sees only the shared sections, no file links, no uploads in
+    progress, and no Vaccinations / Other Medical Documents tabs (no consent section covers them).
+    Every control is a plain link or GET form, so it works without JavaScript; the filters live in
+    the address. timeline.js only adds the loading state.
+
+    Context (web/timeline.py::_render_list):
+      data            TimelineOut — total, counts per tab, facilities, doctors
+      events          [TimelineEvent] with a date, newest first (this page)
+      undated         [TimelineEvent] with no date (this page)
+      pending         [PendingItem] uploads in progress (the patient's own view; after tab + search)
+      values          {type, q, date_from, date_to, facility, doctor} as applied
+      selected        the active tab's category, or ''
+      narrowed        True when a search / date / facility / doctor filter is on
+      more_filters    True when a date / facility / doctor filter is on (opens the section)
+      any_filter      True when the tab or any filter narrows the list
+      errors          {q, date_from, date_to: message} for what was not understood
+      ignored         [message] other filters that were not understood and were left out
+      tabs            [(category, count key)]; tab_count(key); tab_href(category)
+      page, pages, page_href(n), detail_href(ref), pending_href(id), reset_href
+      page_error      error banner text, or None -#}
+{% import "partials/form_field.html" as f %}
+{% import "partials/doc_steps.html" as d with context %}
+
+{% block title %}{{ t('timeline.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% macro event_card(e) %}
+  <li class="tl-item tl-item--{{ prov_class(e.provenance) }}">
+    <div class="tl-item__when">
+      {% if e.event_date %}
+        <time datetime="{{ e.event_date.isoformat() }}">{{ fmt_date(e.event_date) }}</time>
+        {% if e.date_basis == 'recorded' %}<span class="tl-item__note">· {{ t('timeline.date_recorded') }}</span>{% endif %}
+      {% elif e.uploaded_on %}
+        {#- the section heading already says the date is not stated; what is known is when it was uploaded -#}
+        <span>{{ t('timeline.uploaded_on', date=fmt_date(e.uploaded_on)) }}</span>
+      {% else %}
+        <span>{{ t('timeline.date_unknown') }}</span>
+      {% endif %}
+    </div>
+    <span class="tl-item__rail" aria-hidden="true"></span>
+    <article class="tl-card" aria-labelledby="ev-{{ e.ref | replace(':', '-') }}">
+      <div class="tl-card__top">
+        <h3 class="tl-card__title" id="ev-{{ e.ref | replace(':', '-') }}">{{ e.title }}</h3>
+        {#- A document the patient uploaded, reviewed and saved after it was read: said as that, not as "AI".
+            The state is the existing one (`ai_patient_confirmed` exists only for a saved, patient-confirmed
+            document — never for a pending, failed or doctor-written one). -#}
+        {% if owner and e.provenance == 'ai_patient_confirmed' %}
+          <span class="tl-prov tl-prov--confirmed">{{ t('timeline.prov.reviewed_confirmed') }}</span>
+        {% else %}
+          <span class="tl-prov tl-prov--{{ prov_class(e.provenance) }}">{{ e.provenance_label }}</span>
+        {% endif %}
+      </div>
+      {% for line in e.summary %}<p class="tl-card__summary">{{ line }}</p>{% endfor %}
+      {% set who = [e.doctor, e.facility] | select | join(' · ') %}
+      {% if who %}<p class="tl-card__who">{{ who }}</p>{% endif %}
+      <a class="tl-card__more" data-tl-nav href="{{ detail_href(e.ref) }}">{{ t('timeline.view_details') }}</a>
+    </article>
+  </li>
+{% endmacro %}
+
+{% block body %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    {{ f.form_banner(page_error) }}
+    {% if ignored %}
+      <div class="banner banner--warn" role="status">
+        <span aria-hidden="true">!</span>
+        <div>
+          <div class="banner__title">{{ t('timeline.filter.ignored') }}</div>
+          <div class="banner__body">{% for message in ignored %}{{ message }}{% if not loop.last %} {% endif %}{% endfor %}</div>
+        </div>
+      </div>
+    {% endif %}
+
+    <div class="rowline">
+      <p class="lead">{{ t('timeline.subtitle' if owner else 'timeline.subtitle_doctor') }}</p>
+      {% if owner %}
+        <a class="btn btn--primary" href="/{{ locale }}/patient/documents/new">{{ t('timeline.upload') }}</a>
+      {% else %}
+        <a class="btn btn--secondary" href="{{ record_href }}">{{ t('timeline.back_to_record') }}</a>
+      {% endif %}
+    </div>
+
+    <form class="panel stack filter-form tl-filter-form" method="get" action="{{ timeline_href }}"
+          role="search" aria-label="{{ t('timeline.filter.title') }}">
+      {#- the tab is chosen with the links below; it travels with the search and the filters -#}
+      {% if values.type %}<input type="hidden" name="type" value="{{ values.type }}">{% endif %}
+      <div class="tl-search">
+        <label class="field tl-search__field" for="f-q">
+          <span class="field-label">{{ t('timeline.search.label') }}</span>
+          <input class="input" id="f-q" name="q" type="search" value="{{ values.q }}" maxlength="100"
+                 placeholder="{{ t('timeline.search.placeholder' if owner else 'timeline.search.placeholder_doctor') }}"
+                 {% if errors.q %}aria-invalid="true" aria-describedby="e-q"{% endif %}>
+          {% if errors.q %}<span class="field-error" id="e-q" role="alert">{{ errors.q }}</span>{% endif %}
+        </label>
+        <button class="btn btn--primary" type="submit"
+                data-label="{{ t('timeline.filter.applying') }}">{{ t('timeline.search.submit') }}</button>
+      </div>
+      <details class="tl-filters" {% if more_filters %}open{% endif %}>
+        <summary>{{ t('timeline.filter.toggle') }}</summary>
+        <div class="grid-2">
+          {{ f.field('date_from', t('timeline.filter.date_from'), type='date', value=values.date_from, dir='ltr',
+                     errors=errors, max=values.date_to or None) }}
+          {{ f.field('date_to', t('timeline.filter.date_to'), type='date', value=values.date_to, dir='ltr',
+                     errors=errors, min=values.date_from or None) }}
+          {% if facility_options %}
+            {{ f.select('facility', t('timeline.filter.facility'), facility_options, value=values.facility,
+                        placeholder=t('timeline.filter.any_facility')) }}
+          {% endif %}
+          {% if doctor_options %}
+            {{ f.select('doctor', t('timeline.filter.doctor'), doctor_options, value=values.doctor,
+                        placeholder=t('timeline.filter.any_doctor')) }}
+          {% endif %}
+        </div>
+        <p class="field-help">{{ t('timeline.filter.date_help') }}</p>
+      </details>
+      {% if any_filter %}
+        <div class="btn-row">
+          <a class="btn btn--secondary btn--sm" data-tl-nav href="{{ reset_href }}">{{ t('timeline.filter.reset') }}</a>
+          <span class="field-help" role="status">{{ t('timeline.filter.count', count=data.total) }}</span>
+        </div>
+      {% endif %}
+    </form>
+
+    {% if pending %}
+      <section class="panel stack" aria-labelledby="pending-h" data-timeline-state="pending">
+        <h2 id="pending-h" class="panel__label">{{ t('timeline.pending.heading') }}</h2>
+        <p class="field-help">{{ t('timeline.pending.help') }}</p>
+        <ul class="entry-list">
+          {% for item in pending %}
+            <li class="entry-row">
+              <div class="entry-row__main">
+                <div class="entry-row__title">{{ item.name or t('timeline.pending.unnamed') }}</div>
+                <div class="mono">
+                  {{ t('documents.type.' ~ item.document_type) }}
+                  {% if item.uploaded_on %}· {{ t('timeline.uploaded_on', date=fmt_date(item.uploaded_on)) }}{% endif %}
+                </div>
+                {% if item.message %}<div class="field-help" role="status">{{ item.message }}</div>{% endif %}
+              </div>
+              {{ d.state_chip(item.status) }}
+              <div class="entry-row__actions">
+                <a class="btn btn--secondary btn--sm" href="{{ pending_href(item.id) }}">
+                  {{ t('timeline.pending.review' if item.status == 'awaiting_review' else 'timeline.pending.open') }}
+                </a>
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% endif %}
+
+    <section class="panel stack" aria-labelledby="timeline-h">
+      <h2 id="timeline-h" class="panel__label">{{ t('timeline.section') }}</h2>
+
+      <nav class="tl-tabs" aria-label="{{ t('timeline.tabs') }}">
+        {% for category, key in tabs %}
+          <a class="tl-tab" data-tl-nav href="{{ tab_href(category) }}"
+             {% if selected == category %}aria-current="page"{% endif %}>{{ t('timeline.tab.' ~ key) }}
+            <span class="tl-count">{{ tab_count(category) }}</span></a>
+        {% endfor %}
+      </nav>
+
+      <div class="tl-region" id="timeline-region" aria-live="polite">
+        {#- shown while the next view loads (timeline.js sets aria-busy); hidden otherwise -#}
+        <div class="tl-skeleton" aria-hidden="true">
+          <div class="tl-skel"></div><div class="tl-skel"></div><div class="tl-skel"></div>
+        </div>
+        <div class="tl-live">
+          {% if events or undated %}
+            {% if events %}
+              <ol class="tl" aria-label="{{ t('timeline.section') }}">
+                {% for e in events %}{{ event_card(e) }}{% endfor %}
+              </ol>
+            {% endif %}
+            {% if undated %}
+              <h3 class="tl-sub">{{ t('timeline.undated.title') }}</h3>
+              <p class="field-help">{{ t('timeline.undated.help') }}</p>
+              <ol class="tl tl--undated" aria-label="{{ t('timeline.undated.title') }}">
+                {% for e in undated %}{{ event_card(e) }}{% endfor %}
+              </ol>
+            {% endif %}
+            {% if pages > 1 %}
+              <nav class="pager" aria-label="{{ t('timeline.pager.label') }}">
+                {% if page > 1 %}
+                  <a class="btn btn--secondary btn--sm" data-tl-nav rel="prev" href="{{ page_href(page - 1) }}">{{ t('timeline.pager.prev') }}</a>
+                {% endif %}
+                <span class="pager__status" aria-current="page">{{ t('timeline.pager.page', page=page, pages=pages) }}</span>
+                {% if page < pages %}
+                  <a class="btn btn--secondary btn--sm" data-tl-nav rel="next" href="{{ page_href(page + 1) }}">{{ t('timeline.pager.next') }}</a>
+                {% endif %}
+              </nav>
+            {% endif %}
+          {% elif any_filter %}
+            <div class="empty-state" role="status" data-timeline-state="no-match">
+              <p>{{ t('timeline.empty.filtered') }}</p>
+              <p class="field-help">{{ t('timeline.empty.filtered_hint') }}
+                <a class="linkish" href="{{ reset_href }}">{{ t('timeline.filter.reset') }}</a></p>
+            </div>
+          {% else %}
+            <div class="empty-state" role="status" data-timeline-state="empty">
+              <p>{{ t('timeline.empty.owner' if owner else 'timeline.empty.doctor') }}</p>
+              {% if owner %}
+                <p class="field-help">{{ t('timeline.empty.owner_hint') }}
+                  <a class="linkish" href="/{{ locale }}/patient/documents/new">{{ t('timeline.upload') }}</a></p>
+              {% endif %}
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="/static/js/timeline.js" defer></script>
+{% endblock %}
