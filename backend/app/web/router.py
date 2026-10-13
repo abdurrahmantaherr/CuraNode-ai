@@ -949,7 +949,7 @@ _ADMIN_SAVED = {
 
 
 def _admin_nav(loc: str, *, current: str) -> list[dict[str, Any]]:
-    return [
+    items = [
         {
             "href": f"/{loc}/admin?tab={t}",
             "label": translate(f"verify.tab.{t}", loc),
@@ -957,6 +957,14 @@ def _admin_nav(loc: str, *, current: str) -> list[dict[str, Any]]:
         }
         for t in _ADMIN_TABS
     ]
+    items.append(
+        {
+            "href": f"/{loc}/admin/queue",
+            "label": translate("nav.queue", loc),
+            "current": current == "queue",
+        }
+    )
+    return items
 
 
 def _admin_page_guard(request: Request, locale: str, actor: Actor | None) -> Response | None:

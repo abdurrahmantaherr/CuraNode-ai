@@ -67,6 +67,7 @@ from app.profile.router import router as profile_router
 from app.settings import settings
 from app.web.booking import router as web_booking_router
 from app.web.documents import router as web_documents_router
+from app.web.queue import router as web_queue_router
 from app.web.router import router as web_router
 from app.web.unavailable import (
     HANDLED_BASES,
@@ -192,6 +193,7 @@ app.include_router(documents_router)
 app.include_router(doctor_documents_router)
 app.include_router(web_documents_router)
 app.include_router(web_booking_router)
+app.include_router(web_queue_router)
 app.include_router(web_router)
 
 
