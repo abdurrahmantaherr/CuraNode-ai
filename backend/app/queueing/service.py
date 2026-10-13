@@ -17,7 +17,8 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import writer as audit
@@ -29,12 +30,16 @@ from ..deps import Actor
 from ..errors import NotFound, QueueRefused
 from ..schedule import service as schedule_service
 from . import order
+from .display import mask_passport
 from .schemas import (
     CHANNEL_WALK_IN,
+    SEARCH_LIMIT,
+    SEARCH_MIN,
     STATE_IN_ROOM,
     STATE_SERVED,
     STATE_WAITING,
     Line,
+    PatientHit,
     QueueStatus,
     SessionKey,
     SessionView,
@@ -491,3 +496,138 @@ async def make_next(
 ) -> None:
     """Put a waiting patient first among the waiting."""
     await _move(session, actor, entry_id, "next", user_agent)
+
+
+# ── Walk-ins ─────────────────────────────────────────────────────────────
+async def find_patients(
+    session: AsyncSession, actor: Actor, text: str, *, user_agent: str | None = None
+) -> list[PatientHit]:
+    """Find a registered patient at the front desk by name (part of it, any case) or
+    by an exact full passport number. Results show the passport number masked.
+    The audit row records only how many were found, never what was typed."""
+    _staff(actor)
+    needle = text.strip()[:80]
+    if len(needle) < SEARCH_MIN:
+        raise QueueRefused("search_too_short")
+    patients = (
+        (
+            await session.execute(
+                select(Patient)
+                .where(
+                    or_(
+                        func.upper(Patient.passport_no) == needle.upper(),
+                        Patient.full_name.icontains(needle, autoescape=True),
+                    )
+                )
+                .order_by(Patient.full_name, Patient.id)
+                .limit(SEARCH_LIMIT)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    await audit.write(
+        session,
+        action=audit.QUEUE_FIND_PATIENT,
+        actor_user_id=actor.user_id,
+        actor_role=actor.role,
+        resource_type="patient_search",
+        ip_address=actor.ip_address,
+        user_agent=user_agent,
+        detail={"results": len(patients)},
+    )
+    await session.commit()
+    return [PatientHit(p.id, p.full_name, mask_passport(p.passport_no)) for p in patients]
+
+
+async def add_walk_in(
+    session: AsyncSession,
+    actor: Actor,
+    key: SessionKey,
+    patient_id: uuid.UUID,
+    *,
+    user_agent: str | None = None,
+) -> None:
+    """Add a registered patient with no booking to a session's queue, at the back.
+    They count toward the session cap but never block a bookable time."""
+    clinics = _staff(actor)
+    if key.clinic_id not in clinics:
+        raise NotFound()
+    await schedule_service.lock_doctor(session, key.doctor_id)
+    if not await booking_service.is_bookable(session, key.doctor_id, key.clinic_id):
+        raise QueueRefused("doctor_unavailable")
+    today = booking_service.current_day()
+    windows = await booking_service.session_windows(session, key.doctor_id, key.clinic_id, today)
+    window = next(
+        (w for w in windows if w.schedule_id == key.schedule_id and w.start == key.start), None
+    )
+    if window is None:
+        raise NotFound()
+    lo, hi = slots.window_bounds(window)
+    now = booking_service.now()
+    if now >= hi:
+        raise QueueRefused("session_over")
+    patient = await session.get(Patient, patient_id)
+    if patient is None:
+        raise NotFound()
+
+    day_lo, day_hi = _day_bounds(today)
+    holds = (
+        await session.execute(
+            select(func.count())
+            .select_from(Appointment)
+            .where(
+                Appointment.patient_id == patient.id,
+                Appointment.doctor_id == key.doctor_id,
+                Appointment.status.in_(("booked", "checked_in")),
+                Appointment.slot_start >= day_lo,
+                Appointment.slot_start < day_hi,
+            )
+        )
+    ).scalar_one()
+    if holds:
+        raise QueueRefused("has_booking_today")
+    queued = (
+        await session.execute(
+            select(func.count())
+            .select_from(QueueEntry)
+            .join(Appointment, Appointment.id == QueueEntry.appointment_id)
+            .where(
+                Appointment.patient_id == patient.id,
+                QueueEntry.state.in_((STATE_WAITING, STATE_IN_ROOM)),
+            )
+        )
+    ).scalar_one()
+    if queued:
+        raise QueueRefused("already_queued")
+
+    taken = await booking_service.active_starts(session, window.schedule_id, lo, hi)
+    if len(taken) >= window.max_tokens:
+        raise QueueRefused("session_full")
+    start = max(now, lo + timedelta(microseconds=1))
+    held = set(taken)
+    while start in held:
+        start += timedelta(microseconds=1)
+    appointment = Appointment(
+        patient_id=patient.id,
+        doctor_id=key.doctor_id,
+        clinic_id=key.clinic_id,
+        schedule_id=window.schedule_id,
+        slot_start=start,
+        status="checked_in",
+        booking_channel=CHANNEL_WALK_IN,
+    )
+    session.add(appointment)
+    try:
+        await session.flush()
+    except IntegrityError:  # the index caught a clash the checks did not see
+        await session.rollback()
+        raise QueueRefused("try_again") from None
+    entries = await _session_entries(session, window.schedule_id, lo, hi)
+    entry = _new_entry(appointment.id, order.next_token(e.token_number for e, _ in entries))
+    session.add(entry)
+    await session.flush()
+    await _audit(
+        session, actor, audit.QUEUE_WALK_IN, appointment, entry=entry, user_agent=user_agent
+    )
+    await session.commit()

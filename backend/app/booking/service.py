@@ -16,7 +16,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,6 +34,7 @@ from ..db.models import (
 )
 from ..deps import Actor
 from ..errors import BookingRefused, NotFound
+from ..queueing.schemas import CHANNEL_WALK_IN
 from ..schedule import service as schedule_service
 from . import slots
 from .schemas import (
@@ -218,6 +219,12 @@ async def _doctor_held(
             Appointment.status.in_(ACTIVE_STATUSES),
             Appointment.slot_start >= lo,
             Appointment.slot_start < hi,
+            # a walk-in counts toward the cap but is not a booked turn: it never blocks a
+            # bookable time (a NULL channel is a legacy booking, and does)
+            or_(
+                Appointment.booking_channel.is_(None),
+                Appointment.booking_channel != CHANNEL_WALK_IN,
+            ),
         )
     )
     if exclude is not None:
