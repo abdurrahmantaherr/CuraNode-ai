@@ -85,6 +85,12 @@ class Settings(BaseSettings):
     # ── Appointment booking (P5) ─────────────────────────────────────────
     booking_write_rate_limit_per_minute: int = 20
 
+    # ── Live queue (P6) ──────────────────────────────────────────────────
+    # The front desk acts often, so the write budget is generous; the walk-in
+    # lookup is tighter because it is the only way to browse patient names.
+    queue_write_rate_limit_per_minute: int = 120
+    queue_lookup_rate_limit_per_minute: int = 30
+
     # ── Medical documents (FR10–FR13) ────────────────────────────────────
     # The private Supabase Storage bucket that already exists in the shared
     # project. Originals are read back through the app (ownership-checked),

@@ -718,5 +718,17 @@
   "booking.col.patient": "Patient",
   "booking.today.title": "Appointments today",
   "booking.today.empty": "No appointments today.",
-  "booking.today.all": "See all appointments"
+  "booking.today.all": "See all appointments",
+  "errors.queue_not_today": "That appointment isn't for today.",
+  "errors.queue_not_booked": "That appointment can't be checked in.",
+  "errors.queue_session_over": "That session has ended.",
+  "errors.queue_doctor_unavailable": "That doctor is not available.",
+  "errors.queue_room_occupied": "Someone is already in the room. Mark them seen first.",
+  "errors.queue_session_full": "That session is full.",
+  "errors.queue_has_booking_today": "This patient has an appointment with this doctor today. Check them in instead.",
+  "errors.queue_already_queued": "This patient is already in a queue.",
+  "errors.queue_not_waiting": "That patient is no longer waiting.",
+  "errors.queue_not_in_room": "That patient is not in the room.",
+  "errors.queue_search_too_short": "Type at least 3 characters.",
+  "errors.queue_try_again": "That time was just taken. Please try again."
 }

@@ -718,5 +718,17 @@
   "booking.col.patient": "مریض",
   "booking.today.title": "آج کی اپائنٹمنٹس",
   "booking.today.empty": "آج کوئی اپائنٹمنٹ نہیں۔",
-  "booking.today.all": "تمام اپائنٹمنٹس دیکھیں"
+  "booking.today.all": "تمام اپائنٹمنٹس دیکھیں",
+  "errors.queue_not_today": "یہ اپائنٹمنٹ آج کی نہیں ہے۔",
+  "errors.queue_not_booked": "اس اپائنٹمنٹ کا چیک اِن نہیں ہو سکتا۔",
+  "errors.queue_session_over": "یہ سیشن ختم ہو چکا ہے۔",
+  "errors.queue_doctor_unavailable": "یہ ڈاکٹر دستیاب نہیں ہیں۔",
+  "errors.queue_room_occupied": "کمرے میں پہلے سے کوئی مریض ہے۔ پہلے انہیں دیکھا ہوا نشان زد کریں۔",
+  "errors.queue_session_full": "یہ سیشن بھر چکا ہے۔",
+  "errors.queue_has_booking_today": "اس مریض کی آج اس ڈاکٹر کے ساتھ اپائنٹمنٹ ہے۔ اس کے بجائے انہیں چیک اِن کریں۔",
+  "errors.queue_already_queued": "یہ مریض پہلے سے قطار میں ہیں۔",
+  "errors.queue_not_waiting": "یہ مریض اب انتظار میں نہیں ہیں۔",
+  "errors.queue_not_in_room": "یہ مریض کمرے میں نہیں ہیں۔",
+  "errors.queue_search_too_short": "کم از کم 3 حروف لکھیں۔",
+  "errors.queue_try_again": "یہ وقت ابھی لیا جا چکا ہے۔ براہ کرم دوبارہ کوشش کریں۔"
 }
