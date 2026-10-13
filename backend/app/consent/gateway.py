@@ -1,7 +1,8 @@
 """Consent gateway — the only door to a patient's clinical record (D2).
 
 This is the only module that queries the doctor-owned clinical tables
-(encounter, diagnosis, vital_sign, prescription, lab_*);
+(encounter, diagnosis, vital_sign, prescription, lab_*) — itself, and through the
+timeline readers it calls (`timeline/sources.py`);
 `tests/test_consent.py::test_no_direct_clinical_queries` enforces that.
 
 Access is decided by `consent.service.patient_and_grant_for_doctor`, which
@@ -152,8 +153,14 @@ async def load_patient_for_doctor(
                     .order_by(PatientMedication.recorded_at.desc())
                 )
             )
-        encounters = await _encounters(session, pid) if "visits" in shared else []
-        lab_reports = await _lab_reports(session, pid) if "lab_reports" in shared else []
+        # A visit lists the prescriptions written in it only if the patient shared the
+        # "prescriptions" section too — sharing "visits" alone must not hand them over.
+        encounters = (
+            await _encounters(session, pid, with_prescriptions="prescriptions" in shared)
+            if "visits" in shared
+            else []
+        )
+        lab_reports = await _lab_report_records(session, pid) if "lab_reports" in shared else []
 
         record = PatientRecordOut(
             patient=PatientBasicOut.model_validate(patient),
@@ -197,6 +204,9 @@ class Access:
     # section -> the grant that allows it (a doctor grant preferred, BL-19)
     consent_for: dict[str, uuid.UUID]
     is_owner: bool
+    # the most recent active grant reaching this doctor — the one the `record.read` audit
+    # row names; None for the patient themself
+    grant: ConsentGrant | None = None
 
 
 @dataclass(frozen=True)
@@ -239,15 +249,37 @@ async def allowed_sections(
             doctor_grant_filter(doctor.id, clinic_ids),
         )
     )
+    grants = list(rows.scalars().all())
     consent_for: dict[str, uuid.UUID] = {}
     # Doctor grants first, so they win the attribution (BL-19).
-    for g in sorted(rows.scalars().all(), key=lambda g: g.grantee_type != DOCTOR):
+    for g in sorted(grants, key=lambda g: g.grantee_type != DOCTOR):
         for section in g.scope_sections or []:
             if section in SECTIONS:
                 consent_for.setdefault(section, g.id)
     if not consent_for:
         raise ConsentDenied()
-    return Access(patient, frozenset(consent_for), consent_for, is_owner=False)
+    relied_on = max(grants, key=lambda g: g.granted_at)
+    return Access(patient, frozenset(consent_for), consent_for, is_owner=False, grant=relied_on)
+
+
+async def _log_read(session: AsyncSession, actor: Actor, access: Access, section: str) -> None:
+    """The one shared `access_log` row for a non-owner reading `section` (BL-18), flushed
+    before any data leaves: a failed log write raises here and the caller returns nothing."""
+    if access.is_owner:
+        return
+    session.add(
+        AccessLog(
+            user_id=actor.user_id,
+            patient_id=access.patient.id,
+            consent_id=access.consent_for[section],
+            resource_type=RESOURCE_PREFIX + section,
+            resource_id=access.patient.id,
+            action=ACTION_READ,
+            is_break_glass=False,
+            ip_address=actor.ip_address,
+        )
+    )
+    await session.flush()
 
 
 async def read_section(
@@ -264,20 +296,7 @@ async def read_section(
     _require_purpose(purpose)
     if section not in access.sections:
         raise ConsentDenied()
-    if not access.is_owner:
-        session.add(
-            AccessLog(
-                user_id=actor.user_id,
-                patient_id=access.patient.id,
-                consent_id=access.consent_for[section],
-                resource_type=RESOURCE_PREFIX + section,
-                resource_id=access.patient.id,
-                action=ACTION_READ,
-                is_break_glass=False,
-                ip_address=actor.ip_address,
-            )
-        )
-        await session.flush()  # a failed log write raises here, before any data leaves
+    await _log_read(session, actor, access, section)
     reader = _RICH_READERS.get(section) if rich else None
     return await (reader or _READERS[section])(session, access.patient)
 
@@ -300,6 +319,89 @@ async def read_sections(
         await session.rollback()
         raise
     return PassportView(access.patient.id, access.patient.passport_no, sections)
+
+
+@dataclass(frozen=True)
+class DoctorPatientPage:
+    """What the doctor's patient page (D2) shows. `sections[key] is None` means "not shared"
+    (BL-17). `visits` and `lab_reports` hold D2's typed records (also `encounters` /
+    `lab_reports` below, which is what the page lists); the other sections are the compact
+    rows the page lists."""
+
+    patient_id: uuid.UUID
+    passport_no: str
+    sections: dict[str, Any]
+    encounters: list[EncounterOut]
+    lab_reports: list[LabReportOut]
+
+
+async def load_doctor_patient_page(
+    session: AsyncSession,
+    actor: Actor,
+    patient_id: uuid.UUID,
+    *,
+    purpose: str = DEFAULT_PURPOSE,
+    user_agent: str | None = None,
+) -> DoctorPatientPage:
+    """Everything the doctor's patient page needs, in ONE pass: one live access check, one
+    `access_log` row per section the doctor may see (written before that section's data is
+    read, BL-18), each shared section read once, one `record.read` audit row, one commit —
+    or nothing at all if any step fails. An unshared section is never queried (BL-17).
+
+    This replaces calling `read_sections` and then `load_patient_for_doctor`, which checked
+    access three times and read the profile sections and the visits twice (each query is a
+    network round trip, see CLAUDE.md "Reaching the database"). Both of those stay for the
+    callers that want exactly one of the two forms.
+
+    Only a doctor reaches this: the patient themself, or anyone without a live grant, is
+    `ConsentDenied` — the one 404 of every refusal (D2)."""
+    _require_purpose(purpose)
+    try:
+        access = await allowed_sections(session, actor, patient_id, purpose=purpose)
+        if access.is_owner or access.grant is None:
+            raise ConsentDenied()
+        pid = access.patient.id
+        sections: dict[str, Any] = {}
+        encounters: list[EncounterOut] = []
+        lab_reports: list[LabReportOut] = []
+        for key in SECTIONS:
+            if key not in access.sections:
+                sections[key] = None  # never queried (BL-17)
+                continue
+            await _log_read(session, actor, access, key)
+            if key == "visits":
+                # A visit lists the prescriptions written in it only if the patient shared the
+                # "prescriptions" section too.
+                encounters = await _encounters(
+                    session, pid, with_prescriptions="prescriptions" in access.sections
+                )
+                sections[key] = encounters
+            elif key == "lab_reports":
+                lab_reports = await _lab_report_records(session, pid)
+                sections[key] = lab_reports
+            else:
+                sections[key] = await _READERS[key](session, access.patient)
+        await audit.write(
+            session,
+            action=audit.RECORD_READ,
+            actor_user_id=actor.user_id,
+            actor_role=ACTOR_ROLE,
+            subject_patient_id=pid,
+            resource_type=RESOURCE_TYPE,
+            ip_address=actor.ip_address,
+            user_agent=user_agent,
+            detail={
+                "patient_id": str(pid),
+                "doctor_id": str(access.grant.grantee_id),
+                "grant_id": str(access.grant.id),
+                "purpose": purpose,
+            },
+        )
+        await session.commit()
+    except BaseException:
+        await session.rollback()
+        raise
+    return DoctorPatientPage(pid, access.patient.passport_no, sections, encounters, lab_reports)
 
 
 # ── Section readers (always scoped to `patient.id`) ──────────────────────
@@ -448,7 +550,10 @@ _RICH_READERS = {
     "visits": timeline_sources.visits,
 }
 
-async def _encounters(session: AsyncSession, pid: uuid.UUID) -> list[EncounterOut]:
+
+async def _encounters(
+    session: AsyncSession, pid: uuid.UUID, *, with_prescriptions: bool
+) -> list[EncounterOut]:
     encs = (
         await session.scalars(
             select(Encounter)
@@ -472,14 +577,19 @@ async def _encounters(session: AsyncSession, pid: uuid.UUID) -> list[EncounterOu
     ):
         vitals[v.encounter_id].append(VitalSignOut.model_validate(v))
 
-    # patient_id is applied here as well as the encounter scope.
+    # patient_id is applied here as well as the encounter scope. An unshared section is
+    # never queried (BL-17): without the prescriptions grant this select does not run.
     rx_rows = (
-        await session.scalars(
-            select(Prescription)
-            .where(Prescription.patient_id == pid, Prescription.encounter_id.in_(enc_ids))
-            .order_by(Prescription.issue_date.desc(), Prescription.created_at.desc())
-        )
-    ).all()
+        (
+            await session.scalars(
+                select(Prescription)
+                .where(Prescription.patient_id == pid, Prescription.encounter_id.in_(enc_ids))
+                .order_by(Prescription.issue_date.desc(), Prescription.created_at.desc())
+            )
+        ).all()
+        if with_prescriptions
+        else []
+    )
     items: dict[uuid.UUID, list[PrescriptionItemOut]] = defaultdict(list)
     if rx_rows:
         item_rows = await session.execute(
@@ -531,7 +641,7 @@ async def _encounters(session: AsyncSession, pid: uuid.UUID) -> list[EncounterOu
     ]
 
 
-async def _lab_reports(session: AsyncSession, pid: uuid.UUID) -> list[LabReportOut]:
+async def _lab_report_records(session: AsyncSession, pid: uuid.UUID) -> list[LabReportOut]:
     reports = (
         await session.scalars(
             select(LabReport)

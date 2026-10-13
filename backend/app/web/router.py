@@ -2079,20 +2079,16 @@ async def doctor_patient_page(
             raise NotFound()
         # Before the reads: the gateway writes this request's own record.read row.
         since = await what_changed.last_read_at(session, actor.user_id, parsed_id)
-        # Profile sections go through the consent gateway, re-checked on every
-        # view (BL-07): only shared sections are read, each read is logged (P9).
-        view = await consent_gateway.read_sections(
-            session, actor, parsed_id, purpose="doctor.patient_view"
-        )
-        # Visits and lab reports (D2): shown only when the patient shared them.
-        record = await consent_gateway.load_patient_for_doctor(
+        # One pass through the consent gateway, re-checked on every view (BL-07): only
+        # shared sections are read, each read is logged (P9), and the view is audited (D2).
+        record = await consent_gateway.load_doctor_patient_page(
             session, actor, parsed_id, user_agent=request.headers.get("user-agent")
         )
     except NotFound:  # includes ConsentDenied — one D2 response for every refusal
         return _render_lookup(
             request, loc, status_code=404, error=translate("lookup.not_found", loc)
         )
-    shared = dict(view.sections)
+    shared = dict(record.sections)
     basics = shared["basics"]
     if basics is not None:
         age = age_in_years(basics["date_of_birth"], dbtypes.today_pk())
@@ -2126,7 +2122,7 @@ async def doctor_patient_page(
         crumb=translate("auth.role.doctor", loc),
         page_title=translate("doctor_patient.title", loc),
         nav_items=_doctor_nav(loc, current="lookup"),
-        passport_no=view.passport_no,
+        passport_no=record.passport_no,
         patient_id=parsed_id,
         sections=consent_schemas.SECTIONS,
         shared=shared,

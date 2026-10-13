@@ -909,8 +909,13 @@ TIMELINE_MODELS = {
     "LabReport",
 }
 APP = ROOT / "backend" / "app"
-# Their mapping, and the readers the consent gateway calls. Nothing else may select them.
-ALLOWED = {APP / "db" / "models.py", APP / "timeline" / "sources.py"}
+# Their mapping, the readers the consent gateway calls, and the gateway itself (D2's
+# `load_patient_for_doctor` selects them too). Nothing else may select them.
+ALLOWED = {
+    APP / "db" / "models.py",
+    APP / "timeline" / "sources.py",
+    APP / "consent" / "gateway.py",
+}
 
 
 def model_uses(source: str) -> set[str]:

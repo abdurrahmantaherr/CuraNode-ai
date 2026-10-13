@@ -11,7 +11,7 @@ import re
 from datetime import date, timedelta
 
 import pytest
-from app.db.models import Allergy, Doctor, Patient, Profile, UserRole
+from app.db.models import Allergy, Doctor, LabReport, Patient, Profile, UserRole
 from app.db.types import uuid7
 from app.i18n.catalogue import translate
 from markupsafe import escape
@@ -460,16 +460,45 @@ async def test_the_doctors_patient_page_links_to_the_timeline_and_lists_visits_a
     await grant(
         db, patient, grantee_type="doctor", grantee_id=doctor.id, sections=["visits", "lab_reports"]
     )
+    db.add(
+        LabReport(
+            id=uuid7(),
+            patient_id=patient.id,
+            document_id=story.lab.id,
+            lab_name="Chughtai Lab",
+            report_date=date(2026, 6, 15),
+        )
+    )
+    await db.commit()
     await login(client, "dr@x.com")
     r = await client.get(f"/en/doctor/patient/{patient.id}")
     assert r.status_code == 200
     assert f'href="/en/doctor/patient/{patient.id}/timeline"' in r.text
     assert in_html("doctor_patient.timeline") in r.text
-    # the sections that used to read "nothing recorded" now list what the record holds
-    assert "Type 2 diabetes mellitus" in r.text and "Sana Malik" in r.text
-    assert in_html("doctor_patient.on", date="2026-07-28") in r.text
-    assert in_html("doctor_patient.on", date="2026-06-15") in r.text
+    # the sections that used to read "nothing recorded" now list what the record holds. D2's
+    # record page shows a visit and a lab report under their plain dates, and carries the
+    # doctor by id only (not by name).
+    assert "Type 2 diabetes mellitus" in r.text
+    assert '<span dir="ltr">2026-07-28</span>' in r.text
+    assert "Chughtai Lab" in r.text
+    assert '<span dir="ltr">2026-06-15</span>' in r.text
     assert "Glucophage" not in r.text  # prescriptions were not shared
+
+
+async def test_the_doctors_patient_page_shows_a_visits_prescriptions_only_when_they_were_shared(
+    client, db, doctor, patient, story
+):
+    await grant(
+        db,
+        patient,
+        grantee_type="doctor",
+        grantee_id=doctor.id,
+        sections=["visits", "prescriptions"],
+    )
+    await login(client, "dr@x.com")
+    r = await client.get(f"/en/doctor/patient/{patient.id}")
+    assert r.status_code == 200
+    assert "Glucophage" in r.text
 
 
 # ── The Medical Passport / QR workflow ───────────────────────────────────
