@@ -159,7 +159,8 @@ used X of Y". Inside each panel:
   arrival time), a Walk-in badge where it applies, and *Send in*, *Move up*, *Make next*.
 - **Expected:** booked patients not yet arrived, with *Check in*.
 - **Seen today:** a collapsed list.
-- **Add a walk-in:** a search box and, below it, the results with *Add to queue*.
+- **Add a walk-in:** a search box (sent as a POST, so what is typed never reaches a URL or
+  an access log) and, below it, the results with *Add to queue*.
 Each action reloads the page with a success banner; refusals show an error
 banner. The page does not auto-refresh.
 
