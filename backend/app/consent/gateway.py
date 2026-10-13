@@ -1,7 +1,8 @@
 """Consent gateway — the only door to a patient's clinical record (D2).
 
 This is the only module that queries the doctor-owned clinical tables
-(encounter, diagnosis, vital_sign, prescription, lab_*);
+(encounter, diagnosis, vital_sign, prescription, lab_*) — itself, and through the
+timeline readers it calls (`timeline/sources.py`);
 `tests/test_consent.py::test_no_direct_clinical_queries` enforces that.
 
 Access is decided by `consent.service.patient_and_grant_for_doctor`, which
@@ -447,6 +448,7 @@ _RICH_READERS = {
     "lab_reports": timeline_sources.lab_reports,
     "visits": timeline_sources.visits,
 }
+
 
 async def _encounters(session: AsyncSession, pid: uuid.UUID) -> list[EncounterOut]:
     encs = (

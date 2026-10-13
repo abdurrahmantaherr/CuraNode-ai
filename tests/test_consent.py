@@ -471,7 +471,8 @@ def test_no_direct_clinical_queries():
     backend = Path(__file__).resolve().parent.parent / "backend"
     offenders = []
     for path in backend.rglob("*.py"):
-        if path.name == "gateway.py" and path.parent.name == "consent":
+        # the gateway itself, and the timeline's readers it calls (P3)
+        if (path.parent.name, path.name) in {("consent", "gateway.py"), ("timeline", "sources.py")}:
             continue
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if (
@@ -483,8 +484,9 @@ def test_no_direct_clinical_queries():
                     name = sub.id if isinstance(sub, ast.Name) else getattr(sub, "attr", None)
                     if name in guarded:
                         offenders.append(f"{path}:{node.lineno} select({name})")
-    assert not offenders, "clinical tables queried outside consent/gateway.py: " + "; ".join(
-        offenders
+    assert not offenders, (
+        "clinical tables queried outside consent/gateway.py and timeline/sources.py: "
+        + "; ".join(offenders)
     )
 
 
