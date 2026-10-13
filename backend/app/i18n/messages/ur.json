@@ -762,5 +762,16 @@
   "queue.saved.seen": "دیکھا ہوا نشان زد ہو گیا۔",
   "queue.saved.put_back": "واپس قطار میں رکھ دیا گیا۔",
   "queue.saved.moved": "قطار کی ترتیب بدل دی گئی۔",
-  "queue.saved.walk_in": "مریض کو قطار میں شامل کر دیا گیا۔"
+  "queue.saved.walk_in": "مریض کو قطار میں شامل کر دیا گیا۔",
+  "queue.card.title": "قطار میں آپ کی جگہ",
+  "queue.card.expected": "ابھی چیک اِن نہیں ہوا۔ پہنچنے پر فرنٹ ڈیسک کو بتائیں۔",
+  "queue.card.waiting": "آپ قطار میں {position} نمبر پر ہیں، تقریباً {minutes} منٹ۔",
+  "queue.card.next": "اگلی باری آپ کی ہے۔ براہ کرم تیار رہیں۔",
+  "queue.card.in_room": "آپ کی باری ہے۔ براہ کرم اندر جائیں۔",
+  "queue.card.served": "آپ کو دیکھ لیا گیا۔ شکریہ۔",
+  "queue.card.waiting_total": "انتظار میں لوگ: {count}",
+  "queue.card.updated": "آخری اپ ڈیٹ {time}",
+  "queue.card.refresh": "ریفریش",
+  "queue.badge.waiting": "قطار میں نمبر {position}",
+  "queue.badge.in_room": "کمرے میں"
 }

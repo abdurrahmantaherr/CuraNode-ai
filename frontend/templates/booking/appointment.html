@@ -13,9 +13,13 @@
 <div class="shell">
   {% include "partials/topbar.html" %}
 
-  <main class="content">
+  <main class="content"{% if queue_status and queue_status.live %} data-autorefresh="15000"{% endif %}>
     {% if saved %}
       <div class="banner banner--ok" role="status"><span>{{ saved }}</span></div>
+    {% endif %}
+
+    {% if queue_status %}
+      {% include "queue/_card.html" %}
     {% endif %}
 
     <div class="panel stack">
@@ -48,4 +52,5 @@
     </div>
   </main>
 </div>
+{% if queue_status and queue_status.live %}<script src="/static/js/queue.js" defer></script>{% endif %}
 {% endblock %}

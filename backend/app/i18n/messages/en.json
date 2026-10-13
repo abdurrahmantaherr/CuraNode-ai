@@ -762,5 +762,16 @@
   "queue.saved.seen": "Marked as seen.",
   "queue.saved.put_back": "Put back in the queue.",
   "queue.saved.moved": "Queue order updated.",
-  "queue.saved.walk_in": "Walk-in added to the queue."
+  "queue.saved.walk_in": "Walk-in added to the queue.",
+  "queue.card.title": "Your place in the queue",
+  "queue.card.expected": "Not checked in yet. Tell the front desk when you arrive.",
+  "queue.card.waiting": "You are #{position} in line, about {minutes} minutes.",
+  "queue.card.next": "You're next. Please be ready.",
+  "queue.card.in_room": "It's your turn. Please go in.",
+  "queue.card.served": "Seen. Thank you.",
+  "queue.card.waiting_total": "People waiting: {count}",
+  "queue.card.updated": "Last updated {time}",
+  "queue.card.refresh": "Refresh",
+  "queue.badge.waiting": "In queue #{position}",
+  "queue.badge.in_room": "In the room"
 }
