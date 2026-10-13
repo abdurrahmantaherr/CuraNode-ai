@@ -80,7 +80,8 @@ affiliation at the admin's clinic have queues.
 **Check in** (a booked patient):
 - Only an appointment with status `booked` whose Pakistan date is **today**, for a
   doctor at one of the admin's own clinics, while the session has not ended.
-  Arriving early is fine.
+  Arriving early is fine. A cancelled or done appointment is refused with its own
+  message ("That appointment can't be checked in").
 - Refused if the doctor is **no longer verified** (the page says the doctor is
   not available), since an unverified doctor cannot see patients.
 - It creates a `queue_entry` (next token, state `waiting`) and sets the
@@ -120,9 +121,10 @@ stay unique and in-room or served tokens are untouched.
   the patient is already in a queue.
 - It creates an `appointment` (channel `walk_in`, status `checked_in`, the
   session's `schedule_id`) and a `queue_entry` together. Its
-  `slot_start` is the arrival time, but never before the session's start; if that
-  exact instant is already held, the next free microsecond. It is off the booking
-  grid on purpose.
+  `slot_start` is the arrival time, but never earlier than one microsecond after
+  the session's start (so it never takes the start's grid time); if that exact
+  instant is already held, the next free microsecond. It is off the booking grid
+  on purpose.
 - A walk-in **counts toward the cap but never blocks a bookable time**: booking's
   "one patient at a time" check (`_doctor_held`) ignores `walk_in` appointments.
 
@@ -153,8 +155,8 @@ with right-to-left, and times forced left-to-right.
 panel per session today at the admin's clinics: doctor, hospital, hours, "places
 used X of Y". Inside each panel:
 - **In the room:** the patient, with *Mark seen* and *Put back*.
-- **Waiting:** numbered by position, each with name, arrival time, a Walk-in badge
-  where it applies, and *Send in*, *Move up*, *Make next*.
+- **Waiting:** numbered by position, each with name, the booked time (a walk-in's
+  arrival time), a Walk-in badge where it applies, and *Send in*, *Move up*, *Make next*.
 - **Expected:** booked patients not yet arrived, with *Check in*.
 - **Seen today:** a collapsed list.
 - **Add a walk-in:** a search box and, below it, the results with *Add to queue*.
@@ -201,7 +203,7 @@ appointment times.
 
 The page redraws with an error banner, never a blank error. New messages (EN and
 UR): the appointment is not for today; the session has ended; that doctor is not
-available; already checked in;
+available; that appointment can't be checked in;
 someone is already in the room; the session is full; this patient already has an
 appointment with this doctor today; this patient is already in a queue; type at
 least 3 characters; that patient is no longer waiting (two staff acted at once);
