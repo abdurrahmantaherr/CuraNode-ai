@@ -153,8 +153,14 @@ async def load_patient_for_doctor(
                     .order_by(PatientMedication.recorded_at.desc())
                 )
             )
-        encounters = await _encounters(session, pid) if "visits" in shared else []
-        lab_reports = await _lab_reports(session, pid) if "lab_reports" in shared else []
+        # A visit lists the prescriptions written in it only if the patient shared the
+        # "prescriptions" section too — sharing "visits" alone must not hand them over.
+        encounters = (
+            await _encounters(session, pid, with_prescriptions="prescriptions" in shared)
+            if "visits" in shared
+            else []
+        )
+        lab_reports = await _lab_report_records(session, pid) if "lab_reports" in shared else []
 
         record = PatientRecordOut(
             patient=PatientBasicOut.model_validate(patient),
@@ -450,7 +456,9 @@ _RICH_READERS = {
 }
 
 
-async def _encounters(session: AsyncSession, pid: uuid.UUID) -> list[EncounterOut]:
+async def _encounters(
+    session: AsyncSession, pid: uuid.UUID, *, with_prescriptions: bool
+) -> list[EncounterOut]:
     encs = (
         await session.scalars(
             select(Encounter)
@@ -474,14 +482,19 @@ async def _encounters(session: AsyncSession, pid: uuid.UUID) -> list[EncounterOu
     ):
         vitals[v.encounter_id].append(VitalSignOut.model_validate(v))
 
-    # patient_id is applied here as well as the encounter scope.
+    # patient_id is applied here as well as the encounter scope. An unshared section is
+    # never queried (BL-17): without the prescriptions grant this select does not run.
     rx_rows = (
-        await session.scalars(
-            select(Prescription)
-            .where(Prescription.patient_id == pid, Prescription.encounter_id.in_(enc_ids))
-            .order_by(Prescription.issue_date.desc(), Prescription.created_at.desc())
-        )
-    ).all()
+        (
+            await session.scalars(
+                select(Prescription)
+                .where(Prescription.patient_id == pid, Prescription.encounter_id.in_(enc_ids))
+                .order_by(Prescription.issue_date.desc(), Prescription.created_at.desc())
+            )
+        ).all()
+        if with_prescriptions
+        else []
+    )
     items: dict[uuid.UUID, list[PrescriptionItemOut]] = defaultdict(list)
     if rx_rows:
         item_rows = await session.execute(
@@ -533,7 +546,7 @@ async def _encounters(session: AsyncSession, pid: uuid.UUID) -> list[EncounterOu
     ]
 
 
-async def _lab_reports(session: AsyncSession, pid: uuid.UUID) -> list[LabReportOut]:
+async def _lab_report_records(session: AsyncSession, pid: uuid.UUID) -> list[LabReportOut]:
     reports = (
         await session.scalars(
             select(LabReport)

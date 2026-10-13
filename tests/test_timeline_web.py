@@ -482,6 +482,23 @@ async def test_the_doctors_patient_page_links_to_the_timeline_and_lists_visits_a
     assert '<span dir="ltr">2026-07-28</span>' in r.text
     assert "Chughtai Lab" in r.text
     assert '<span dir="ltr">2026-06-15</span>' in r.text
+    assert "Glucophage" not in r.text  # prescriptions were not shared
+
+
+async def test_the_doctors_patient_page_shows_a_visits_prescriptions_only_when_they_were_shared(
+    client, db, doctor, patient, story
+):
+    await grant(
+        db,
+        patient,
+        grantee_type="doctor",
+        grantee_id=doctor.id,
+        sections=["visits", "prescriptions"],
+    )
+    await login(client, "dr@x.com")
+    r = await client.get(f"/en/doctor/patient/{patient.id}")
+    assert r.status_code == 200
+    assert "Glucophage" in r.text
 
 
 # ── The Medical Passport / QR workflow ───────────────────────────────────
