@@ -31,6 +31,10 @@
       </form>
     </div>
 
+    {% if queue_views is defined %}
+      {% include "queue/_doctor_queue.html" %}
+    {% endif %}
+
     <div class="panel">
       <div class="panel__label">{{ weekday_name }} <bdi>{{ day.isoformat() }}</bdi></div>
       {% if rows %}

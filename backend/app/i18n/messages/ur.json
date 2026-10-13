@@ -773,5 +773,7 @@
   "queue.card.updated": "آخری اپ ڈیٹ {time}",
   "queue.card.refresh": "ریفریش",
   "queue.badge.waiting": "قطار میں نمبر {position}",
-  "queue.badge.in_room": "کمرے میں"
+  "queue.badge.in_room": "کمرے میں",
+  "queue.doctor.title": "آج کی قطار",
+  "queue.doctor.empty": "آج کوئی سیشن نہیں۔"
 }

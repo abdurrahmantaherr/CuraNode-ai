@@ -1,0 +1,40 @@
+{#- A verified doctor's queue today, view only (FR24, P6 spec 3.3): who is in the
+    room, the waiting patients in order, and those still expected. Names and times
+    only. Expects `queue_views` (list[SessionView]). Names are autoescaped. -#}
+<div class="panel stack" style="margin-top:var(--sp-5)">
+  <div class="panel__label">{{ t('queue.doctor.title') }}</div>
+  {% if queue_views %}
+    {% for v in queue_views %}
+      <section class="stack">
+        <div class="eyebrow">
+          {{ v.clinic_name }} · <bdi dir="ltr">{{ v.start.strftime('%H:%M') }}-{{ v.end.strftime('%H:%M') }}</bdi>
+        </div>
+        <p class="field-help">
+          {{ t('queue.in_room') }}:
+          {% if v.in_room %}{{ v.in_room.patient_name }}{% else %}{{ t('queue.room_empty') }}{% endif %}
+        </p>
+        {% if v.waiting %}
+          <ol>
+            {% for line in v.waiting %}
+              <li>{{ line.patient_name }}
+                {% if line.walk_in %}<span class="badge badge--neutral">{{ t('queue.badge.walk_in') }}</span>{% endif %}
+              </li>
+            {% endfor %}
+          </ol>
+        {% else %}
+          <p class="field-help">{{ t('queue.waiting_empty') }}</p>
+        {% endif %}
+        {% if v.expected %}
+          <div class="eyebrow">{{ t('queue.expected') }}</div>
+          <ul>
+            {% for line in v.expected %}
+              <li>{{ line.patient_name }} · <span class="mono" dir="ltr">{{ line.booked_at.strftime('%H:%M') }}</span></li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </section>
+    {% endfor %}
+  {% else %}
+    <p class="empty-state">{{ t('queue.doctor.empty') }}</p>
+  {% endif %}
+</div>

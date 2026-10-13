@@ -773,5 +773,7 @@
   "queue.card.updated": "Last updated {time}",
   "queue.card.refresh": "Refresh",
   "queue.badge.waiting": "In queue #{position}",
-  "queue.badge.in_room": "In the room"
+  "queue.badge.in_room": "In the room",
+  "queue.doctor.title": "Queue today",
+  "queue.doctor.empty": "No sessions today."
 }

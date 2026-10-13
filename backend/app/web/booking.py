@@ -686,6 +686,9 @@ async def doctor_day_page(
     except NotFound:
         return RedirectResponse(f"/{loc}/doctor", status_code=303)
     base = f"/{loc}/doctor/appointments"
+    queue_extra = {}
+    if day == service.current_day():  # the queue is today's: other days have none to show
+        queue_extra["queue_views"] = await queue_service.doctor_queue(session, actor)
     return _render(
         request,
         "booking/doctor_day.html",
@@ -700,4 +703,5 @@ async def doctor_day_page(
         prev_href=f"{base}?date={(day - timedelta(days=1)).isoformat()}",
         next_href=f"{base}?date={(day + timedelta(days=1)).isoformat()}",
         today_href=base,
+        **queue_extra,
     )

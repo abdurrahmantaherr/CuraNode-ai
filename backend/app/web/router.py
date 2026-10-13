@@ -76,6 +76,7 @@ from ..identity.schemas import (
 from ..paths import TEMPLATES_DIR
 from ..profile import schemas as profile_schemas
 from ..profile import service as profile_service
+from ..queueing import service as queue_service
 from ..schedule import engine as schedule_engine
 from ..schedule import schemas as schedule_schemas
 from ..schedule import service as schedule_service
@@ -859,6 +860,7 @@ async def _guarded(
     is_patient = actor.role == UserRole.PATIENT.value
     patients = None
     appointments_today = None
+    queue_today = None
     if is_patient:
         nav_items = _patient_nav(loc, current="dashboard")
         links = [
@@ -891,6 +893,8 @@ async def _guarded(
         appointments_today = booking_display.build_day_rows(
             await booking_service.doctor_day(session, actor, booking_service.current_day()), loc
         )
+        # P6: the doctor's queue today, view only.
+        queue_today = await queue_service.doctor_queue(session, actor)
     elif actor.role == UserRole.DOCTOR.value:
         # A pending doctor: no patient-data affordance at all (FR3), but the
         # schedule exposes none, so it is their one link (D7 decision 6).
@@ -905,6 +909,8 @@ async def _guarded(
         extra["patients"] = patients
     if appointments_today is not None:
         extra["appointments_today"] = appointments_today
+    if queue_today is not None:
+        extra["queue_today"] = queue_today
     return _render(
         request,
         "shell.html",
