@@ -593,3 +593,40 @@ async def doctor_day(session: AsyncSession, actor: Actor, day: date) -> list[Day
         DayRow(starts_at=slots.to_local(start), patient_name=name, status=status)
         for start, status, name in (await session.execute(stmt)).all()
     ]
+
+
+# ── Small public wrappers for the live queue (P6) ────────────────────────
+def now() -> datetime:
+    """The current instant, UTC. This is the booking clock: freezing `_now` freezes it."""
+    return _now()
+
+
+async def session_windows(
+    session: AsyncSession, doctor_id: uuid.UUID, clinic_id: uuid.UUID, day: date
+) -> list[slots.Window]:
+    """The doctor's session windows at one hospital on one day (D7 availability).
+    `day` must be today or later: D7 refuses a past day."""
+    return await _windows(session, doctor_id, clinic_id, day, day)
+
+
+async def is_bookable(session: AsyncSession, doctor_id: uuid.UUID, clinic_id: uuid.UUID) -> bool:
+    """True for a verified doctor at one of their live hospitals."""
+    found = await _visible_doctors(session, doctor_id)
+    return doctor_id in found and clinic_id in found[doctor_id][1]
+
+
+async def visible_pairs(session: AsyncSession) -> list[tuple[Doctor, Clinic]]:
+    """Every verified doctor with each of their live hospitals, as (doctor, hospital)
+    pairs, by doctor name then hospital name."""
+    return [
+        (doctor, clinic)
+        for doctor, clinics in (await _visible_doctors(session)).values()
+        for clinic in sorted(clinics.values(), key=lambda c: c.name)
+    ]
+
+
+async def active_starts(
+    session: AsyncSession, schedule_id: uuid.UUID, lo: datetime, hi: datetime
+) -> list[datetime]:
+    """The starts (aware UTC) of the active appointments of one schedule in `[lo, hi)`."""
+    return (await _active_starts(session, {schedule_id}, lo, hi))[schedule_id]
