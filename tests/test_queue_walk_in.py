@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import date
 
 import pytest
 from app.booking import service as booking_service
@@ -16,7 +17,7 @@ from app.queueing.display import mask_passport
 from app.queueing.schemas import SessionKey
 from sqlalchemy import select
 
-from tests.booking_helpers import TODAY, at, freeze, make_patient
+from tests.booking_helpers import TODAY, add_appointment, at, freeze, make_patient
 from tests.queue_helpers import add_entry, booked_today, entry_of, make_admin, todays_session
 
 
@@ -299,3 +300,43 @@ async def test_the_doctor_held_check_counts_every_channel_but_walk_in(db, clinic
     await db.commit()
     held = await booking_service._doctor_held(db, doctor.id, at(TODAY, "12:00"), at(TODAY, "18:00"))
     assert sorted(start for start, _ in held) == [at(TODAY, "14:00"), at(TODAY, "14:15")]
+
+
+async def walk_ins_of(db, patient) -> list[Appointment]:
+    return list(
+        (
+            await db.execute(
+                select(Appointment).where(
+                    Appointment.patient_id == patient.id, Appointment.booking_channel == "walk_in"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def test_a_leftover_entry_from_an_earlier_day_does_not_block_a_walk_in(db, clinic):
+    # Final review: a patient who left last week without being seen still had a
+    # `waiting` entry, and "already in a queue" then refused them for ever, at every clinic.
+    _, _, admin, key = await world(db, clinic)
+    other, other_schedule = await todays_session(db, clinic, email="o.dr@x.com", name="Dr Other")
+    patient, _ = await person(db, 1)
+    last_monday = await add_appointment(
+        db, patient, other, clinic, other_schedule, at(date(2026, 10, 5), "14:00")
+    )
+    await add_entry(db, last_monday, 1)  # checked in, never seen, never cleared
+    await service.add_walk_in(db, admin, key, patient.id)
+    assert len(await walk_ins_of(db, patient)) == 1
+
+
+async def test_an_entry_from_just_before_midnight_in_pakistan_is_not_todays(db, clinic):
+    # 23:30 on Sunday is still Sunday in Pakistan (18:30 UTC), so it is not today's queue.
+    doctor, schedule, admin, key = await world(db, clinic)
+    patient, _ = await person(db, 1)
+    late = await add_appointment(
+        db, patient, doctor, clinic, schedule, at(date(2026, 10, 11), "23:30")
+    )
+    await add_entry(db, late, 1)
+    await service.add_walk_in(db, admin, key, patient.id)
+    assert len(await walk_ins_of(db, patient)) == 1

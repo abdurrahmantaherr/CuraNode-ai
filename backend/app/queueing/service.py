@@ -98,25 +98,30 @@ async def _window_of(session: AsyncSession, appointment: Appointment) -> slots.W
     )
 
 
-async def _session_range(
-    session: AsyncSession, appointment: Appointment
-) -> tuple[datetime, datetime]:
+def _range_of(appointment: Appointment, window: slots.Window | None) -> tuple[datetime, datetime]:
     """The time range of the appointment's session, or its whole day if the
     session no longer exists."""
-    window = await _window_of(session, appointment)
     if window is not None:
         return slots.window_bounds(window)
     return _day_bounds(slots.to_local(appointment.slot_start).date())
+
+
+async def _peers_in(
+    session: AsyncSession, appointment: Appointment, window: slots.Window | None
+) -> list[tuple[QueueEntry, Appointment]]:
+    """Every queue entry of the appointment's session (itself included), given the
+    session window the caller has already looked up (the schedule load is the costly part)."""
+    if appointment.schedule_id is None:
+        return []
+    lo, hi = _range_of(appointment, window)
+    return await _session_entries(session, appointment.schedule_id, lo, hi)
 
 
 async def _peers(
     session: AsyncSession, appointment: Appointment
 ) -> list[tuple[QueueEntry, Appointment]]:
     """Every queue entry of the appointment's session (itself included)."""
-    if appointment.schedule_id is None:
-        return []
-    lo, hi = await _session_range(session, appointment)
-    return await _session_entries(session, appointment.schedule_id, lo, hi)
+    return await _peers_in(session, appointment, await _window_of(session, appointment))
 
 
 # ── The admin's and the doctor's views ───────────────────────────────────
@@ -241,7 +246,7 @@ async def _status(
         return None
     window = await _window_of(session, appointment)
     minutes = window.slot_minutes if window is not None else DEFAULT_MINUTES
-    peers = await _peers(session, appointment)
+    peers = await _peers_in(session, appointment, window)
     waiting = [e for e, _ in peers if e.state == STATE_WAITING]
     in_room = any(e.state == STATE_IN_ROOM for e, _ in peers)
     if entry is None:
@@ -595,6 +600,9 @@ async def add_walk_in(
             .where(
                 Appointment.patient_id == patient.id,
                 QueueEntry.state.in_((STATE_WAITING, STATE_IN_ROOM)),
+                # Only today's queue: an entry left behind on an earlier day is not a queue.
+                Appointment.slot_start >= day_lo,
+                Appointment.slot_start < day_hi,
             )
         )
     ).scalar_one()

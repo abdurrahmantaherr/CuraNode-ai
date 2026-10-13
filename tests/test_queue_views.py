@@ -252,3 +252,24 @@ async def test_badges_cover_only_todays_live_appointments(db, clinic):
     await booked_today(db, clinic, doctor, schedule, patient, "14:15", status="cancelled")
     badges = await service.patient_badges(db, actor)
     assert list(badges) == [a1.id] and badges[a1.id].state == "next"
+
+
+async def test_a_patients_status_loads_the_doctors_schedule_once(db, clinic, monkeypatch):
+    # Final review: `_status` looked the session window up twice, and the patient's page
+    # does that once per appointment. The schedule load is the expensive part.
+    from app.booking import service as booking_service
+
+    doctor, schedule, _ = await world(db, clinic)
+    patient, actor = await person(db, 1)
+    appointment = await booked_today(db, clinic, doctor, schedule, patient)
+    await add_entry(db, appointment, 1)
+    calls = []
+    real = booking_service.session_windows
+
+    async def counting(*args, **kwargs):
+        calls.append(args)
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(booking_service, "session_windows", counting)
+    status = await service.patient_status(db, actor, appointment.id)
+    assert status.state == "next" and len(calls) == 1

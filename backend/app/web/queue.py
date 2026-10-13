@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Annotated
 
-from fastapi import APIRouter, Form, Query, Request
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from ..deps import (
@@ -109,14 +109,26 @@ async def _render_queue(
 
 @router.get("/{locale}/admin/queue", response_class=HTMLResponse)
 async def queue_page(
+    request: Request, locale: str, session: SessionDep, actor: OptionalActorDep, saved: str = ""
+) -> Response:
+    if (redirect := _guard(request, locale, actor)) is not None:
+        return redirect
+    assert actor is not None
+    return await _render_queue(request, normalise_locale(locale), session, actor, saved=saved)
+
+
+@router.post("/{locale}/admin/queue/find", response_class=HTMLResponse)
+async def find_patient(
     request: Request,
     locale: str,
     session: SessionDep,
     actor: OptionalActorDep,
-    saved: str = "",
-    find: str = "",
-    find_session: Annotated[str, Query(alias="session")] = "",
+    find: Annotated[str, Form()] = "",
+    session_key: Annotated[str, Form(alias="session")] = "",
 ) -> Response:
+    """The walk-in search is a POST so what the desk types (a name, a passport number)
+    never lands in a URL, a browser history or an access log. It draws the page directly:
+    a search changes nothing, so there is nothing to redirect to."""
     if (redirect := _guard(request, locale, actor)) is not None:
         return redirect
     assert actor is not None
@@ -125,9 +137,8 @@ async def queue_page(
         normalise_locale(locale),
         session,
         actor,
-        saved=saved,
         find=find[:80],
-        find_session=find_session,
+        find_session=session_key,
     )
 
 

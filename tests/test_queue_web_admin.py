@@ -72,6 +72,7 @@ async def test_other_roles_go_to_their_own_area(client, db, clinic, role, area):
         ("POST", f"{PAGE}/{some}/send-in"),
         ("POST", f"{PAGE}/{some}/seen"),
         ("POST", f"{PAGE}/walk-in"),
+        ("POST", f"{PAGE}/find"),
     ]
     for method, path in calls:
         r = await client.request(method, path)
@@ -237,7 +238,7 @@ async def test_a_name_search_shows_masked_results_for_that_session(client, db, c
     doctor, schedule = desk
     found = await patient(db, 1, "Ayesha Raza")
     key = key_of(doctor, clinic, schedule)
-    r = await client.get(PAGE, params={"find": "ayesha", "session": key})
+    r = await client.post(f"{PAGE}/find", data={"find": "ayesha", "session": key})
     assert r.status_code == 200 and "Ayesha Raza" in r.text and "Add to queue" in r.text
     assert found.passport_no not in r.text and found.passport_no[-4:] in r.text
     assert "••" in r.text
@@ -247,7 +248,7 @@ async def test_an_exact_passport_number_finds_the_patient(client, db, clinic, de
     doctor, schedule = desk
     found = await patient(db, 1, "Ayesha Raza")
     key = key_of(doctor, clinic, schedule)
-    r = await client.get(PAGE, params={"find": found.passport_no, "session": key})
+    r = await client.post(f"{PAGE}/find", data={"find": found.passport_no, "session": key})
     assert "Ayesha Raza" in r.text and "••" in r.text
     # the number appears once, in the search box where it was typed, never in a result
     assert r.text.count(found.passport_no) == 1
@@ -256,9 +257,9 @@ async def test_an_exact_passport_number_finds_the_patient(client, db, clinic, de
 async def test_a_short_or_empty_search_says_so(client, db, clinic, desk):
     doctor, schedule = desk
     key = key_of(doctor, clinic, schedule)
-    r = await client.get(PAGE, params={"find": "ab", "session": key})
+    r = await client.post(f"{PAGE}/find", data={"find": "ab", "session": key})
     assert "Type at least 3 characters." in r.text
-    r = await client.get(PAGE, params={"find": "zzzzzz", "session": key})
+    r = await client.post(f"{PAGE}/find", data={"find": "zzzzzz", "session": key})
     assert "No patient found." in r.text
 
 
@@ -269,8 +270,11 @@ async def test_the_lookup_rate_limit_shows_a_message_not_an_error(
     doctor, schedule = desk
     await patient(db, 1, "Ayesha Raza")
     key = key_of(doctor, clinic, schedule)
-    assert "Ayesha Raza" in (await client.get(PAGE, params={"find": "ayesha", "session": key})).text
-    r = await client.get(PAGE, params={"find": "ayesha", "session": key})
+    assert (
+        "Ayesha Raza"
+        in (await client.post(f"{PAGE}/find", data={"find": "ayesha", "session": key})).text
+    )
+    r = await client.post(f"{PAGE}/find", data={"find": "ayesha", "session": key})
     assert r.status_code == 200 and "Too many attempts" in r.text
 
 
@@ -313,3 +317,26 @@ async def test_a_tampered_walk_in_form_creates_nothing(client, db, clinic, desk)
         r = await client.post(f"{PAGE}/walk-in", data=data)
         assert r.status_code == 303 and r.headers["location"] == PAGE
     assert (await db.execute(select(Appointment))).all() == []
+
+
+async def test_the_search_is_a_post_so_the_typed_text_never_reaches_a_url(client, db, clinic, desk):
+    # Final review: a GET search put passport numbers and names into URLs and access logs.
+    doctor, schedule = desk
+    found = await patient(db, 1, "Ayesha Raza")
+    page = await client.get(PAGE)
+    assert 'method="post" action="/en/admin/queue/find' in page.text
+    assert 'method="get"' not in page.text
+    r = await client.post(
+        f"{PAGE}/find",
+        data={"find": found.passport_no, "session": key_of(doctor, clinic, schedule)},
+    )
+    assert r.status_code == 200 and "Ayesha Raza" in r.text
+    assert "find=" not in str(r.url) and found.passport_no not in str(r.url)
+
+
+async def test_a_search_in_the_address_bar_is_ignored(client, db, clinic, desk):
+    doctor, schedule = desk
+    await patient(db, 1, "Ayesha Raza")
+    key = key_of(doctor, clinic, schedule)
+    r = await client.get(PAGE, params={"find": "ayesha", "session": key})
+    assert r.status_code == 200 and "Ayesha Raza" not in r.text
