@@ -20,12 +20,14 @@ from datetime import date, datetime, time, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..audit import writer as audit
 from ..booking import service as booking_service
 from ..booking import slots
 from ..booking.schemas import ACTIVE_STATUSES, DEFAULT_MINUTES
 from ..db.models import Appointment, Clinic, Doctor, Patient, QueueEntry, UserRole
 from ..deps import Actor
-from ..errors import NotFound
+from ..errors import NotFound, QueueRefused
+from ..schedule import service as schedule_service
 from . import order
 from .schemas import (
     CHANNEL_WALK_IN,
@@ -290,3 +292,202 @@ async def patient_badges(session: AsyncSession, actor: Actor) -> dict[uuid.UUID,
         if status is not None:
             badges[appointment.id] = status
     return badges
+
+
+# ── Actions (the clinic admin only) ──────────────────────────────────────
+def _new_entry(appointment_id: uuid.UUID, token: int) -> QueueEntry:
+    """A waiting entry. If the schema owner's answer showed another NOT NULL column
+    with no database default (Task 1, Step 1), set it here from the appointment."""
+    return QueueEntry(appointment_id=appointment_id, token_number=token, state=STATE_WAITING)
+
+
+async def _audit(
+    session: AsyncSession,
+    actor: Actor,
+    action: str,
+    appointment: Appointment,
+    *,
+    entry: QueueEntry | None = None,
+    extra: dict[str, str] | None = None,
+    user_agent: str | None = None,
+) -> None:
+    """One audit row, ids only: never a name, a passport number or search text."""
+    detail = {
+        "appointment_id": str(appointment.id),
+        "doctor_id": str(appointment.doctor_id),
+        "clinic_id": str(appointment.clinic_id),
+    }
+    if entry is not None:
+        detail["entry_id"] = str(entry.id)
+    if extra:
+        detail.update(extra)
+    await audit.write(
+        session,
+        action=action,
+        actor_user_id=actor.user_id,
+        actor_role=actor.role,
+        subject_patient_id=appointment.patient_id,
+        resource_type="queue_entry",
+        ip_address=actor.ip_address,
+        user_agent=user_agent,
+        detail=detail,
+    )
+
+
+async def _locked_entry(
+    session: AsyncSession, actor: Actor, entry_id: uuid.UUID
+) -> tuple[QueueEntry, Appointment]:
+    """The admin's own entry, found, then the doctor locked, then re-read. Only
+    today's entries can be acted on."""
+    clinics = _staff(actor)
+    row = (
+        await session.execute(
+            select(QueueEntry, Appointment)
+            .join(Appointment, Appointment.id == QueueEntry.appointment_id)
+            .where(QueueEntry.id == entry_id, Appointment.clinic_id.in_(clinics))
+        )
+    ).first()
+    if row is None:
+        raise NotFound()
+    entry, appointment = row
+    await schedule_service.lock_doctor(session, appointment.doctor_id)
+    await session.refresh(entry)
+    await session.refresh(appointment)
+    if slots.to_local(appointment.slot_start).date() != booking_service.current_day():
+        raise QueueRefused("not_today")
+    return entry, appointment
+
+
+async def check_in(
+    session: AsyncSession,
+    actor: Actor,
+    appointment_id: uuid.UUID,
+    *,
+    user_agent: str | None = None,
+) -> None:
+    """Check a booked patient in: they join their session's queue at the back.
+    Checking in twice does nothing."""
+    clinics = _staff(actor)
+    appointment = (
+        await session.execute(
+            select(Appointment).where(
+                Appointment.id == appointment_id, Appointment.clinic_id.in_(clinics)
+            )
+        )
+    ).scalar_one_or_none()
+    if appointment is None:
+        raise NotFound()
+    await schedule_service.lock_doctor(session, appointment.doctor_id)
+    await session.refresh(appointment)
+    existing = (
+        await session.execute(select(QueueEntry).where(QueueEntry.appointment_id == appointment.id))
+    ).scalar_one_or_none()
+    if existing is not None:
+        return
+    if appointment.status != "booked":
+        raise QueueRefused("not_booked")
+    if slots.to_local(appointment.slot_start).date() != booking_service.current_day():
+        raise QueueRefused("not_today")
+    if not await booking_service.is_bookable(session, appointment.doctor_id, appointment.clinic_id):
+        raise QueueRefused("doctor_unavailable")
+    window = await _window_of(session, appointment)
+    if window is None or booking_service.now() >= slots.window_bounds(window)[1]:
+        raise QueueRefused("session_over")
+    lo, hi = slots.window_bounds(window)
+    entries = await _session_entries(session, window.schedule_id, lo, hi)
+    entry = _new_entry(appointment.id, order.next_token(e.token_number for e, _ in entries))
+    session.add(entry)
+    appointment.status = "checked_in"
+    await session.flush()
+    await _audit(
+        session, actor, audit.QUEUE_CHECK_IN, appointment, entry=entry, user_agent=user_agent
+    )
+    await session.commit()
+
+
+async def send_in(
+    session: AsyncSession, actor: Actor, entry_id: uuid.UUID, *, user_agent: str | None = None
+) -> None:
+    """Send a waiting patient into the room. Refused while someone is already there."""
+    entry, appointment = await _locked_entry(session, actor, entry_id)
+    if entry.state != STATE_WAITING:
+        raise QueueRefused("not_waiting")
+    peers = await _peers(session, appointment)
+    if any(other.state == STATE_IN_ROOM for other, _ in peers):
+        raise QueueRefused("room_occupied")
+    entry.state = STATE_IN_ROOM
+    await _audit(
+        session, actor, audit.QUEUE_SEND_IN, appointment, entry=entry, user_agent=user_agent
+    )
+    await session.commit()
+
+
+async def mark_seen(
+    session: AsyncSession, actor: Actor, entry_id: uuid.UUID, *, user_agent: str | None = None
+) -> None:
+    """The patient in the room has been seen: the visit is finished (final)."""
+    entry, appointment = await _locked_entry(session, actor, entry_id)
+    if entry.state != STATE_IN_ROOM:
+        raise QueueRefused("not_in_room")
+    entry.state = STATE_SERVED
+    appointment.status = "done"
+    await _audit(session, actor, audit.QUEUE_SEEN, appointment, entry=entry, user_agent=user_agent)
+    await session.commit()
+
+
+async def put_back(
+    session: AsyncSession, actor: Actor, entry_id: uuid.UUID, *, user_agent: str | None = None
+) -> None:
+    """Undo a mistaken "send in": back to waiting, keeping their token (their place)."""
+    entry, appointment = await _locked_entry(session, actor, entry_id)
+    if entry.state != STATE_IN_ROOM:
+        raise QueueRefused("not_in_room")
+    entry.state = STATE_WAITING
+    await _audit(
+        session, actor, audit.QUEUE_PUT_BACK, appointment, entry=entry, user_agent=user_agent
+    )
+    await session.commit()
+
+
+async def _move(
+    session: AsyncSession, actor: Actor, entry_id: uuid.UUID, how: str, user_agent: str | None
+) -> None:
+    entry, appointment = await _locked_entry(session, actor, entry_id)
+    if entry.state != STATE_WAITING:
+        raise QueueRefused("not_waiting")
+    peers = await _peers(session, appointment)
+    waiting = sorted(
+        (e for e, _ in peers if e.state == STATE_WAITING),
+        key=lambda e: (e.token_number, str(e.id)),
+    )
+    ids = [e.id for e in waiting]
+    new_ids = order.moved_up(ids, entry.id) if how == "up" else order.made_next(ids, entry.id)
+    if new_ids == ids:
+        return
+    new_tokens = order.reassign([e.token_number for e in waiting], new_ids)
+    for other in waiting:
+        other.token_number = new_tokens[other.id]
+    await _audit(
+        session,
+        actor,
+        audit.QUEUE_MOVE,
+        appointment,
+        entry=entry,
+        extra={"how": how},
+        user_agent=user_agent,
+    )
+    await session.commit()
+
+
+async def move_up(
+    session: AsyncSession, actor: Actor, entry_id: uuid.UUID, *, user_agent: str | None = None
+) -> None:
+    """Swap a waiting patient with the one directly ahead."""
+    await _move(session, actor, entry_id, "up", user_agent)
+
+
+async def make_next(
+    session: AsyncSession, actor: Actor, entry_id: uuid.UUID, *, user_agent: str | None = None
+) -> None:
+    """Put a waiting patient first among the waiting."""
+    await _move(session, actor, entry_id, "next", user_agent)
