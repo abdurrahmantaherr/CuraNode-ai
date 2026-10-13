@@ -480,6 +480,39 @@ class Appointment(Base):
     )
 
 
+class QueueEntry(Base):
+    """queue_entry — shared, pre-existing; one row per checked-in appointment.
+
+    Mapped for the live queue (P6). `appointment_id` is UNIQUE; `token_number` has no
+    uniqueness or bound in the database, so the queue service keeps tokens unique under
+    the per-doctor lock. `state` follows the live CHECK. `position` and
+    `est_wait_minutes` exist in the table (nullable) but this feature does not use them:
+    order is the token. The columns are the schema owner's confirmed ones
+    (tests/fixtures/queue_entry_columns.json, read-only check 2026-10-14).
+    """
+
+    __tablename__ = "queue_entry"
+
+    id: Mapped[uuid.UUID] = mapped_column("queue_id", Uuid, primary_key=True, default=uuid7)
+    appointment_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("appointment.appointment_id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+    )
+    token_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    est_wait_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="waiting")
+    updated_at: Mapped[datetime] = _ts(nullable=False, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('waiting', 'in_room', 'served')", name="queue_entry_state_check"
+        ),
+    )
+
+
 # ── Patient profile (FR2) ────────────────────────────────────────────────
 class Allergy(Base):
     """A patient's known allergy.
