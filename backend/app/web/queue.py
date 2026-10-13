@@ -117,6 +117,15 @@ async def queue_page(
     return await _render_queue(request, normalise_locale(locale), session, actor, saved=saved)
 
 
+@router.get("/{locale}/admin/queue/find", include_in_schema=False)
+async def find_patient_address(request: Request, locale: str, actor: OptionalActorDep) -> Response:
+    """The search answers a POST, so its address is not a page of its own: opening it
+    again (a bookmark, Enter in the address bar) goes back to the queue, not to a 405."""
+    if (redirect := _guard(request, locale, actor)) is not None:
+        return redirect
+    return RedirectResponse(f"/{normalise_locale(locale)}/admin/queue", status_code=303)
+
+
 @router.post("/{locale}/admin/queue/find", response_class=HTMLResponse)
 async def find_patient(
     request: Request,

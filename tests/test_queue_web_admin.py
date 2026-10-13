@@ -340,3 +340,14 @@ async def test_a_search_in_the_address_bar_is_ignored(client, db, clinic, desk):
     key = key_of(doctor, clinic, schedule)
     r = await client.get(PAGE, params={"find": "ayesha", "session": key})
     assert r.status_code == 200 and "Ayesha Raza" not in r.text
+
+
+async def test_opening_the_search_address_directly_goes_back_to_the_queue(client, db, clinic, desk):
+    # Found in the browser walkthrough: after a search the address bar shows .../find, and
+    # opening it again (a bookmark, Enter in the address bar) gave a raw JSON 405.
+    r = await client.get(f"{PAGE}/find")
+    assert r.status_code == 303 and r.headers["location"] == PAGE
+    # a signed-out visitor is still sent to sign in, not to the queue
+    client.cookies.clear()
+    r = await client.get(f"{PAGE}/find")
+    assert r.status_code == 303 and "/login" in r.headers["location"]
