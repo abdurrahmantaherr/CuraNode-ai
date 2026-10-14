@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{#- One timeline event with everything the record holds about it (P3 — "View details").
+
+    Context (web/timeline.py::_render_event):
+      event       TimelineDetail — title, date, provenance, blocks (facts / table / text)
+      back_href   the timeline as the reader left it (filters and page kept)
+      owner       the patient's own view: only they get links to the stored document -#}
+
+{% block title %}{{ event.title }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    <div><a class="btn btn--secondary btn--sm" href="{{ back_href }}">{{ t('timeline.back') }}</a></div>
+
+    <section class="panel stack" aria-labelledby="event-h">
+      <div class="tl-card__top">
+        <span class="tl-card__kind">{{ kind_label(event.kind) }}</span>
+        {% if owner and event.provenance == 'ai_patient_confirmed' %}
+          <span class="tl-prov tl-prov--confirmed">{{ t('timeline.prov.reviewed_confirmed') }}</span>
+        {% else %}
+          <span class="tl-prov tl-prov--{{ prov_class(event.provenance) }}">{{ event.provenance_label }}</span>
+        {% endif %}
+      </div>
+      <h2 id="event-h" class="tl-detail__title">{{ event.title }}</h2>
+      <p class="tl-detail__date">
+        {% if event.event_date %}
+          <time datetime="{{ event.event_date.isoformat() }}">{{ fmt_date(event.event_date) }}</time>
+          {% if event.date_basis == 'recorded' %}· {{ t('timeline.date_recorded') }}{% endif %}
+        {% else %}
+          {{ t('timeline.date_unknown') }}
+        {% endif %}
+      </p>
+      <p class="field-help" data-provenance="{{ event.provenance }}">{{ t('timeline.prov_help.' ~ event.provenance) }}</p>
+      {% if owner and event.document_id %}
+        <div class="btn-row">
+          <a class="btn btn--secondary btn--sm" href="/{{ locale }}/patient/documents/{{ event.document_id }}">{{ t('timeline.open_document') }}</a>
+          <a class="btn btn--secondary btn--sm" href="/{{ locale }}/patient/documents/{{ event.document_id }}/file" target="_blank" rel="noopener">{{ t('timeline.open_original') }}</a>
+        </div>
+      {% endif %}
+    </section>
+
+    {% for b in event.blocks %}
+      <section class="panel stack" aria-labelledby="block-{{ loop.index }}">
+        <h2 id="block-{{ loop.index }}" class="panel__label">{{ b.heading }}</h2>
+        {% if b.kind == 'facts' %}
+          <dl class="readonly-list">
+            {% for fact in b.facts %}
+              <dt>{{ fact.label }}</dt>
+              <dd>{{ fact.value }}</dd>
+            {% endfor %}
+          </dl>
+        {% elif b.kind == 'table' %}
+          <div class="data-table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>{% for column in b.columns %}<th scope="col">{{ column }}</th>{% endfor %}</tr>
+              </thead>
+              <tbody>
+                {% for row in b.rows %}
+                  <tr>
+                    {% for cell in row %}
+                      {% if cell.flag %}
+                        <td class="flag-cell">
+                          <span class="badge {{ {'high': 'badge--err', 'critical': 'badge--err', 'low': 'badge--warn', 'abnormal': 'badge--warn', 'check': 'badge--warn', 'normal': 'badge--ok'}.get(cell.flag, 'badge--neutral') }}">{{ cell.value }}</span>
+                          {% if cell.note %}<span class="field-help">{{ cell.note }}</span>{% endif %}
+                        </td>
+                      {% else %}
+                        <td>{{ cell.value }}</td>
+                      {% endif %}
+                    {% endfor %}
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          {% if b.ai_generated %}
+            <p><span class="badge badge--ai">{{ t('timeline.ai_generated') }}</span></p>
+          {% endif %}
+          <p class="tl-text">{{ b.text }}</p>
+        {% endif %}
+      </section>
+    {% endfor %}
+
+    {#- The records this one is linked to by a real relationship (a document and the visit it
+        belongs to) — both stay on the timeline; this says how they relate. -#}
+    {% if event.related %}
+      <section class="panel stack" aria-labelledby="related-h" data-timeline-state="related">
+        <h2 id="related-h" class="panel__label">{{ t('timeline.related.heading') }}</h2>
+        <ul class="entry-list">
+          {% for rel in event.related %}
+            <li class="entry-row">
+              <div class="entry-row__main">
+                <div class="field-help">{{ t('timeline.related.' ~ rel.relation) }}</div>
+                <div class="entry-row__title">{{ rel.title }}</div>
+                {% if rel.event_date %}<div class="mono">{{ fmt_date(rel.event_date) }}</div>{% endif %}
+              </div>
+              <div class="entry-row__actions">
+                <a class="btn btn--secondary btn--sm" href="{{ related_href(rel.ref) }}">{{ t('timeline.view_details') }}</a>
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% endif %}
+  </main>
+</div>
+{% endblock %}

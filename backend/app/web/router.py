@@ -49,6 +49,7 @@ from ..deps import (
     check_schedule_write_rate,
     enforce_auth_rate_limit,
 )
+from ..doctor import what_changed
 from ..doctor.rows import age_in_years, build_rows, gender_label
 from ..errors import (
     AppError,
@@ -1181,6 +1182,11 @@ def _patient_nav(loc: str, *, current: str) -> list[dict[str, Any]]:
             "current": current == "documents",
         },
         {
+            "href": f"/{loc}/patient/timeline",
+            "label": translate("nav.timeline", loc),
+            "current": current == "timeline",
+        },
+        {
             "href": f"/{loc}/patient/doctors",
             "label": translate("nav.find_doctor", loc),
             "current": current == "doctors",
@@ -2097,16 +2103,19 @@ async def doctor_patient_page(
     try:
         if parsed_id is None:
             raise NotFound()
-        # Through the consent gateway, re-checked on every view (BL-07): only the
-        # shared sections are read, and each read is logged (P9 BL-17, BL-18).
-        view = await consent_gateway.read_sections(
-            session, actor, parsed_id, purpose="doctor.patient_view"
+        # Before the reads: the gateway writes this request's own record.read row.
+        since = await what_changed.last_read_at(session, actor.user_id, parsed_id)
+        # One pass through the consent gateway, re-checked on every view (BL-07): only
+        # shared sections are read, each read is logged (P9), and the view is audited (D2).
+        record = await consent_gateway.load_doctor_patient_page(
+            session, actor, parsed_id, user_agent=request.headers.get("user-agent")
         )
     except NotFound:  # includes ConsentDenied — one D2 response for every refusal
         return _render_lookup(
             request, loc, status_code=404, error=translate("lookup.not_found", loc)
         )
-    basics = view.sections["basics"]
+    shared = dict(record.sections)
+    basics = shared["basics"]
     if basics is not None:
         age = age_in_years(basics["date_of_birth"], dbtypes.today_pk())
         basics = {
@@ -2114,6 +2123,24 @@ async def doctor_patient_page(
             "age": str(age) if age is not None else "—",
             "gender": gender_label(basics["gender"], loc),
         }
+    shared["basics"] = basics
+    changes = None
+    if since is not None:
+        changes = await what_changed.changes_since(
+            session,
+            parsed_id,
+            since,
+            frozenset(
+                k for k in ("allergies", "conditions", "medications") if shared[k] is not None
+            ),
+        )
+    clinic_names: dict[uuid.UUID, str] = {}
+    clinic_ids = {e.clinic_id for e in record.encounters} if shared["visits"] is not None else set()
+    if clinic_ids:
+        rows = await session.execute(
+            select(Clinic.id, Clinic.name).where(Clinic.id.in_(clinic_ids))
+        )
+        clinic_names = {cid: name for cid, name in rows.all()}
     return _render(
         request,
         "doctor/patient.html",
@@ -2121,9 +2148,15 @@ async def doctor_patient_page(
         crumb=translate("auth.role.doctor", loc),
         page_title=translate("doctor_patient.title", loc),
         nav_items=_doctor_nav(loc, current="lookup"),
-        passport_no=view.passport_no,
+        passport_no=record.passport_no,
+        patient_id=parsed_id,
         sections=consent_schemas.SECTIONS,
-        shared={**view.sections, "basics": basics},
+        shared=shared,
+        record=record,
+        changes=changes,
+        clinic_names=clinic_names,
+        severity_badge=lambda s: _SEVERITY_BADGE.get(s, "badge--neutral"),
+        severity_label=_severity_label(loc),
     )
 
 
