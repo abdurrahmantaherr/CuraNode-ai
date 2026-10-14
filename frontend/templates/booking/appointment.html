@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{#- One appointment, and the confirmation after booking or moving (P5 spec 3.3):
+    doctor, hospital, date, time and status only. No token number: the real one
+    is assigned at check-in, later. Names are autoescaped.
+
+    Context (built in web/booking.py::appointment_page):
+      row     AppointmentRow; saved — success banner text or None
+      weekday(day), hhmm(), status_label(), status_badge() -#}
+
+{% block title %}{{ t('booking.appointment.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    {% if saved %}
+      <div class="banner banner--ok" role="status"><span>{{ saved }}</span></div>
+    {% endif %}
+
+    <div class="panel stack">
+      <h2 class="panel__label">{{ t('booking.appointment.title') }}</h2>
+      <dl class="stack" style="margin:0">
+        <div>
+          <dt class="eyebrow">{{ t('booking.field.doctor') }}</dt>
+          <dd style="margin:0">{{ row.doctor_name }}{% if row.specialty %} · {{ row.specialty }}{% endif %}</dd>
+        </div>
+        <div>
+          <dt class="eyebrow">{{ t('booking.field.hospital') }}</dt>
+          <dd style="margin:0">{{ row.clinic_name }}</dd>
+        </div>
+        <div>
+          <dt class="eyebrow">{{ t('booking.field.date') }}</dt>
+          <dd style="margin:0">{{ weekday(row.starts_at) }} <bdi>{{ row.starts_at.date().isoformat() }}</bdi></dd>
+        </div>
+        <div>
+          <dt class="eyebrow">{{ t('booking.field.time') }}</dt>
+          <dd style="margin:0" class="mono" dir="ltr">{{ hhmm(row.starts_at) }}</dd>
+        </div>
+        <div>
+          <dt class="eyebrow">{{ t('booking.field.status') }}</dt>
+          <dd style="margin:0"><span class="badge {{ status_badge(row.status) }}">{{ status_label(row.status) }}</span></dd>
+        </div>
+      </dl>
+      {% set r = row %}
+      {% include "booking/_actions.html" %}
+      <p><a class="btn btn--secondary" href="/{{ locale }}/patient/appointments">{{ t('booking.appointment.all') }}</a></p>
+    </div>
+  </main>
+</div>
+{% endblock %}

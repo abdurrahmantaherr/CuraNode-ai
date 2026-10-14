@@ -264,6 +264,15 @@ async def check_document_write_rate(actor: Actor) -> None:
         raise RateLimited(retry_after_s=60)
 
 
+# ── Appointment-booking write budget (P5) ────────────────────────────────
+async def check_booking_write_rate(actor: Actor) -> None:
+    """Counts one booking write attempt (book, reschedule, cancel). Shared by every
+    web handler, so they all draw from one per-patient window."""
+    count = await cache.incr(ratelimit_key("booking_write", str(actor.user_id)), 60)
+    if count > settings.booking_write_rate_limit_per_minute:
+        raise RateLimited(retry_after_s=60)
+
+
 async def enforce_document_write_rate_limit(actor: PatientDep) -> None:
     """Depends on PatientDep so 401/403 surface before 429."""
     await check_document_write_rate(actor)

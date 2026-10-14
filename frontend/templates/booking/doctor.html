@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{#- A doctor's free times (FR15, P5 spec 3.3). A time is a plain link to the
+    confirm step; nothing on this page books anything. Names are autoescaped.
+
+    Context (built in web/booking.py::_render_doctor):
+      doctor      DoctorCard; clinic — the ClinicRef whose times are shown
+      days        list[DayOptions] — only days with at least one free time
+      moving      AppointmentRow being moved, or None; moving_text its banner text
+      page_error  banner text or None
+      clinic_href(clinic), time_href(start), weekday(day), hhmm(start) -#}
+
+{% block title %}{{ t('booking.doctor.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    {% if page_error %}
+      <div class="banner banner--error" role="alert">
+        <span aria-hidden="true">!</span><span>{{ page_error }}</span>
+      </div>
+    {% endif %}
+    {% if moving %}
+      <div class="banner banner--warn" role="status">
+        <span aria-hidden="true">!</span>
+        <span>{{ moving_text }}
+          <a href="/{{ locale }}/patient/appointments/{{ moving.id }}">{{ t('booking.doctor.keep') }}</a></span>
+      </div>
+    {% endif %}
+
+    <div class="panel stack">
+      <div class="entry-row__title">{{ doctor.name }}</div>
+      {% if doctor.specialty %}<div class="field-help">{{ doctor.specialty }}</div>{% endif %}
+      <p style="margin:0"><span class="badge badge--ok">{{ t('booking.find.verified') }}</span></p>
+      <div>
+        <div class="eyebrow">{{ t('booking.field.hospital') }}</div>
+        <p style="display:flex;flex-wrap:wrap;gap:var(--sp-2);margin:var(--sp-2) 0 0">
+          {% for c in doctor.clinics %}
+            <a class="btn btn--sm {% if c.id == clinic.id %}btn--primary{% else %}btn--secondary{% endif %}"
+               href="{{ clinic_href(c) }}"
+               {% if c.id == clinic.id %}aria-current="true"{% endif %}>{{ c.name }}{% if c.city %} — {{ c.city }}{% endif %}</a>
+          {% endfor %}
+        </p>
+      </div>
+    </div>
+
+    <div class="panel stack">
+      <h2 class="panel__label">{{ t('booking.doctor.pick') }}</h2>
+      {% if not days %}
+        <p class="empty-state">{{ t('booking.doctor.no_times') }}</p>
+      {% endif %}
+    </div>
+
+    {% for d in days %}
+      <section class="panel stack" aria-labelledby="day-{{ d.day.isoformat() }}">
+        <h3 id="day-{{ d.day.isoformat() }}" class="panel__label">{{ weekday(d.day) }} <bdi>{{ d.day.isoformat() }}</bdi></h3>
+        <p style="display:flex;flex-wrap:wrap;gap:var(--sp-2);margin:0">
+          {% for start in d.times %}
+            <a class="btn btn--secondary btn--sm mono" dir="ltr" href="{{ time_href(start) }}">{{ hhmm(start) }}</a>
+          {% endfor %}
+        </p>
+      </section>
+    {% endfor %}
+
+    <p><a class="btn btn--secondary" href="/{{ locale }}/patient/doctors">{{ t('booking.doctor.back') }}</a></p>
+  </main>
+</div>
+{% endblock %}

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{#- Confirm the chosen time (P5 spec 3.3): doctor, hospital, date and time only.
+    There is no token number; the real one is assigned at check-in, later.
+    Names are autoescaped; never use |safe here.
+
+    Context (built in web/booking.py::confirm_page):
+      doctor      DoctorCard; clinic — the ClinicRef; day — a date (Pakistan)
+      start       the chosen instant (UTC); moving — AppointmentRow or None
+      replaces_text, action (the form's address), back_href
+      hhmm(start), slot_value(start), weekday(day) -#}
+
+{% block title %}{{ page_title }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    <div class="panel stack">
+      <h2 class="panel__label">{{ page_title }}</h2>
+      {% if moving %}<p class="field-help">{{ replaces_text }}</p>{% endif %}
+      <dl class="stack" style="margin:0">
+        <div>
+          <dt class="eyebrow">{{ t('booking.field.doctor') }}</dt>
+          <dd style="margin:0">{{ doctor.name }}{% if doctor.specialty %} · {{ doctor.specialty }}{% endif %}</dd>
+        </div>
+        <div>
+          <dt class="eyebrow">{{ t('booking.field.hospital') }}</dt>
+          <dd style="margin:0">{{ clinic.name }}{% if clinic.city %} — {{ clinic.city }}{% endif %}</dd>
+        </div>
+        <div>
+          <dt class="eyebrow">{{ t('booking.field.date') }}</dt>
+          <dd style="margin:0">{{ weekday(day) }} <bdi>{{ day.isoformat() }}</bdi></dd>
+        </div>
+        <div>
+          <dt class="eyebrow">{{ t('booking.field.time') }}</dt>
+          <dd style="margin:0" class="mono" dir="ltr">{{ hhmm(start) }}</dd>
+        </div>
+      </dl>
+
+      <form class="stack" method="post" action="{{ action }}">
+        <input type="hidden" name="doctor_id" value="{{ doctor.id }}">
+        <input type="hidden" name="clinic_id" value="{{ clinic.id }}">
+        <input type="hidden" name="slot" value="{{ slot_value(start) }}">
+        <p class="field-help">{{ t('booking.confirm.hint') }}</p>
+        <div class="btn-row">
+          {% set label = t('booking.confirm.action_move') if moving else t('booking.confirm.action') %}
+          <button class="btn btn--primary" type="submit" data-label="{{ label }}">{{ label }}</button>
+          <a class="btn btn--secondary" href="{{ back_href }}">{{ t('booking.confirm.change') }}</a>
+        </div>
+      </form>
+    </div>
+  </main>
+</div>
+{% endblock %}

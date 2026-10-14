@@ -137,6 +137,25 @@ class ScheduleConflict(AppError):
     retryable = False
 
 
+class BookingRefused(AppError):
+    """A booking, reschedule or cancel the rules refuse (P5, spec 3.2): the time
+    is not offered, too soon, too far ahead, taken, the session is full, the
+    patient already has an overlapping appointment or one with that doctor that
+    day, or the appointment can no longer be changed. `reason` picks the
+    message (`errors.booking_<reason>`). A 409: the page can be shown again with
+    fresh times."""
+
+    code = "BOOKING_REFUSED"
+    http_status = status.HTTP_409_CONFLICT
+    message_key = "errors.booking_not_offered"
+    retryable = False
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        self.message_key = f"errors.booking_{reason}"
+        super().__init__({"reason": reason})
+
+
 class UnsupportedFileType(AppError):
     """Not a PDF, JPEG or PNG — judged by the file's own bytes, not its name."""
 

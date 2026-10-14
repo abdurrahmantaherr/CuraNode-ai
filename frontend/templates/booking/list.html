@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{#- My appointments (FR16, P5 spec 3.3). Every control works without JavaScript.
+    Names are autoescaped; never use |safe here.
+
+    Context (built in web/booking.py::_render_list):
+      upcoming, past   list[AppointmentRow]
+      saved            success banner text or None; page_error — error banner or None
+      hhmm(), status_label(), status_badge() -#}
+
+{% block title %}{{ t('booking.list.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% block body %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    {% if page_error %}
+      <div class="banner banner--error" role="alert">
+        <span aria-hidden="true">!</span><span>{{ page_error }}</span>
+      </div>
+    {% endif %}
+    {% if saved %}
+      <div class="banner banner--ok" role="status"><span>{{ saved }}</span></div>
+    {% endif %}
+
+    <section class="panel stack" aria-labelledby="upcoming-h">
+      <h2 id="upcoming-h" class="panel__label">{{ t('booking.list.upcoming') }}</h2>
+      {% if upcoming %}
+        <ul class="grant-list">
+          {% for r in upcoming %}{% include "booking/_row.html" %}{% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty-state">{{ t('booking.list.empty_upcoming') }}</p>
+      {% endif %}
+      <p><a class="btn btn--primary" href="/{{ locale }}/patient/doctors">{{ t('nav.find_doctor') }}</a></p>
+    </section>
+
+    <section class="panel stack" aria-labelledby="past-h">
+      <h2 id="past-h" class="panel__label">{{ t('booking.list.past') }}</h2>
+      {% if past %}
+        <ul class="grant-list">
+          {% for r in past %}{% include "booking/_row.html" %}{% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty-state">{{ t('booking.list.empty_past') }}</p>
+      {% endif %}
+    </section>
+  </main>
+</div>
+{% endblock %}

@@ -1,0 +1,10 @@
+{#- One appointment in a list. Expects `r` (an AppointmentRow) from the loop. -#}
+<li class="grant-card stack">
+  <div class="entry-row__main">
+    <div class="entry-row__title"><a href="/{{ locale }}/patient/appointments/{{ r.id }}">{{ r.doctor_name }}</a></div>
+    <div class="field-help">{% if r.specialty %}{{ r.specialty }} · {% endif %}{{ r.clinic_name }}</div>
+    <div class="mono" dir="ltr">{{ r.starts_at.date().isoformat() }} {{ hhmm(r.starts_at) }}</div>
+  </div>
+  <span class="badge {{ status_badge(r.status) }}">{{ status_label(r.status) }}</span>
+  {% include "booking/_actions.html" %}
+</li>
