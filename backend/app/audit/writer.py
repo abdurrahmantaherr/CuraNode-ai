@@ -65,6 +65,17 @@ APPOINTMENT_BOOK = "appointment.book"
 APPOINTMENT_CANCEL = "appointment.cancel"
 APPOINTMENT_RESCHEDULE = "appointment.reschedule"
 
+
+# Emitted by the live queue (P6). `detail` holds ids only: never a name, a passport
+# number or the text typed into a search; a lookup logs only how many results it found.
+QUEUE_CHECK_IN = "queue.check_in"
+QUEUE_SEND_IN = "queue.send_in"
+QUEUE_SEEN = "queue.seen"
+QUEUE_PUT_BACK = "queue.put_back"
+QUEUE_MOVE = "queue.move"
+QUEUE_WALK_IN = "queue.walk_in"
+QUEUE_FIND_PATIENT = "queue.find_patient"
+
 # Emitted by clinic-admin doctor verification (D-VERIFY v1). `detail` never
 # carries the admin's free-text note — only the doctor id and reason code.
 VERIFICATION_APPROVE = "verification.approve"

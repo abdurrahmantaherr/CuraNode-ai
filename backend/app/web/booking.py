@@ -22,6 +22,7 @@ from ..db.models import UserRole
 from ..deps import Actor, OptionalActorDep, SessionDep, check_booking_write_rate
 from ..errors import BookingRefused, NotFound, RateLimited
 from ..i18n.catalogue import normalise_locale, translate
+from ..queueing import service as queue_service
 from .router import _area, _doctor_nav, _patient_nav, _render, login_redirect
 
 router = APIRouter(tags=["web-booking"])
@@ -492,6 +493,7 @@ async def _render_list(
     page_error: str | None = None,
 ) -> Response:
     upcoming, past = await service.my_appointments(session, actor)
+    badges = await queue_service.patient_badges(session, actor)
     key = _SAVED.get(saved)
     return _render(
         request,
@@ -501,6 +503,7 @@ async def _render_list(
         path_suffix="/patient/appointments",
         upcoming=upcoming,
         past=past,
+        queue_badges=badges,
         saved=translate(key, loc) if key else None,
         page_error=page_error,
         **_ctx(loc, "booking.list.title", current="appointments"),
@@ -542,6 +545,7 @@ async def appointment_page(
         row = await service.appointment_for_patient(session, actor, parsed)
     except NotFound:  # not theirs and not there look the same
         return RedirectResponse(list_url, status_code=303)
+    queue_status = await queue_service.patient_status(session, actor, row.id)
     key = _SAVED.get(saved)
     return _render(
         request,
@@ -549,6 +553,8 @@ async def appointment_page(
         loc,
         path_suffix=f"/patient/appointments/{row.id}",
         row=row,
+        queue_status=queue_status,
+        updated_at=display.hhmm(service.now()),
         saved=translate(key, loc) if key else None,
         **_ctx(loc, "booking.appointment.title", current="appointments"),
     )
@@ -680,6 +686,9 @@ async def doctor_day_page(
     except NotFound:
         return RedirectResponse(f"/{loc}/doctor", status_code=303)
     base = f"/{loc}/doctor/appointments"
+    queue_extra = {}
+    if day == service.current_day():  # the queue is today's: other days have none to show
+        queue_extra["queue_views"] = await queue_service.doctor_queue(session, actor)
     return _render(
         request,
         "booking/doctor_day.html",
@@ -694,4 +703,5 @@ async def doctor_day_page(
         prev_href=f"{base}?date={(day - timedelta(days=1)).isoformat()}",
         next_href=f"{base}?date={(day + timedelta(days=1)).isoformat()}",
         today_href=base,
+        **queue_extra,
     )

@@ -1,0 +1,9 @@
+[
+  {"name": "queue_id", "nullable": false, "default": "extensions.gen_random_uuid()"},
+  {"name": "appointment_id", "nullable": false, "default": null},
+  {"name": "token_number", "nullable": false, "default": null},
+  {"name": "position", "nullable": true, "default": null},
+  {"name": "est_wait_minutes", "nullable": true, "default": null},
+  {"name": "state", "nullable": false, "default": "'waiting'::character varying"},
+  {"name": "updated_at", "nullable": false, "default": "now()"}
+]

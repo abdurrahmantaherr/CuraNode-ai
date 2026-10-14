@@ -6,5 +6,13 @@
     <div class="mono" dir="ltr">{{ r.starts_at.date().isoformat() }} {{ hhmm(r.starts_at) }}</div>
   </div>
   <span class="badge {{ status_badge(r.status) }}">{{ status_label(r.status) }}</span>
+  {% if queue_badges and queue_badges.get(r.id) %}
+    {% set qb = queue_badges.get(r.id) %}
+    {% if qb.state in ('waiting', 'next') %}
+      <span class="badge badge--warn">{{ t('queue.badge.waiting', position=qb.position) }}</span>
+    {% elif qb.state == 'in_room' %}
+      <span class="badge badge--ok">{{ t('queue.badge.in_room') }}</span>
+    {% endif %}
+  {% endif %}
   {% include "booking/_actions.html" %}
 </li>

@@ -156,6 +156,26 @@ class BookingRefused(AppError):
         super().__init__({"reason": reason})
 
 
+class QueueRefused(AppError):
+    """A queue action the rules refuse (P6, spec 3.2): the appointment is not for
+    today or cannot be checked in, the session has ended, the doctor is not
+    available, someone is already in the room, the session is full, the patient
+    already has a booking today or is already queued, the patient is no longer
+    waiting or not in the room, the search is too short, or a walk-in's time was
+    just taken. `reason` picks the message (`errors.queue_<reason>`). A 409: the
+    page is shown again with the reason."""
+
+    code = "QUEUE_REFUSED"
+    http_status = status.HTTP_409_CONFLICT
+    message_key = "errors.queue_not_today"
+    retryable = False
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        self.message_key = f"errors.queue_{reason}"
+        super().__init__({"reason": reason})
+
+
 class UnsupportedFileType(AppError):
     """Not a PDF, JPEG or PNG — judged by the file's own bytes, not its name."""
 

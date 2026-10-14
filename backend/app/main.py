@@ -68,6 +68,7 @@ from app.settings import settings
 from app.timeline.router import router as timeline_router
 from app.web.booking import router as web_booking_router
 from app.web.documents import router as web_documents_router
+from app.web.queue import router as web_queue_router
 from app.web.router import router as web_router
 from app.web.timeline import router as web_timeline_router
 from app.web.unavailable import (
@@ -196,6 +197,7 @@ app.include_router(timeline_router)
 app.include_router(web_timeline_router)
 app.include_router(web_documents_router)
 app.include_router(web_booking_router)
+app.include_router(web_queue_router)
 app.include_router(web_router)
 
 

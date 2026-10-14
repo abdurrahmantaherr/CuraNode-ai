@@ -1,0 +1,24 @@
+{#- The patient's place in today's queue (FR17, P6 spec 3.3). Expects `queue_status`
+    (a QueueStatus), `updated_at` (HH:MM) and `row` (the AppointmentRow). It never
+    shows another patient's name. Works without JavaScript: the Refresh link
+    reloads the page, and queue.js does it every 15 seconds while `live`. -#}
+<div class="panel stack" aria-live="polite">
+  <h2 class="panel__label">{{ t('queue.card.title') }}</h2>
+  {% if queue_status.state == 'expected' %}
+    <p class="lead">{{ t('queue.card.expected') }}</p>
+  {% elif queue_status.state == 'waiting' %}
+    <p class="lead">{{ t('queue.card.waiting', position=queue_status.position, minutes=queue_status.wait_minutes) }}</p>
+  {% elif queue_status.state == 'next' %}
+    <p class="lead">{{ t('queue.card.next') }}</p>
+  {% elif queue_status.state == 'in_room' %}
+    <p class="lead">{{ t('queue.card.in_room') }}</p>
+  {% else %}
+    <p class="lead">{{ t('queue.card.served') }}</p>
+  {% endif %}
+  {% if queue_status.live %}
+    <p class="field-help">
+      {% if queue_status.state in ('waiting', 'next') %}{{ t('queue.card.waiting_total', count=queue_status.waiting_total) }} · {% endif %}{{ t('queue.card.updated', time=updated_at) }}
+    </p>
+    <p><a class="btn btn--secondary btn--sm" href="/{{ locale }}/patient/appointments/{{ row.id }}">{{ t('queue.card.refresh') }}</a></p>
+  {% endif %}
+</div>

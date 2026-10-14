@@ -273,6 +273,21 @@ async def check_booking_write_rate(actor: Actor) -> None:
         raise RateLimited(retry_after_s=60)
 
 
+# ── Live-queue budgets (P6) ──────────────────────────────────────────────
+async def check_queue_write_rate(actor: Actor) -> None:
+    """Counts one front-desk queue action (check in, send in, seen, move, walk-in)."""
+    count = await cache.incr(ratelimit_key("queue_write", str(actor.user_id)), 60)
+    if count > settings.queue_write_rate_limit_per_minute:
+        raise RateLimited(retry_after_s=60)
+
+
+async def check_queue_lookup_rate(actor: Actor) -> None:
+    """Counts one walk-in patient search. Tighter than the write budget on purpose."""
+    count = await cache.incr(ratelimit_key("queue_lookup", str(actor.user_id)), 60)
+    if count > settings.queue_lookup_rate_limit_per_minute:
+        raise RateLimited(retry_after_s=60)
+
+
 async def enforce_document_write_rate_limit(actor: PatientDep) -> None:
     """Depends on PatientDep so 401/403 surface before 429."""
     await check_document_write_rate(actor)

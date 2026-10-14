@@ -61,6 +61,11 @@
       {% include "doctor/_appointments_today.html" %}
     {% endif %}
 
+    {% if queue_today is defined %}
+      {% set queue_views = queue_today %}
+      {% include "queue/_doctor_queue.html" %}
+    {% endif %}
+
     {% if patients is defined %}
       {% include "doctor/_patient_list.html" %}
     {% endif %}

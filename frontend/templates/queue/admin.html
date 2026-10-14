@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{#- The clinic admin's queue desk (FR19, P6 spec 3.3). Every control is a form
+    (post, then redirect), so it works without JavaScript. Names are autoescaped;
+    never use |safe here. The page does not refresh itself: the desk is what
+    changes it.
+
+    Context (built in web/queue.py::_render_queue):
+      views        list[SessionView] — today's sessions at the admin's clinics
+      hits         list[PatientHit] — walk-in search results (passport masked)
+      find, find_session, find_error — the search text, the session it was for, its error
+      saved, page_error — banner texts or None -#}
+
+{% block title %}{{ t('queue.title') }} · {{ t('app.name') }}{% endblock %}
+
+{% macro act(path, label, style='secondary') %}
+  <form method="post" action="/{{ locale }}/admin/queue/{{ path }}" style="display:inline">
+    <button class="btn btn--{{ style }} btn--sm" type="submit" data-label="{{ label }}">{{ label }}</button>
+  </form>
+{% endmacro %}
+
+{% block body %}
+<div class="shell">
+  {% include "partials/topbar.html" %}
+
+  <main class="content">
+    {% if page_error %}
+      <div class="banner banner--error" role="alert">
+        <span aria-hidden="true">!</span><span>{{ page_error }}</span>
+      </div>
+    {% endif %}
+    {% if saved %}
+      <div class="banner banner--ok" role="status"><span>{{ saved }}</span></div>
+    {% endif %}
+
+    {% if not views %}
+      <div class="panel"><p class="empty-state">{{ t('queue.admin.empty') }}</p></div>
+    {% endif %}
+
+    {% for v in views %}
+      {% set key = v.key.encode() %}
+      <section class="panel stack" aria-labelledby="s-{{ loop.index }}">
+        <h2 id="s-{{ loop.index }}" class="panel__label">
+          {{ v.doctor_name }} · {{ v.clinic_name }} ·
+          <bdi dir="ltr">{{ v.start.strftime('%H:%M') }}-{{ v.end.strftime('%H:%M') }}</bdi>
+        </h2>
+        <p class="field-help">{{ t('queue.places_used', used=v.used, cap=v.cap) }}</p>
+
+        <div>
+          <div class="eyebrow">{{ t('queue.in_room') }}</div>
+          {% if v.in_room %}
+            <div class="entry-row">
+              <div class="entry-row__main">
+                <div class="entry-row__title">{{ v.in_room.patient_name }}
+                  {% if v.in_room.walk_in %}<span class="badge badge--neutral">{{ t('queue.badge.walk_in') }}</span>{% endif %}
+                </div>
+              </div>
+              <div class="entry-row__actions">
+                {{ act(v.in_room.entry_id ~ '/seen', t('queue.action.seen'), 'primary') }}
+                {{ act(v.in_room.entry_id ~ '/put-back', t('queue.action.put_back')) }}
+              </div>
+            </div>
+          {% else %}
+            <p class="field-help">{{ t('queue.room_empty') }}</p>
+          {% endif %}
+        </div>
+
+        <div>
+          <div class="eyebrow">{{ t('queue.waiting') }}</div>
+          {% if v.waiting %}
+            <ol class="entry-list">
+              {% for line in v.waiting %}
+                <li class="entry-row">
+                  <div class="entry-row__main">
+                    <div class="entry-row__title">#{{ loop.index }} {{ line.patient_name }}
+                      {% if line.walk_in %}<span class="badge badge--neutral">{{ t('queue.badge.walk_in') }}</span>{% endif %}
+                    </div>
+                    <div class="mono" dir="ltr">
+                      {% if line.walk_in %}{{ t('queue.arrived_at', time=line.booked_at.strftime('%H:%M')) }}{% else %}{{ t('queue.booked_at', time=line.booked_at.strftime('%H:%M')) }}{% endif %}
+                    </div>
+                  </div>
+                  <div class="entry-row__actions">
+                    {{ act(line.entry_id ~ '/send-in', t('queue.action.send_in'), 'primary') }}
+                    {{ act(line.entry_id ~ '/move-up', t('queue.action.move_up')) }}
+                    {{ act(line.entry_id ~ '/make-next', t('queue.action.make_next')) }}
+                  </div>
+                </li>
+              {% endfor %}
+            </ol>
+          {% else %}
+            <p class="field-help">{{ t('queue.waiting_empty') }}</p>
+          {% endif %}
+        </div>
+
+        <div>
+          <div class="eyebrow">{{ t('queue.expected') }}</div>
+          {% if v.expected %}
+            <ul class="entry-list">
+              {% for line in v.expected %}
+                <li class="entry-row">
+                  <div class="entry-row__main">
+                    <div class="entry-row__title">{{ line.patient_name }}</div>
+                    <div class="mono" dir="ltr">{{ t('queue.booked_at', time=line.booked_at.strftime('%H:%M')) }}</div>
+                  </div>
+                  <div class="entry-row__actions">
+                    {{ act('check-in/' ~ line.appointment_id, t('queue.action.check_in'), 'primary') }}
+                  </div>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <p class="field-help">{{ t('queue.expected_empty') }}</p>
+          {% endif %}
+        </div>
+
+        {% if v.seen %}
+          <details>
+            <summary class="eyebrow">{{ t('queue.seen_today', count=v.seen|length) }}</summary>
+            <ul class="entry-list">
+              {% for line in v.seen %}<li>{{ line.patient_name }}</li>{% endfor %}
+            </ul>
+          </details>
+        {% endif %}
+
+        <div id="walkin-{{ loop.index }}" class="stack">
+          <div class="eyebrow">{{ t('queue.walk_in.title') }}</div>
+          <p class="field-help">{{ t('queue.walk_in.hint') }}</p>
+          <form class="stack" method="post" action="/{{ locale }}/admin/queue/find#walkin-{{ loop.index }}" role="search">
+            <input type="hidden" name="session" value="{{ key }}">
+            <label class="field" for="find-{{ loop.index }}">
+              <span class="field-label">{{ t('queue.walk_in.search_label') }}</span>
+              <input class="input" id="find-{{ loop.index }}" name="find" type="search" maxlength="80"
+                     value="{% if find_session == key %}{{ find }}{% endif %}">
+            </label>
+            <div><button class="btn btn--secondary btn--sm" type="submit">{{ t('queue.walk_in.search_action') }}</button></div>
+          </form>
+          {% if find_session == key %}
+            {% if find_error %}
+              <span class="field-error" role="alert"><span aria-hidden="true">!</span>{{ find_error }}</span>
+            {% elif hits %}
+              <ul class="grant-list">
+                {% for hit in hits %}
+                  <li class="grant-card stack">
+                    <div class="entry-row__main">
+                      <div class="entry-row__title">{{ hit.name }}</div>
+                      <div class="mono" dir="ltr">{{ hit.passport }}</div>
+                    </div>
+                    <form method="post" action="/{{ locale }}/admin/queue/walk-in">
+                      <input type="hidden" name="session" value="{{ key }}">
+                      <input type="hidden" name="patient_id" value="{{ hit.patient_id }}">
+                      <button class="btn btn--primary btn--sm" type="submit" data-label="{{ t('queue.walk_in.add') }}">{{ t('queue.walk_in.add') }}</button>
+                    </form>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% elif find %}
+              <p class="empty-state">{{ t('queue.walk_in.none') }}</p>
+            {% endif %}
+          {% endif %}
+        </div>
+      </section>
+    {% endfor %}
+  </main>
+</div>
+{% endblock %}
