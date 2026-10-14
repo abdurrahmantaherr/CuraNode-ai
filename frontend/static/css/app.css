@@ -814,3 +814,164 @@ a.btn--primary, a.btn--primary:hover { color: #fff; }
 /* The list's pager: previous / "Page 2 of 5" / next. */
 .pager { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; justify-content: center; }
 .pager__status { font-size: 13px; color: var(--muted); }
+
+/* ── Medical timeline (P3) ─────────────────────────────────────────────
+   Laid out like the prototype's Medical Timeline: a rail with a dot per event, the date above each
+   card, the provenance at the right of the card's title, "View details →" under it, underline tabs.
+   The dot is the brand colour; violet for something a program read (the prototype's `ai`), neutral
+   for the patient's own entries. Colour never decorates (DESIGN.md §8 rule 3): who vouches for an
+   event is the label, not only the dot. */
+.badge--ai { background: var(--ai-soft); color: var(--ai); }
+
+.tl { list-style: none; margin: 0; padding: 0; }
+.tl-item {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  grid-template-areas: "rail when" "rail card";
+  column-gap: var(--sp-3);
+  padding-block-end: var(--sp-5);
+}
+.tl-item__rail { grid-area: rail; position: relative; }
+.tl-item__rail::before {
+  content: "";
+  position: absolute;
+  inset-block: 4px 0;
+  inset-inline-start: calc(50% - 1px);
+  inline-size: 2px;
+  background: var(--line-2);
+}
+.tl-item:last-child .tl-item__rail::before { display: none; }
+.tl-item__rail::after {
+  content: "";
+  position: absolute;
+  inset-block-start: 2px;
+  inset-inline-start: calc(50% - 6px);
+  inline-size: 12px;
+  block-size: 12px;
+  box-sizing: border-box;
+  border-radius: var(--r-pill);
+  background: var(--brand);
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 2px var(--line-2);
+}
+.tl-item--ai .tl-item__rail::after { background: var(--ai); }
+.tl-item--user .tl-item__rail::after { background: var(--faint); }
+.tl-item__when {
+  grid-area: when;
+  margin-block-end: var(--sp-1);
+  font: 600 11px/1.5 var(--font-sans);
+  color: var(--muted);
+}
+.tl-item__note { font-weight: 400; }
+
+.tl-card {
+  grid-area: card;
+  min-inline-size: 0;
+  max-inline-size: 640px;
+  padding: var(--sp-7);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  overflow-wrap: anywhere;
+}
+.tl-card__top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-4);
+  align-items: baseline;
+  justify-content: space-between;
+}
+.tl-card__title { margin: 0; font: 700 13.5px/1.4 var(--font-sans); }
+.tl-card__kind { font: 600 10.5px/1 var(--font-sans); letter-spacing: .12em; text-transform: uppercase; color: var(--faint); }
+.tl-card__summary { margin: var(--sp-1) 0 0; font-size: 13px; color: var(--ink); }
+.tl-card__who { margin: 3px 0 0; font-size: 12px; color: var(--muted); }
+.tl-card__more { display: inline-block; margin-block-start: var(--sp-3); font-size: 12px; font-weight: 600; color: var(--brand); }
+.tl-card__more:hover { text-decoration: underline; }
+.tl-card__more::after { content: " →"; }
+html[dir="rtl"] .tl-card__more::after { content: " ←"; }
+
+/* Who vouches for it (the prototype's `prov`): a doctor's ✓, the AI's ✦, the patient's own. */
+.tl-prov { font: 700 10.5px/1.4 var(--font-sans); letter-spacing: .02em; white-space: nowrap; }
+.tl-prov::before { margin-inline-end: 4px; }
+.tl-prov--doctor { color: var(--brand); }
+.tl-prov--doctor::before { content: "✓"; }
+.tl-prov--ai { color: var(--ai); }
+.tl-prov--ai::before { content: "✦"; }
+/* A document the patient uploaded, reviewed and saved after it was read: a quiet green tick. */
+.tl-prov--confirmed { color: var(--ok); }
+.tl-prov--confirmed::before { content: "✓"; }
+.tl-prov--user { color: var(--muted); }
+.tl-prov--user::before { content: "●"; font-size: 8px; vertical-align: 1px; }
+
+/* Underline tabs, as in the prototype; they scroll sideways on a narrow screen. */
+.tl-tabs {
+  display: flex;
+  gap: var(--sp-1) var(--sp-7);
+  border-block-end: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.tl-tab {
+  flex: none;
+  padding: var(--sp-3) 2px;
+  margin-block-end: -1px;
+  border-block-end: 2px solid transparent;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.tl-tab:hover { color: var(--ink); }
+.tl-tab[aria-current="page"] { color: var(--brand); border-block-end-color: var(--brand); }
+.tl-count {
+  margin-inline-start: 6px;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.tl-tab[aria-current="page"] .tl-count { background: var(--brand-soft); color: var(--brand); }
+
+/* The search row, and the filters that wait in a collapsed section until one is applied. */
+.tl-search { display: flex; gap: var(--sp-3); align-items: flex-end; }
+.tl-search__field { flex: 1; min-inline-size: 0; }
+.tl-filters > summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--brand);
+  list-style: none;
+}
+.tl-filters > summary::-webkit-details-marker { display: none; }
+.tl-filters > summary::before { content: "▸"; margin-inline-end: var(--sp-2); }
+html[dir="rtl"] .tl-filters > summary::before { content: "◂"; }
+.tl-filters[open] > summary::before { content: "▾"; }
+.tl-filters[open] > summary { margin-block-end: var(--sp-5); }
+
+.tl-sub { margin: var(--sp-4) 0 0; font-size: 14px; font-weight: 600; }
+.tl-detail__title { margin: 0; font-size: 20px; font-weight: 600; }
+.tl-detail__date { margin: 0; font-size: 13.5px; color: var(--muted); }
+.tl-text { margin: 0; white-space: pre-line; font-size: 13.5px; overflow-wrap: anywhere; }
+
+/* The loading state: while the next view loads (timeline.js), the list gives way to placeholders. */
+.tl-skeleton { display: none; }
+.tl-region[aria-busy="true"] .tl-live { display: none; }
+.tl-region[aria-busy="true"] .tl-skeleton { display: block; }
+.tl-skel {
+  block-size: 84px;
+  margin-block-end: var(--sp-3);
+  border-radius: var(--r-card-sm);
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--line) 37%, var(--surface-2) 63%);
+  background-size: 400% 100%;
+  animation: tl-shimmer 1.4s ease infinite;
+}
+@keyframes tl-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) { .tl-skel { animation: none; } }
+
+@media (max-width: 520px) {
+  .tl-search { flex-direction: column; align-items: stretch; }
+  .tl-card { padding: var(--sp-4); }
+}
