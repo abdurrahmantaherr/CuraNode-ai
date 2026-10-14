@@ -466,24 +466,40 @@ def doctor_grant_filter(
     return or_(names_doctor, names_clinic)
 
 
-async def _granted_patient(
+async def _granted_patient_and_grant(
     session: AsyncSession, actor: Actor, condition: ColumnElement[bool]
-) -> Patient:
+) -> tuple[Patient, ConsentGrant]:
     found = await live_doctor(session, actor)
     if found is None:
         raise NotFound()
     doctor, clinic_ids = found
-    patient = (
+    # Checked live against the database on every call — never cached (BL-07).
+    row = (
         await session.execute(
-            select(Patient)
+            select(Patient, ConsentGrant)
             .join(ConsentGrant, ConsentGrant.patient_id == Patient.id)
             .where(condition, doctor_grant_filter(doctor.id, clinic_ids), _active())
+            .order_by(ConsentGrant.granted_at.desc())
             .limit(1)
         )
-    ).scalar_one_or_none()
-    if patient is None:
+    ).first()
+    if row is None:
         raise NotFound()
-    return patient
+    return row[0], row[1]
+
+
+async def _granted_patient(
+    session: AsyncSession, actor: Actor, condition: ColumnElement[bool]
+) -> Patient:
+    return (await _granted_patient_and_grant(session, actor, condition))[0]
+
+
+async def patient_and_grant_for_doctor(
+    session: AsyncSession, actor: Actor, patient_id: uuid.UUID
+) -> tuple[Patient, ConsentGrant]:
+    """Same live check as `patient_for_doctor`, also returning the grant relied on
+    (the clinical gateway records its id in the `record.read` audit row)."""
+    return await _granted_patient_and_grant(session, actor, Patient.id == patient_id)
 
 
 async def find_patient_for_doctor(session: AsyncSession, actor: Actor, passport_no: str) -> Patient:
