@@ -1,0 +1,29 @@
+{#- A verified doctor's "Today" summary (Priority 2): the next task and three real counts, drawn
+    from the appointment, queue and consent lists the page already loads — no extra queries and
+    no new permissions. Context: doctor_home {summary, unavailable, patient_count}. Names are
+    autoescaped; never use |safe here. There is no "pending review" count because the system has
+    no doctor-review step for documents: patients review their own. -#}
+{% set h = doctor_home %}
+{% for name in h.unavailable %}
+  <div class="banner banner--warn" style="margin-top:var(--sp-5)">
+    <span aria-hidden="true">!</span>
+    <div>
+      <div class="banner__body">{{ t('dashboard.doctor.unavailable.' ~ name) }}</div>
+      <a class="btn btn--secondary btn--sm" href="/{{ locale }}/doctor">{{ t('dashboard.retry') }}</a>
+    </div>
+  </div>
+{% endfor %}
+{% if h.summary %}
+  {% set s = h.summary %}
+  <section class="panel stack" style="margin-top:var(--sp-5)" aria-labelledby="today-h">
+    <h2 id="today-h" class="panel__label">{{ t('dashboard.doctor.title') }}</h2>
+    <p class="lead">{{ t('dashboard.doctor.next.' ~ s.step.kind, name=s.step.name, when=s.step.when, count=s.step.count) }}</p>
+    <p class="field-help">{{ t('dashboard.doctor.counts', appointments=s.appointments_today,
+                              waiting=s.waiting, patients=s.patients) }}</p>
+    <div class="btn-row">
+      <a class="btn btn--primary" href="{{ s.step.href }}">
+        {{ t('dashboard.doctor.cta.idle' if s.step.kind == 'idle' else 'dashboard.doctor.cta.appointments') }}
+      </a>
+    </div>
+  </section>
+{% endif %}

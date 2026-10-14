@@ -31,11 +31,13 @@
 {% import "partials/doc_layouts.html" as L with context %}
 {% import "partials/doc_delete.html" as dd with context %}
 {% import "partials/doc_quality.html" as dq with context %}
+{% import "partials/doc_live.html" as live with context %}
 
 {% block title %}{{ doc.original_filename or t('documents.detail.title') }} · {{ t('app.name') }}{% endblock %}
 
 {% block body %}
 {% set base = '/' ~ locale ~ '/patient/documents/' ~ doc.id %}
+{{ live.region() }}
 {#- Every document type has a layout of its own (partials/doc_layouts.html). A prescription's is
     the compact one below: who / for whom / when, then medicines, advice, diagnosis, symptoms,
     vital signs, allergies — nothing else. -#}
@@ -51,7 +53,10 @@
 <div class="shell">
   {% include "partials/topbar.html" %}
 
-  <main class="content" {% if processing %}data-autorefresh="4000"{% endif %}>
+  {#- While a document is being read, documents.js asks the API for its real status (no page
+      reload) and swaps this block in place once the status changes. -#}
+  <main class="content" {% if doc.status == 'processing' %}data-doc-poll="/api/v1/documents/{{ doc.id }}"{% endif %}>
+    {% if doc.status == 'processing' %}{{ live.banner() }}{% endif %}
     <div class="rowline">
       <a class="linkish" href="/{{ locale }}/patient/documents">← {{ t('documents.action.back') }}</a>
       {% if step %}{{ d.steps(step) }}{% endif %}
@@ -96,15 +101,28 @@
     {% if doc.status in ('uploaded', 'processing') %}
       {#- A photo that is already known to be hard to read: say so before it is read. -#}
       {% if doc.status == 'uploaded' %}{{ dq.advice(doc) }}{% endif %}
-      <div class="panel state-block" role="status" aria-live="polite">
+      {#- Not a live region while processing: documents.js announces a CHANGE of status once, so
+          the "last checked" line below must not be read out on every check. -#}
+      <div class="panel state-block" {% if doc.status != 'processing' %}role="status" aria-live="polite"{% endif %}>
         {% if doc.status == 'processing' %}
           <span class="ai-state ai-state--processing">
             <i class="spinner spinner--dark" aria-hidden="true"></i>{{ t('documents.status.processing') }}
           </span>
           <div class="entry-row__title">{{ t('documents.processing.title') }}</div>
           <p class="lead">{{ t('documents.processing.hint') }}</p>
+          <p class="field-help" data-doc-checked hidden></p>
           <div class="btn-row">
-            <a class="btn btn--secondary" href="{{ base }}">{{ t('documents.action.check_again') }}</a>
+            <a class="btn btn--secondary" href="{{ base }}" data-doc-check-now>{{ t('documents.action.check_again') }}</a>
+          </div>
+          {#- Shown by documents.js only when a read has taken longer than the server allows
+              (120 s). The server decides whether a new read may start; until then it just
+              returns to this page. -#}
+          <div data-doc-slow hidden>
+            <p class="field-help">{{ t('documents.live.slow') }}</p>
+            <form method="post" action="{{ base }}/process" class="btn-row">
+              <button class="btn btn--primary btn--sm" type="submit"
+                      data-label="{{ t('documents.action.retry') }}">{{ t('documents.action.retry') }}</button>
+            </form>
           </div>
         {% else %}
           <div class="entry-row__title">{{ t('documents.uploaded.title') }}</div>
@@ -309,5 +327,6 @@
   </main>
 </div>
 {{ dd.dialog() }}
+<script src="/static/js/doc-status.js" defer></script>
 <script src="/static/js/documents.js" defer></script>
 {% endblock %}

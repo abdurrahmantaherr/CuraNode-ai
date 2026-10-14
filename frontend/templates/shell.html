@@ -3,11 +3,16 @@
     later features. What is real here is the role-gated routing and the
     unverified-doctor banner. -#}
 
+{% import "partials/doc_live.html" as live with context %}
+
 {% block body %}
+{% if patient_home is defined and patient_home.polling %}{{ live.region() }}{% endif %}
 <div class="shell">
   {% include "partials/topbar.html" %}
 
-  <main class="content">
+  {#- A patient's home follows a document that is being read in place (documents.js, no reload). -#}
+  <main class="content"{% if patient_home is defined and patient_home.polling %} data-doc-list-poll="/api/v1/documents/in-progress?limit=100"{% endif %}>
+    {% if patient_home is defined and patient_home.polling %}{{ live.banner() }}{% endif %}
     {% if show_unverified_banner %}
       {#- FR3 — persistent and non-dismissible. No patient-data affordance is
           rendered anywhere behind it. -#}
@@ -42,8 +47,14 @@
           <span class="chip">{{ t('patient.dashboard.passport') }}</span>
         {% endif %}
       </div>
-      {% if patients is not defined %}
-        {#- A verified doctor's dashboard has real content now (D4). -#}
+      {% if pending_doctor %}
+        {#- A doctor awaiting verification: no patient data, but one real thing to do meanwhile. -#}
+        <p style="margin:var(--sp-6) 0 0;font-size:13.5px;color:var(--muted);max-width:64ch">
+          {{ t('doctor.pending_next') }}
+        </p>
+      {% elif patients is not defined and patient_home is not defined %}
+        {#- Patient and verified-doctor homes have real content now; only a role with no home yet
+            (the clinic admin's shell) still shows this. -#}
         <p style="margin:var(--sp-6) 0 0;font-size:13.5px;color:var(--muted);max-width:64ch">
           {{ t('dashboard.placeholder') }}
         </p>
@@ -56,6 +67,14 @@
         </p>
       {% endif %}
     </div>
+
+    {% if patient_home is defined %}
+      {% include "patient/_home.html" %}
+    {% endif %}
+
+    {% if doctor_home is defined %}
+      {% include "doctor/_next_step.html" %}
+    {% endif %}
 
     {% if appointments_today is defined %}
       {% include "doctor/_appointments_today.html" %}
@@ -71,4 +90,8 @@
     {% endif %}
   </main>
 </div>
+{% if patient_home is defined and patient_home.polling %}
+<script src="/static/js/doc-status.js" defer></script>
+<script src="/static/js/documents.js" defer></script>
+{% endif %}
 {% endblock %}

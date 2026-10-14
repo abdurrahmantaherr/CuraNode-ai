@@ -51,6 +51,7 @@ from ..deps import (
 )
 from ..doctor import what_changed
 from ..doctor.rows import age_in_years, build_rows, gender_label
+from ..documents import service as doc_service
 from ..errors import (
     AppError,
     DuplicateEntry,
@@ -84,6 +85,7 @@ from ..schedule import service as schedule_service
 from ..settings import settings
 from ..verification import service as verification_service
 from ..verification.schemas import REASONS
+from . import dashboard
 
 OAUTH_STATE_COOKIE = "cn_oauth_state"
 
@@ -801,6 +803,49 @@ def _area(role: str) -> str:
     return {"patient": "patient", "doctor": "doctor", "admin": "admin"}[role]
 
 
+async def _patient_home(session: SessionDep, actor: Actor, loc: str) -> dict[str, Any]:
+    """The patient's home blocks: next appointments and unfinished documents, each loaded on its
+    own so one unavailable block does not hide the other. Three small queries in all (the
+    patient's id is already known from the actor loader)."""
+    appts, appts_ok = await dashboard.section(
+        session,
+        "appointments",
+        lambda: booking_service.next_appointments(
+            session, actor, limit=dashboard.APPOINTMENTS_SHOWN + 1
+        ),
+    )
+    docs, docs_ok = await dashboard.section(
+        session,
+        "documents",
+        lambda: doc_service.list_in_progress(session, actor, limit=dashboard.DOCS_SHOWN + 1),
+    )
+    saved, saved_ok = await dashboard.section(
+        session, "saved", lambda: doc_service.count_finalized(session, actor)
+    )
+    step = dashboard.patient_next_step(
+        loc=loc,
+        documents=docs if docs_ok else None,
+        appointments=appts if appts_ok else None,
+        saved_count=saved if saved_ok else None,
+    )
+    shown_docs = (docs or [])[: dashboard.DOCS_SHOWN]
+    shown_appts = (appts or [])[: dashboard.APPOINTMENTS_SHOWN]
+    return {
+        "step": step,
+        "appointments": dashboard.appointment_rows(shown_appts, loc),
+        "appointments_ok": appts_ok,
+        "appointments_more": appts_ok and len(appts or []) > dashboard.APPOINTMENTS_SHOWN,
+        "documents": dashboard.document_rows(shown_docs, loc),
+        "documents_ok": docs_ok,
+        "documents_more": docs_ok and len(docs or []) > dashboard.DOCS_SHOWN,
+        "polling": docs_ok and any(d.status == "processing" for d in shown_docs),
+        "saved_count": saved if saved_ok else None,
+        "first_use": bool(
+            docs_ok and appts_ok and saved_ok and not docs and not appts and saved == 0
+        ),
+    }
+
+
 async def _guarded(
     request: Request,
     locale: str,
@@ -862,6 +907,8 @@ async def _guarded(
     patients = None
     appointments_today = None
     queue_today = None
+    patient_home = None
+    doctor_home = None
     if is_patient:
         nav_items = _patient_nav(loc, current="dashboard")
         links = [
@@ -869,6 +916,7 @@ async def _guarded(
             {"href": f"/{loc}/patient/passport", "label": translate("passport.open_link", loc)},
             {"href": f"/{loc}/patient/access", "label": translate("passport.manage_access", loc)},
         ]
+        patient_home = await _patient_home(session, actor, loc)
     elif actor.is_verified_doctor:
         # FR3 — an unverified doctor gets no patient-data affordance at all.
         nav_items = _doctor_nav(loc, current="dashboard")
@@ -891,11 +939,33 @@ async def _guarded(
         )
         await session.commit()
         # P5: today's appointments, name, time and status only (booking is not consent).
-        appointments_today = booking_display.build_day_rows(
-            await booking_service.doctor_day(session, actor, booking_service.current_day()), loc
+        # Each block loads on its own: if the database cannot be reached for one, that block
+        # says so and the rest of the page still shows.
+        day, day_ok = await dashboard.section(
+            session,
+            "appointments",
+            lambda: booking_service.doctor_day(session, actor, booking_service.current_day()),
         )
+        appointments_today = booking_display.build_day_rows(day or [], loc) if day_ok else None
         # P6: the doctor's queue today, view only.
-        queue_today = await queue_service.doctor_queue(session, actor)
+        queue_today, queue_ok = await dashboard.section(
+            session, "queue", lambda: queue_service.doctor_queue(session, actor)
+        )
+        doctor_home = {
+            "unavailable": [
+                name for name, ok in (("appointments", day_ok), ("queue", queue_ok)) if not ok
+            ],
+            "summary": dashboard.doctor_next_step(
+                loc=loc,
+                day=day or [],
+                queue=queue_today or [],
+                patient_count=len(patients),
+                now=booking_service.now().astimezone(dbtypes.PKT),
+            )
+            if day_ok and queue_ok
+            else None,
+            "patient_count": len(patients),
+        }
     elif actor.role == UserRole.DOCTOR.value:
         # A pending doctor: no patient-data affordance at all (FR3), but the
         # schedule exposes none, so it is their one link (D7 decision 6).
@@ -912,6 +982,12 @@ async def _guarded(
         extra["appointments_today"] = appointments_today
     if queue_today is not None:
         extra["queue_today"] = queue_today
+    if patient_home is not None:
+        extra["patient_home"] = patient_home
+    if doctor_home is not None:
+        extra["doctor_home"] = doctor_home
+    # A doctor still waiting for verification: no patient data, but a real next step.
+    extra["pending_doctor"] = actor.role == UserRole.DOCTOR.value and not actor.is_verified_doctor
     return _render(
         request,
         "shell.html",
