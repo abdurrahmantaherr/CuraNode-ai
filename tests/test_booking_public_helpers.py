@@ -1,4 +1,4 @@
-"""P6: the small public wrappers the queue uses from the booking service."""
+"""P5: the small public wrappers the queue uses from the booking service."""
 
 from __future__ import annotations
 

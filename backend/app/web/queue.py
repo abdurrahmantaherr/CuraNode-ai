@@ -1,4 +1,4 @@
-"""Server-rendered pages for the live queue (P6, FR19): the clinic admin's desk.
+"""Server-rendered pages for the live queue (P5, FR19): the clinic admin's desk.
 
 Every rule lives in `queueing/service.py`; this module only turns forms into
 service calls and results into pages, mirroring `web/booking.py`. Every action

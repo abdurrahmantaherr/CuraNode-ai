@@ -1,4 +1,4 @@
-"""P6: the QueueEntry model matches the shared queue_entry table."""
+"""P5: the QueueEntry model matches the shared queue_entry table."""
 
 from __future__ import annotations
 

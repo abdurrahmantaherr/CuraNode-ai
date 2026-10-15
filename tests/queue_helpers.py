@@ -1,4 +1,4 @@
-"""Shared setup for the queue tests (P6): an admin, today's session, queue entries.
+"""Shared setup for the queue tests (P5): an admin, today's session, queue entries.
 Time comes from `tests.booking_helpers.freeze`: "now" is Monday 13:00 in Pakistan."""
 
 from __future__ import annotations

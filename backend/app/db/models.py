@@ -620,7 +620,7 @@ class LabReport(Base):
 class QueueEntry(Base):
     """queue_entry — shared, pre-existing; one row per checked-in appointment.
 
-    Mapped for the live queue (P6). `appointment_id` is UNIQUE; `token_number` has no
+    Mapped for the live queue (P5). `appointment_id` is UNIQUE; `token_number` has no
     uniqueness or bound in the database, so the queue service keeps tokens unique under
     the per-doctor lock. `state` follows the live CHECK. `position` and
     `est_wait_minutes` exist in the table (nullable) but this feature does not use them:

@@ -1,10 +1,11 @@
-"""P6 web: the patient's queue card and the badge on the appointments list."""
+"""P5 web: the patient's queue card and the badge on the appointments list."""
 
 from __future__ import annotations
 
 from datetime import date
 
 import pytest
+from app.paths import STATIC_DIR
 
 from tests.booking_helpers import add_appointment, at, freeze, login, make_patient
 from tests.queue_helpers import add_entry, booked_today, make_admin, todays_session
@@ -146,3 +147,9 @@ async def test_the_badge_for_someone_in_the_room(client, db, clinic, room):
     await add_entry(db, appointment, 1, "in_room")
     await sign_in(client, 1)
     assert "In the room" in (await client.get(LIST)).text
+
+
+def test_the_refresh_script_drops_the_saved_banner_from_the_address():
+    # Review minor: reloading kept ?saved=booked, so the green banner came back every 15 s.
+    script = (STATIC_DIR / "js" / "queue.js").read_text(encoding="utf8")
+    assert 'searchParams.delete("saved")' in script and "location.replace" in script

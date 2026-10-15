@@ -602,7 +602,7 @@ async def doctor_day(session: AsyncSession, actor: Actor, day: date) -> list[Day
     ]
 
 
-# ── Small public wrappers for the live queue (P6) ────────────────────────
+# ── Small public wrappers for the live queue (P5) ────────────────────────
 def now() -> datetime:
     """The current instant, UTC. This is the booking clock: freezing `_now` freezes it."""
     return _now()

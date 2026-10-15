@@ -66,7 +66,7 @@ APPOINTMENT_CANCEL = "appointment.cancel"
 APPOINTMENT_RESCHEDULE = "appointment.reschedule"
 
 
-# Emitted by the live queue (P6). `detail` holds ids only: never a name, a passport
+# Emitted by the live queue (P5). `detail` holds ids only: never a name, a passport
 # number or the text typed into a search; a lookup logs only how many results it found.
 QUEUE_CHECK_IN = "queue.check_in"
 QUEUE_SEND_IN = "queue.send_in"

@@ -273,7 +273,7 @@ async def check_booking_write_rate(actor: Actor) -> None:
         raise RateLimited(retry_after_s=60)
 
 
-# ── Live-queue budgets (P6) ──────────────────────────────────────────────
+# ── Live-queue budgets (P5) ──────────────────────────────────────────────
 async def check_queue_write_rate(actor: Actor) -> None:
     """Counts one front-desk queue action (check in, send in, seen, move, walk-in)."""
     count = await cache.incr(ratelimit_key("queue_write", str(actor.user_id)), 60)

@@ -1,4 +1,4 @@
-"""P6: the pure queue-ordering rules. No database, no clock."""
+"""P5: the pure queue-ordering rules. No database, no clock."""
 
 from __future__ import annotations
 

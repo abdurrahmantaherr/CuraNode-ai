@@ -1,7 +1,8 @@
-"""P6 web: the clinic admin's queue page and its actions."""
+"""P5 web: the clinic admin's queue page and its actions."""
 
 from __future__ import annotations
 
+import re
 import uuid
 
 import pytest
@@ -10,7 +11,7 @@ from app.queueing.schemas import SessionKey
 from app.settings import settings
 from sqlalchemy import select
 
-from tests.booking_helpers import freeze, login, make_patient
+from tests.booking_helpers import TODAY, at, freeze, login, make_patient
 from tests.conftest import make_user
 from tests.queue_helpers import add_entry, booked_today, entry_of, make_admin, todays_session
 
@@ -95,9 +96,11 @@ async def test_the_page_lists_a_session_and_each_patient_in_the_right_group(
     await in_queue(db, clinic, doctor, schedule, 2, 2, "waiting")
     await in_queue(db, clinic, doctor, schedule, 3, 3, "served")
     await booked_today(db, clinic, doctor, schedule, await patient(db, 4), "15:00")
+    # a second waiting patient: the first in line cannot be moved up, the second can
+    await in_queue(db, clinic, doctor, schedule, 5, 4, "waiting")
     r = await client.get(PAGE)
     assert r.status_code == 200
-    for text in ("Dr Queue", "Shifa International", "12:00-18:00", "Places used: 4 of 16"):
+    for text in ("Dr Queue", "Shifa International", "12:00-18:00", "Places used: 5 of 16"):
         assert text in r.text
     for name in ("Patient 1", "Patient 2", "Patient 3", "Patient 4"):
         assert name in r.text
@@ -351,3 +354,40 @@ async def test_opening_the_search_address_directly_goes_back_to_the_queue(client
     client.cookies.clear()
     r = await client.get(f"{PAGE}/find")
     assert r.status_code == 303 and "/login" in r.headers["location"]
+
+
+async def test_the_first_in_line_cannot_be_moved_up(client, db, clinic, desk):
+    # Review minor: "Move up" on the person already first changed nothing but said "updated".
+    doctor, schedule = desk
+    first = await entry_of(db, await in_queue(db, clinic, doctor, schedule, 1, 1))
+    second = await entry_of(db, await in_queue(db, clinic, doctor, schedule, 2, 2))
+    html = (await client.get(PAGE)).text
+    assert f"{first.id}/send-in" in html
+    assert f"{first.id}/move-up" not in html and f"{first.id}/make-next" not in html
+    assert all(f"{second.id}/{a}" in html for a in ("send-in", "move-up", "make-next"))
+
+
+async def test_an_ended_session_offers_no_check_in_or_walk_in(
+    client, db, clinic, desk, monkeypatch
+):
+    # Review minor: once the session is over both are always refused, so do not offer them.
+    doctor, schedule = desk
+    booked = await booked_today(db, clinic, doctor, schedule, await patient(db, 1))
+    html = (await client.get(PAGE)).text
+    assert f"check-in/{booked.id}" in html and "/admin/queue/find" in html
+    freeze(monkeypatch, at(TODAY, "19:00"))
+    r = await client.get(PAGE)
+    assert r.status_code == 200
+    assert f"check-in/{booked.id}" not in r.text and "/admin/queue/find" not in r.text
+    assert "That session has ended." in text_of(r)
+
+
+async def test_only_the_time_is_forced_left_to_right(client, db, clinic, desk):
+    # Review minor: in Urdu the whole "Booked {time}" phrase sat in a left-to-right box.
+    doctor, schedule = desk
+    await booked_today(db, clinic, doctor, schedule, await patient(db, 1), "14:00")
+    english = (await client.get(PAGE)).text
+    assert re.search(r'Booked\s*<bdi[^>]*dir="ltr"[^>]*>14:00</bdi>', english)
+    urdu = (await client.get("/ur/admin/queue")).text
+    assert re.search(r'<bdi[^>]*dir="ltr"[^>]*>14:00</bdi>', urdu)
+    assert not re.search(r'dir="ltr"[^>]*>\s*اپائنٹمنٹ', urdu)

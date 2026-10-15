@@ -1,4 +1,4 @@
-"""P6: what the admin, the doctor and the patient see of a queue."""
+"""P5: what the admin, the doctor and the patient see of a queue."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from app.queueing import service
 from app.queueing.schemas import SessionKey
 
 from tests.booking_helpers import (
+    TODAY,
     add_appointment,
     add_session,
     at,
@@ -273,3 +274,21 @@ async def test_a_patients_status_loads_the_doctors_schedule_once(db, clinic, mon
     monkeypatch.setattr(booking_service, "session_windows", counting)
     status = await service.patient_status(db, actor, appointment.id)
     assert status.state == "next" and len(calls) == 1
+
+
+async def test_an_expected_patient_stops_refreshing_when_the_session_has_ended(
+    db, clinic, monkeypatch
+):
+    # Review minor: the card of a booked patient who never arrived reloaded every 15 s for ever.
+    doctor, schedule, _ = await world(db, clinic)
+    absent, absent_actor = await person(db, 1)
+    queued, queued_actor = await person(db, 2)
+    away = await booked_today(db, clinic, doctor, schedule, absent)
+    waiting = await booked_today(db, clinic, doctor, schedule, queued, "14:15")
+    await add_entry(db, waiting, 1)
+    assert (await service.patient_status(db, absent_actor, away.id)).live is True
+    freeze(monkeypatch, at(TODAY, "19:00"))
+    gone = await service.patient_status(db, absent_actor, away.id)
+    assert (gone.state, gone.live) == ("expected", False)
+    # someone already in the queue is still waiting for the doctor, so their card stays live
+    assert (await service.patient_status(db, queued_actor, waiting.id)).live is True

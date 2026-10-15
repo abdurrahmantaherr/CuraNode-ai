@@ -157,7 +157,7 @@ class BookingRefused(AppError):
 
 
 class QueueRefused(AppError):
-    """A queue action the rules refuse (P6, spec 3.2): the appointment is not for
+    """A queue action the rules refuse (P5, spec 3.2): the appointment is not for
     today or cannot be checked in, the session has ended, the doctor is not
     available, someone is already in the room, the session is full, the patient
     already has a booking today or is already queued, the patient is no longer

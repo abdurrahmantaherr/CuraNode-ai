@@ -1,4 +1,4 @@
-"""P6: the queue constants and the session key."""
+"""P5: the queue constants and the session key."""
 
 from __future__ import annotations
 

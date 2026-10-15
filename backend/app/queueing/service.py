@@ -1,4 +1,4 @@
-"""Live queue and check-in business logic (P6; FR17, FR19, FR24; spec 3.2).
+"""Live queue and check-in business logic (P5; FR17, FR19, FR24; spec 3.2).
 
 A queue is one doctor session: one effective window on one date at one clinic,
 the same unit booking uses for the cap. A queue entry belongs to a session
@@ -181,6 +181,7 @@ async def _views(session: AsyncSession, pairs: list[tuple[Doctor, Clinic]]) -> l
                     slot_minutes=window.slot_minutes,
                     cap=window.max_tokens,
                     used=len(mine),
+                    over=booking_service.now() >= hi,
                     in_room=next((ln for ln in mine if ln.state == STATE_IN_ROOM), None),
                     waiting=tuple(
                         sorted((ln for ln in mine if ln.state == STATE_WAITING), key=_token)
@@ -252,7 +253,10 @@ async def _status(
     if entry is None:
         if appointment.status != "booked":
             return None
-        return QueueStatus("expected", None, None, len(waiting), True)
+        # A booked patient who has not arrived: refresh only while the session is still
+        # open. After it ends nobody can check them in, so there is nothing to wait for.
+        still_open = window is not None and booking_service.now() < slots.window_bounds(window)[1]
+        return QueueStatus("expected", None, None, len(waiting), still_open)
     if entry.state == STATE_SERVED:
         return QueueStatus("served", None, None, len(waiting), False)
     if entry.state == STATE_IN_ROOM:

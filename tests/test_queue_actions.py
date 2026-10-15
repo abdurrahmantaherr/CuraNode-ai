@@ -1,4 +1,4 @@
-"""P6: check in, send in, mark seen, put back and move forward."""
+"""P5: check in, send in, mark seen, put back and move forward."""
 
 from __future__ import annotations
 

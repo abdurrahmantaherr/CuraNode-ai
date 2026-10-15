@@ -1,4 +1,4 @@
-"""P6: every string the queue pages show exists in English and Urdu (FR28)."""
+"""P5: every string the queue pages show exists in English and Urdu (FR28)."""
 
 from __future__ import annotations
 

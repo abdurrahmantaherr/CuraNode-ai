@@ -1,4 +1,4 @@
-"""P6: the refusal error, the desk's rate limits and the audit constants."""
+"""P5: the refusal error, the desk's rate limits and the audit constants."""
 
 from __future__ import annotations
 

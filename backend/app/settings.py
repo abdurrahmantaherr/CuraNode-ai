@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     # ── Appointment booking (P5) ─────────────────────────────────────────
     booking_write_rate_limit_per_minute: int = 20
 
-    # ── Live queue (P6) ──────────────────────────────────────────────────
+    # ── Live queue (P5) ──────────────────────────────────────────────────
     # The front desk acts often, so the write budget is generous; the walk-in
     # lookup is tighter because it is the only way to browse patient names.
     queue_write_rate_limit_per_minute: int = 120

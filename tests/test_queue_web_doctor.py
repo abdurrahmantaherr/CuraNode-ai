@@ -1,4 +1,4 @@
-"""P6 web: the doctor's view-only queue."""
+"""P5 web: the doctor's view-only queue."""
 
 from __future__ import annotations
 

@@ -894,7 +894,7 @@ async def _guarded(
         appointments_today = booking_display.build_day_rows(
             await booking_service.doctor_day(session, actor, booking_service.current_day()), loc
         )
-        # P6: the doctor's queue today, view only.
+        # P5: the doctor's queue today, view only.
         queue_today = await queue_service.doctor_queue(session, actor)
     elif actor.role == UserRole.DOCTOR.value:
         # A pending doctor: no patient-data affordance at all (FR3), but the

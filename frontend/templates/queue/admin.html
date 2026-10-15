@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{#- The clinic admin's queue desk (FR19, P6 spec 3.3). Every control is a form
+{#- The clinic admin's queue desk (FR19, queue spec 3.3). Every control is a form
     (post, then redirect), so it works without JavaScript. Names are autoescaped;
     never use |safe here. The page does not refresh itself: the desk is what
     changes it.
@@ -11,6 +11,13 @@
       saved, page_error — banner texts or None -#}
 
 {% block title %}{{ t('queue.title') }} · {{ t('app.name') }}{% endblock %}
+
+{#- `when('queue.booked_at', value)`: the translated phrase with only the time forced left to
+    right (a <bdi>), so in Urdu the words keep their right-to-left flow. -#}
+{% macro when(key, value) -%}
+  {%- set parts = t(key, time='@@time@@').split('@@time@@') -%}
+  {{ parts[0] }}<bdi class="mono" dir="ltr">{{ value }}</bdi>{{ parts[1] }}
+{%- endmacro %}
 
 {% macro act(path, label, style='secondary') %}
   <form method="post" action="/{{ locale }}/admin/queue/{{ path }}" style="display:inline">
@@ -74,14 +81,16 @@
                     <div class="entry-row__title">#{{ loop.index }} {{ line.patient_name }}
                       {% if line.walk_in %}<span class="badge badge--neutral">{{ t('queue.badge.walk_in') }}</span>{% endif %}
                     </div>
-                    <div class="mono" dir="ltr">
-                      {% if line.walk_in %}{{ t('queue.arrived_at', time=line.booked_at.strftime('%H:%M')) }}{% else %}{{ t('queue.booked_at', time=line.booked_at.strftime('%H:%M')) }}{% endif %}
+                    <div>
+                      {% if line.walk_in %}{{ when('queue.arrived_at', line.booked_at.strftime('%H:%M')) }}{% else %}{{ when('queue.booked_at', line.booked_at.strftime('%H:%M')) }}{% endif %}
                     </div>
                   </div>
                   <div class="entry-row__actions">
                     {{ act(line.entry_id ~ '/send-in', t('queue.action.send_in'), 'primary') }}
-                    {{ act(line.entry_id ~ '/move-up', t('queue.action.move_up')) }}
-                    {{ act(line.entry_id ~ '/make-next', t('queue.action.make_next')) }}
+                    {% if not loop.first %}
+                      {{ act(line.entry_id ~ '/move-up', t('queue.action.move_up')) }}
+                      {{ act(line.entry_id ~ '/make-next', t('queue.action.make_next')) }}
+                    {% endif %}
                   </div>
                 </li>
               {% endfor %}
@@ -99,11 +108,13 @@
                 <li class="entry-row">
                   <div class="entry-row__main">
                     <div class="entry-row__title">{{ line.patient_name }}</div>
-                    <div class="mono" dir="ltr">{{ t('queue.booked_at', time=line.booked_at.strftime('%H:%M')) }}</div>
+                    <div>{{ when('queue.booked_at', line.booked_at.strftime('%H:%M')) }}</div>
                   </div>
-                  <div class="entry-row__actions">
-                    {{ act('check-in/' ~ line.appointment_id, t('queue.action.check_in'), 'primary') }}
-                  </div>
+                  {% if not v.over %}
+                    <div class="entry-row__actions">
+                      {{ act('check-in/' ~ line.appointment_id, t('queue.action.check_in'), 'primary') }}
+                    </div>
+                  {% endif %}
                 </li>
               {% endfor %}
             </ul>
@@ -121,6 +132,9 @@
           </details>
         {% endif %}
 
+        {% if v.over %}
+          <p class="field-help">{{ t('errors.queue_session_over') }}</p>
+        {% else %}
         <div id="walkin-{{ loop.index }}" class="stack">
           <div class="eyebrow">{{ t('queue.walk_in.title') }}</div>
           <p class="field-help">{{ t('queue.walk_in.hint') }}</p>
@@ -157,6 +171,7 @@
             {% endif %}
           {% endif %}
         </div>
+        {% endif %}
       </section>
     {% endfor %}
   </main>

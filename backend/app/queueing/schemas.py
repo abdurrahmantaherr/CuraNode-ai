@@ -1,4 +1,4 @@
-"""Constants and plain result types for the live queue (P6)."""
+"""Constants and plain result types for the live queue (P5)."""
 
 from __future__ import annotations
 
@@ -89,6 +89,8 @@ class SessionView:
     waiting: tuple[Line, ...]
     expected: tuple[Line, ...]
     seen: tuple[Line, ...]
+    # The session has ended: nobody can be checked in or added as a walk-in any more.
+    over: bool = False
 
 
 @dataclass(frozen=True)

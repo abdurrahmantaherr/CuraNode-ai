@@ -1,4 +1,4 @@
-"""Pure display helpers for the queue (P6): no database."""
+"""Pure display helpers for the queue (P5): no database."""
 
 from __future__ import annotations
 

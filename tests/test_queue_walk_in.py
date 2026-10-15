@@ -1,4 +1,4 @@
-"""P6: finding a patient at the front desk, and walk-ins."""
+"""P5: finding a patient at the front desk, and walk-ins."""
 
 from __future__ import annotations
 

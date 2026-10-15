@@ -131,7 +131,7 @@ Record in the ledger: `Task 1: schema owner's answer received <date>; columns: <
 Create `tests/test_queue_model.py`:
 
 ```python
-"""P6: the QueueEntry model matches the shared queue_entry table."""
+"""P5: the QueueEntry model matches the shared queue_entry table."""
 
 from __future__ import annotations
 
@@ -201,7 +201,7 @@ async def test_only_the_three_states_are_allowed(db, clinic):
 Create `tests/test_queue_schemas.py`:
 
 ```python
-"""P6: the queue constants and the session key."""
+"""P5: the queue constants and the session key."""
 
 from __future__ import annotations
 
@@ -268,13 +268,13 @@ Expected: collection errors, `ImportError: cannot import name 'QueueEntry'` and 
 Create `backend/app/queueing/__init__.py`:
 
 ```python
-"""Live queue, check-in and walk-ins (P6, FR17, FR19, FR24)."""
+"""Live queue, check-in and walk-ins (P5, FR17, FR19, FR24)."""
 ```
 
 Create `backend/app/queueing/schemas.py`:
 
 ```python
-"""Constants and plain result types for the live queue (P6)."""
+"""Constants and plain result types for the live queue (P5)."""
 
 from __future__ import annotations
 
@@ -397,7 +397,7 @@ In `backend/app/db/models.py`, directly after the `Appointment` class (before th
 class QueueEntry(Base):
     """queue_entry — shared, pre-existing; one row per checked-in appointment.
 
-    Mapped for the live queue (P6). `appointment_id` is UNIQUE; `token_number`
+    Mapped for the live queue (P5). `appointment_id` is UNIQUE; `token_number`
     has no uniqueness or bound in the database, so the queue service keeps tokens
     unique under the per-doctor lock. `state` follows the live CHECK. The columns
     are the ones the schema owner confirmed (tests/fixtures/queue_entry_columns.json).
@@ -446,7 +446,7 @@ git commit -m "feat(queue): map queue_entry and add the queue constants"
 Create `tests/test_queue_order.py`:
 
 ```python
-"""P6: the pure queue-ordering rules. No database, no clock."""
+"""P5: the pure queue-ordering rules. No database, no clock."""
 
 from __future__ import annotations
 
@@ -617,7 +617,7 @@ git commit -m "feat(queue): add the pure queue-ordering rules"
 Create `tests/test_queue_plumbing.py`:
 
 ```python
-"""P6: the refusal error, the desk's rate limits and the audit constants."""
+"""P5: the refusal error, the desk's rate limits and the audit constants."""
 
 from __future__ import annotations
 
@@ -715,7 +715,7 @@ In `backend/app/errors.py`, directly after the `BookingRefused` class:
 
 ```python
 class QueueRefused(AppError):
-    """A queue action the rules refuse (P6, spec 3.2): the appointment is not for
+    """A queue action the rules refuse (P5, spec 3.2): the appointment is not for
     today or cannot be checked in, the session has ended, the doctor is not
     available, someone is already in the room, the session is full, the patient
     already has a booking today or is already queued, the patient is no longer
@@ -738,7 +738,7 @@ In `backend/app/settings.py`, directly after `booking_write_rate_limit_per_minut
 
 ```python
 
-    # ── Live queue (P6) ──────────────────────────────────────────────────
+    # ── Live queue (P5) ──────────────────────────────────────────────────
     # The front desk acts often, so the write budget is generous; the walk-in
     # lookup is tighter because it is the only way to browse patient names.
     queue_write_rate_limit_per_minute: int = 120
@@ -750,7 +750,7 @@ In `backend/app/deps.py`, directly after `check_booking_write_rate`:
 ```python
 
 
-# ── Live-queue budgets (P6) ──────────────────────────────────────────────
+# ── Live-queue budgets (P5) ──────────────────────────────────────────────
 async def check_queue_write_rate(actor: Actor) -> None:
     """Counts one front-desk queue action (check in, send in, seen, move, walk-in)."""
     count = await cache.incr(ratelimit_key("queue_write", str(actor.user_id)), 60)
@@ -769,7 +769,7 @@ In `backend/app/audit/writer.py`, directly after `APPOINTMENT_RESCHEDULE = "appo
 
 ```python
 
-# Emitted by the live queue (P6). `detail` holds ids only: never a name, a passport
+# Emitted by the live queue (P5). `detail` holds ids only: never a name, a passport
 # number or the text typed into a search; a lookup logs only how many results it found.
 QUEUE_CHECK_IN = "queue.check_in"
 QUEUE_SEND_IN = "queue.send_in"
@@ -849,7 +849,7 @@ git commit -m "feat(queue): add the refusal error, desk rate limits and audit ac
 Create `tests/queue_helpers.py`:
 
 ```python
-"""Shared setup for the queue tests (P6): an admin, today's session, queue entries.
+"""Shared setup for the queue tests (P5): an admin, today's session, queue entries.
 Time comes from `tests.booking_helpers.freeze`: "now" is Monday 13:00 in Pakistan."""
 
 from __future__ import annotations
@@ -911,7 +911,7 @@ async def entry_of(db, appointment) -> QueueEntry | None:
 Create `tests/test_booking_public_helpers.py`:
 
 ```python
-"""P6: the small public wrappers the queue uses from the booking service."""
+"""P5: the small public wrappers the queue uses from the booking service."""
 
 from __future__ import annotations
 
@@ -990,7 +990,7 @@ async def test_active_starts_leaves_out_cancelled(db, clinic):
 Create `tests/test_queue_views.py`:
 
 ```python
-"""P6: what the admin, the doctor and the patient see of a queue."""
+"""P5: what the admin, the doctor and the patient see of a queue."""
 
 from __future__ import annotations
 
@@ -1256,7 +1256,7 @@ Append to `backend/app/booking/service.py` (after the last function, `doctor_day
 ```python
 
 
-# ── Small public wrappers for the live queue (P6) ────────────────────────
+# ── Small public wrappers for the live queue (P5) ────────────────────────
 def now() -> datetime:
     """The current instant, UTC. This is the booking clock: freezing `_now` freezes it."""
     return _now()
@@ -1296,7 +1296,7 @@ async def active_starts(
 Create `backend/app/queueing/service.py`:
 
 ```python
-"""Live queue and check-in business logic (P6; FR17, FR19, FR24; spec 3.2).
+"""Live queue and check-in business logic (P5; FR17, FR19, FR24; spec 3.2).
 
 A queue is one doctor session: one effective window on one date at one clinic,
 the same unit booking uses for the cap. A queue entry belongs to a session
@@ -1615,7 +1615,7 @@ git commit -m "feat(queue): the admin, doctor and patient views of a queue"
 Create `tests/test_queue_actions.py`:
 
 ```python
-"""P6: check in, send in, mark seen, put back and move forward."""
+"""P5: check in, send in, mark seen, put back and move forward."""
 
 from __future__ import annotations
 
@@ -2287,7 +2287,7 @@ git commit -m "feat(queue): check in, send in, mark seen, put back and move forw
 Create `tests/test_queue_walk_in.py`:
 
 ```python
-"""P6: finding a patient at the front desk, and walk-ins."""
+"""P5: finding a patient at the front desk, and walk-ins."""
 
 from __future__ import annotations
 
@@ -2593,7 +2593,7 @@ Expected: collection error `ModuleNotFoundError: No module named 'app.queueing.d
 Create `backend/app/queueing/display.py`:
 
 ```python
-"""Pure display helpers for the queue (P6): no database."""
+"""Pure display helpers for the queue (P5): no database."""
 
 from __future__ import annotations
 
@@ -2825,7 +2825,7 @@ git commit -m "feat(queue): find a patient and add walk-ins; booking ignores wal
 Create `tests/test_queue_web_admin.py`:
 
 ```python
-"""P6 web: the clinic admin's queue page and its actions."""
+"""P5 web: the clinic admin's queue page and its actions."""
 
 from __future__ import annotations
 
@@ -3223,7 +3223,7 @@ Run the i18n helper with this keys file:
 Create `backend/app/web/queue.py`:
 
 ```python
-"""Server-rendered pages for the live queue (P6, FR19): the clinic admin's desk.
+"""Server-rendered pages for the live queue (P5, FR19): the clinic admin's desk.
 
 Every rule lives in `queueing/service.py`; this module only turns forms into
 service calls and results into pages, mirroring `web/booking.py`. Every action
@@ -3513,7 +3513,7 @@ Create `frontend/templates/queue/admin.html`:
 
 ```html
 {% extends "base.html" %}
-{#- The clinic admin's queue desk (FR19, P6 spec 3.3). Every control is a form
+{#- The clinic admin's queue desk (FR19, queue spec 3.3). Every control is a form
     (post, then redirect), so it works without JavaScript. Names are autoescaped;
     never use |safe here. The page does not refresh itself: the desk is what
     changes it.
@@ -3736,7 +3736,7 @@ git commit -m "feat(queue): the clinic admin's queue page"
 Create `tests/test_queue_web_patient.py`:
 
 ```python
-"""P6 web: the patient's queue card and the badge on the appointments list."""
+"""P5 web: the patient's queue card and the badge on the appointments list."""
 
 from __future__ import annotations
 
@@ -3929,7 +3929,7 @@ Run the i18n helper with this keys file:
 Create `frontend/templates/queue/_card.html`:
 
 ```html
-{#- The patient's place in today's queue (FR17, P6 spec 3.3). Expects `queue_status`
+{#- The patient's place in today's queue (FR17, queue spec 3.3). Expects `queue_status`
     (a QueueStatus), `updated_at` (HH:MM) and `row` (the AppointmentRow). It never
     shows another patient's name. Works without JavaScript: the Refresh link
     reloads the page, and queue.js does it every 15 seconds while `live`. -#}
@@ -3958,7 +3958,7 @@ Create `frontend/templates/queue/_card.html`:
 Create `frontend/static/js/queue.js`:
 
 ```js
-/* Live queue (P6): a page that carries data-autorefresh reloads itself, so the
+/* Live queue (P5): a page that carries data-autorefresh reloads itself, so the
    patient's place stays current. Without JavaScript the Refresh link does the same. */
 (function () {
   "use strict";
@@ -4063,7 +4063,7 @@ git commit -m "feat(queue): the patient's live place in the queue"
 Create `tests/test_queue_web_doctor.py`:
 
 ```python
-"""P6 web: the doctor's view-only queue."""
+"""P5 web: the doctor's view-only queue."""
 
 from __future__ import annotations
 
@@ -4201,7 +4201,7 @@ Run the i18n helper with this keys file:
 Create `frontend/templates/queue/_doctor_queue.html`:
 
 ```html
-{#- A verified doctor's queue today, view only (FR24, P6 spec 3.3): who is in the
+{#- A verified doctor's queue today, view only (FR24, queue spec 3.3): who is in the
     room, the waiting patients in order, and those still expected. Names and times
     only. Expects `queue_views` (list[SessionView]). Names are autoescaped. -#}
 <div class="panel stack" style="margin-top:var(--sp-5)">
@@ -4293,7 +4293,7 @@ and pass `**({"queue_views": queue_views} if queue_views is not None else {}),` 
 In `backend/app/web/router.py`: add `from ..queueing import service as queue_service` next to the other service imports; in `_guarded`, next to `appointments_today = None` add `queue_today = None`; directly after the `appointments_today = booking_display.build_day_rows(...)` statement inside the `elif actor.is_verified_doctor:` branch add:
 
 ```python
-        # P6: the doctor's queue today, view only.
+        # P5: the doctor's queue today, view only.
         queue_today = await queue_service.doctor_queue(session, actor)
 ```
 
@@ -4336,7 +4336,7 @@ git commit -m "feat(queue): the doctor's view-only queue"
 Create `tests/test_queue_i18n.py`:
 
 ```python
-"""P6: every string the queue pages show exists in English and Urdu (FR28)."""
+"""P5: every string the queue pages show exists in English and Urdu (FR28)."""
 
 from __future__ import annotations
 
@@ -4432,13 +4432,13 @@ Make these additive edits (keep the file's CRLF line endings):
 1. In "Testing", after the `tests/test_booking_*.py` line add:
 
 ```
-uv run pytest tests/test_queue_*.py -v     # P6 live queue / check-in / walk-in tests
+uv run pytest tests/test_queue_*.py -v     # P5 live queue / check-in / walk-in tests
 ```
 
 2. In the "High-Level Structure" tree, after the `booking/` line add:
 
 ```
-    queueing/                  # Live queue, check-in and walk-ins (P6, FR17/FR19/FR24): pure ordering rules, service — web pages only
+    queueing/                  # Live queue, check-in and walk-ins (P5, FR17/FR19/FR24): pure ordering rules, service — web pages only
 ```
 
 and in the `web/` line, after `booking.py: appointment booking pages;` add ` queue.py: the clinic admin's queue desk;`.
@@ -4446,7 +4446,7 @@ and in the `web/` line, after `booking.py: appointment booking pages;` add ` que
 3. In "Key Architectural Decisions", directly before `6. **Security Properties**`, add:
 
 ```
-5c. **Live queue, check-in and walk-ins (P6, FR17 + FR19 + FR24)**
+5c. **Live queue, check-in and walk-ins (P5, FR17 + FR19 + FR24)**
    - `backend/app/queueing/`: `order.py` (pure: next token, position, wait, move up, make next), `service.py` (every rule and view), `display.py` (`mask_passport`), `schemas.py`. Pages: `web/queue.py` (the clinic admin's desk, `/{locale}/admin/queue`); the patient's queue card is on `/{locale}/patient/appointments/{id}` and a badge on the list (both in `web/booking.py`); the doctor's view-only "Queue today" is on the doctor home page and on `/{locale}/doctor/appointments` (today only). There is no JSON API.
    - No new table and no migration: it maps the shared `queue_entry` table (`QueueEntry`: `appointment_id` UNIQUE, `token_number`, `state` waiting / in_room / served; the database enforces neither unique tokens nor the cap) and writes `appointment` (`booked → checked_in → done`). The columns are pinned by `tests/fixtures/queue_entry_columns.json`, the schema owner's confirmed answer.
    - A queue is one doctor **session** (one effective window on one date at one clinic: `schedule_id` plus the window's time range, as booking counts a session). Every action takes `lock_doctor` first, then re-reads, then writes. Order is arrival order = token order; position = waiting patients with a smaller token + 1; estimated wait = (waiting ahead + 1 if someone is in the room) × the session's `slot_minutes`. Move up / make next permute the existing tokens among the waiting entries, so tokens stay unique.
@@ -4458,13 +4458,13 @@ and in the `web/` line, after `booking.py: appointment booking pages;` add ` que
 4. In "Important Files to Understand First", after item 18 add:
 
 ```
-19. **`backend/app/queueing/order.py`** and **`queueing/service.py`** - Live queue (P6): the pure ordering rules and the locked service on top of booking's sessions and the shared `queue_entry` table. Read the P6 spec first
+19. **`backend/app/queueing/order.py`** and **`queueing/service.py`** - Live queue (P5): the pure ordering rules and the locked service on top of booking's sessions and the shared `queue_entry` table. Read the queue spec first
 ```
 
 and in "When Making Changes" add:
 
 ```
-- **Queue changes (P6)**: Read `docs/superpowers/specs/2026-10-13-live-queue-checkin-design.md` first. Put ordering rules in `queueing/order.py` (pure) and every other rule in `queueing/service.py`; take `lock_doctor` before every write and re-read the queue; only the clinic admin acts, scoped to their own `clinic_ids`; keep passport numbers masked and never log search text; never show a patient another patient's name; never hard-delete a queue entry or an appointment.
+- **Queue changes (P5)**: Read `docs/superpowers/specs/2026-10-13-live-queue-checkin-design.md` first. Put ordering rules in `queueing/order.py` (pure) and every other rule in `queueing/service.py`; take `lock_doctor` before every write and re-read the queue; only the clinic admin acts, scoped to their own `clinic_ids`; keep passport numbers masked and never log search text; never show a patient another patient's name; never hard-delete a queue entry or an appointment.
 ```
 
 - [ ] **Step 6: Commit the gate**
