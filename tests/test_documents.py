@@ -957,6 +957,7 @@ async def test_audit_rows_are_written_without_any_document_content(
     assert sorted(r.action for r in rows) == [
         "document.confirm",
         "document.process",
+        "document.records",  # the confirmed medicines copied into the typed tables: counts only
         "document.upload",
     ]
     blob = " ".join(r.detail for r in rows)
@@ -1037,7 +1038,8 @@ async def test_web_full_flow_upload_review_edit_confirm_and_refresh(
         "document_date": "2024-08-11",
     }
     saved = await client.post(f"/en/patient/documents/{doc_id}/confirm", data=form)
-    assert saved.status_code == 303 and saved.headers["location"].endswith("?saved=1")
+    # "saved=1", then the counts of what was also copied into the health records (rx=2 ...)
+    assert saved.status_code == 303 and "?saved=1" in saved.headers["location"]
 
     page = await client.get(saved.headers["location"])
     assert "Saved to your record" in page.text and "500 mg" in page.text
@@ -3440,7 +3442,7 @@ async def test_the_web_confirm_says_how_many_allergies_were_added_and_how_many_w
     detail = await upload_and_process(client, fake_ocr, "prescription", ALLERGIC_RX)
     r = await client.post(f"/en/patient/documents/{detail['id']}/confirm", data=web_form(detail))
     assert r.status_code == 303
-    assert r.headers["location"].endswith("?saved=1&allergies=1&skipped=1")
+    assert "?saved=1&allergies=1&skipped=1" in r.headers["location"]
     page = (await client.get(r.headers["location"])).text
     assert "Added to your profile&#39;s allergy list: 1." in page or (
         "Added to your profile's allergy list: 1." in page

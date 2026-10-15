@@ -909,12 +909,14 @@ TIMELINE_MODELS = {
     "LabReport",
 }
 APP = ROOT / "backend" / "app"
-# Their mapping, the readers the consent gateway calls, and the gateway itself (D2's
-# `load_patient_for_doctor` selects them too). Nothing else may select them.
+# Their mapping, the readers the consent gateway calls, the gateway itself (D2's
+# `load_patient_for_doctor` selects them too), and `documents/records.py`, which only writes and
+# removes the rows made from the patient's OWN confirmed document. Nothing else may select them.
 ALLOWED = {
     APP / "db" / "models.py",
     APP / "timeline" / "sources.py",
     APP / "consent" / "gateway.py",
+    APP / "documents" / "records.py",
 }
 
 

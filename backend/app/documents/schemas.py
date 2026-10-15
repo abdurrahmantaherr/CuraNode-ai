@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -214,6 +214,11 @@ class ConfirmRequest(BaseModel):
     # reviewed), so a client that only knows the medicines cannot erase the rest. Omitted
     # means just the document's primary table.
     groups: list[str] | None = None
+    # `row_index` of medicine rows the patient ticked "add to my current medicines" on. Only a
+    # kept row of the medicines table counts; an index that is anything else is ignored.
+    current_medicines: list[Annotated[int, Field(ge=0, le=10_000)]] = Field(
+        default_factory=list, max_length=100
+    )
 
 
 class DoctorMedicineIn(BaseModel):

@@ -518,18 +518,31 @@ class Encounter(Base):
 
 
 class Diagnosis(Base):
-    """diagnosis — a diagnosis made during one encounter. Doctor-owned; read-only here."""
+    """diagnosis — a diagnosis made during one encounter (a doctor's row), or one the patient
+    confirmed on an uploaded document (`document_id` set, no encounter). Migration c8e5a41f9b27."""
 
     __tablename__ = "diagnosis"
 
     id: Mapped[uuid.UUID] = mapped_column("diagnosis_id", Uuid, primary_key=True, default=uuid7)
-    encounter_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("encounter.encounter_id"), nullable=False
+    encounter_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("encounter.encounter_id"), nullable=True
+    )
+    # The confirmed document this row was read from; NULL for a doctor's own row.
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("document.document_id", ondelete="CASCADE"), nullable=True
     )
     icd10_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
     description: Mapped[str | None] = mapped_column(String(255), nullable=True)
     severity: Mapped[str | None] = mapped_column(String(20), nullable=True)
     is_chronic: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "encounter_id IS NOT NULL OR document_id IS NOT NULL",
+            name="ck_diagnosis_visit_or_document",
+        ),
+        Index("idx_diagnosis_document_id", "document_id"),
+    )
 
 
 class Medicine(Base):
@@ -546,23 +559,30 @@ class Medicine(Base):
 
 
 class Prescription(Base):
-    """prescription — a doctor's prescription, bound to an encounter. Read-only here.
+    """prescription — a doctor's prescription, bound to an encounter and a doctor (`source =
+    'digital'`), or the prescription a patient confirmed on an uploaded document (`source =
+    'ocr_upload'`: `document_id` set, no encounter and no doctor — migration c8e5a41f9b27).
 
-    A patient's own uploaded prescription is NOT in this table (it has no encounter or
-    prescribing doctor): it is a finalized `document`, and the timeline reads it from there.
+    The second kind is a COPY of what the patient confirmed, written by `documents/records.py`;
+    the document stays the event on the timeline, so every timeline and doctor-page reader
+    that lists a visit's prescriptions simply never selects it (it has no visit).
     """
 
     __tablename__ = "prescription"
 
     id: Mapped[uuid.UUID] = mapped_column("prescription_id", Uuid, primary_key=True, default=uuid7)
-    encounter_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("encounter.encounter_id"), nullable=False
+    encounter_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("encounter.encounter_id"), nullable=True
     )
     patient_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("patient.patient_id"), nullable=False
     )
-    doctor_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("doctor.doctor_id"), nullable=False
+    doctor_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("doctor.doctor_id"), nullable=True
+    )
+    # The confirmed document this prescription was read from; NULL for a doctor's own.
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("document.document_id", ondelete="CASCADE"), nullable=True
     )
     issue_date: Mapped[date] = mapped_column(nullable=False)
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="digital")
@@ -571,11 +591,26 @@ class Prescription(Base):
 
     __table_args__ = (
         CheckConstraint("source IN ('digital', 'ocr_upload')", name="prescription_source_check"),
+        CheckConstraint(
+            "(encounter_id IS NOT NULL AND doctor_id IS NOT NULL) OR document_id IS NOT NULL",
+            name="ck_prescription_visit_or_document",
+        ),
+        Index(
+            "uq_prescription_document",
+            "document_id",
+            unique=True,
+            postgresql_where=text("document_id IS NOT NULL"),
+            sqlite_where=text("document_id IS NOT NULL"),
+        ),
     )
 
 
 class PrescriptionItem(Base):
-    """prescription_item — one medicine on a prescription. Read-only here."""
+    """prescription_item — one medicine on a prescription. A doctor's item points at the shared
+    `medicine` catalogue (`medicine_id`); an item read from a confirmed document points at it only
+    when the written name EXACTLY matches a catalogue entry, and otherwise keeps the name as
+    written in `medicine_text` — the catalogue is shared reference data, never written from a
+    patient's upload (migration c8e5a41f9b27)."""
 
     __tablename__ = "prescription_item"
 
@@ -583,14 +618,23 @@ class PrescriptionItem(Base):
     prescription_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("prescription.prescription_id"), nullable=False
     )
-    medicine_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("medicine.medicine_id"), nullable=False
+    medicine_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("medicine.medicine_id"), nullable=True
     )
-    dosage: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    frequency: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # The medicine as written on the paper, when it has no catalogue entry.
+    medicine_text: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    dosage: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    frequency: Mapped[str | None] = mapped_column(String(50), nullable=True)
     duration_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    route: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    route: Mapped[str | None] = mapped_column(String(30), nullable=True)
     instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "medicine_id IS NOT NULL OR medicine_text IS NOT NULL",
+            name="ck_prescription_item_medicine_or_text",
+        ),
+    )
 
 
 class LabReport(Base):
@@ -989,13 +1033,19 @@ class OcrExtraction(Base):
 # owned by the wider CuraNode-AI product. No migration; read-only for D2.
 # (The visit, prescription, medicine and lab-report tables D2 also reads are mapped above.)
 class VitalSign(Base):
-    """vital_sign — doctor-owned, read-only for D2."""
+    """vital_sign — one visit's vital signs (a doctor's row), or the ones a patient confirmed on an
+    uploaded document (`document_id` set, no encounter — migration c8e5a41f9b27). Only the six
+    measurements the table has columns for; the rest stay in `ocr_extraction`."""
 
     __tablename__ = "vital_sign"
 
     id: Mapped[uuid.UUID] = mapped_column("vital_id", Uuid, primary_key=True, default=uuid7)
-    encounter_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("encounter.encounter_id"), nullable=False
+    encounter_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("encounter.encounter_id"), nullable=True
+    )
+    # The confirmed document this row was read from; NULL for a doctor's own.
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("document.document_id", ondelete="CASCADE"), nullable=True
     )
     height_cm: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     weight_kg: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
@@ -1005,6 +1055,20 @@ class VitalSign(Base):
     temperature_c: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     spo2: Mapped[int | None] = mapped_column(Integer, nullable=True)
     recorded_at: Mapped[datetime] = _ts(nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "encounter_id IS NOT NULL OR document_id IS NOT NULL",
+            name="ck_vital_sign_visit_or_document",
+        ),
+        Index(
+            "uq_vital_sign_document",
+            "document_id",
+            unique=True,
+            postgresql_where=text("document_id IS NOT NULL"),
+            sqlite_where=text("document_id IS NOT NULL"),
+        ),
+    )
 
 
 class LabResult(Base):
@@ -1022,7 +1086,11 @@ class LabResult(Base):
     unit: Mapped[str | None] = mapped_column(String, nullable=True)
     ref_range_low: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     ref_range_high: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
-    flag: Mapped[str | None] = mapped_column(String, nullable=True)
+    flag: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("flag IN ('low', 'normal', 'high')", name="lab_result_flag_check"),
+    )
 
 
 class AuditLog(Base):

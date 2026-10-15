@@ -1,9 +1,10 @@
 """A lab result's flag — High / Low / Normal — for display only.
 
-The shared database has no field for a flag (the field names `ocr_extraction` may
-hold are fixed), and a flag is not something the patient should have to type, so
-it is never stored: it is worked out from the confirmed row each time a page is
-shown. Two sources, in this order:
+A flag is not something the patient should have to type, so the page works it out from
+the confirmed row each time it is shown (`ocr_extraction` has no field for one). Of the two
+sources below, only the first ever reaches a stored record: `records.py` copies the report's OWN
+printed marker (low / normal / high) into `lab_result.flag`; a calculated flag is never written.
+Two sources, in this order:
 
 1. **Printed.** Many reports print their own marker beside the result — `H`, `L`,
    `HIGH`, `LOW`, `*`, an arrow, `(H)`. When the report says so, that is the flag,
@@ -147,6 +148,23 @@ def _verdict(value: float, reference_range: str) -> str | None:
             return None  # not a range: an OCR slip, never guessed at
         return LOW if value < low else HIGH if value > high else NORMAL
     return None
+
+
+def reference_limits(reference_range: str) -> tuple[float | None, float | None]:
+    """The `(low, high)` a stated reference range gives, for storing as numbers: `13.0 - 17.0` ->
+    `(13.0, 17.0)`, `< 5.0` -> `(None, 5.0)`, `> 40` -> `(40.0, None)`. Anything that is not
+    plainly one of those — an OCR slip, a word, a span whose ends are the wrong way round — is
+    `(None, None)`: a limit is never guessed. It reads a range exactly as `_verdict` does."""
+    text = reference_range.strip()
+    if m := _UPPER.match(text):
+        return None, _plain_number(m.group("x"))
+    if m := _LOWER.match(text):
+        return _plain_number(m.group("x")), None
+    if m := _SPAN.search(text):
+        low, high = _plain_number(m.group("lo")), _plain_number(m.group("hi"))
+        if low is not None and high is not None and low < high:
+            return low, high
+    return None, None
 
 
 def calculated_flag(result: str, reference_range: str) -> str | None:
