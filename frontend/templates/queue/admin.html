@@ -10,10 +10,11 @@
       find, find_session, find_error - the search text, the session it was for, its error
       saved, page_error - banner texts or None -#}
 
+{% import "partials/icons.html" as ic %}
 {% block title %}{{ t('queue.title') }} · {{ t('app.name') }}{% endblock %}
 
 {% macro act(path, label, style='secondary') %}
-  <form method="post" action="/{{ locale }}/admin/queue/{{ path }}" style="display:inline">
+  <form class="inline-form" method="post" action="/{{ locale }}/admin/queue/{{ path }}">
     <button class="btn btn--{{ style }} btn--sm" type="submit" data-label="{{ label }}">{{ label }}</button>
   </form>
 {% endmacro %}
@@ -33,7 +34,12 @@
     {% endif %}
 
     {% if not views %}
-      <div class="panel"><p class="empty-state">{{ t('queue.admin.empty') }}</p></div>
+      <div class="panel">
+        <div class="empty">
+          <span class="orb">{{ ic.i('door') }}</span>
+          <p class="empty__text">{{ t('queue.admin.empty') }}</p>
+        </div>
+      </div>
     {% endif %}
 
     {% for v in views %}

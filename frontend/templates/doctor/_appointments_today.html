@@ -3,13 +3,13 @@
     P5 - a verified doctor's appointments today, above "My patients".
     Context: appointments_today  list[DayRowOut] (name, time and status only).
     Names are autoescaped; never use |safe here. -#}
-<div class="panel" style="margin-top:var(--sp-5)">
+<div class="panel">
   <div class="panel__label">{{ t('booking.today.title') }}</div>
   {% if appointments_today %}
     {% set day_rows = appointments_today %}
     {% include "booking/_day_table.html" %}
   {% else %}
-    <p style="margin:0;font-size:13.5px;color:var(--muted)">{{ t('booking.today.empty') }}</p>
+    <p class="empty-state">{{ t('booking.today.empty') }}</p>
   {% endif %}
-  <p style="margin:var(--sp-3) 0 0"><a href="/{{ locale }}/doctor/appointments">{{ t('booking.today.all') }}</a></p>
+  <p class="panel__foot"><a href="/{{ locale }}/doctor/appointments">{{ t('booking.today.all') }}</a></p>
 </div>

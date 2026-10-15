@@ -374,7 +374,7 @@ input[type="file"]::file-selector-button:hover { background: var(--tint); }
 .dropzone { border: 2px dashed var(--accent); border-radius: var(--r-4); background: var(--surface-2); padding: var(--s-7) var(--s-5); }
 .dropzone:hover, .dropzone.is-dragover, .dropzone:focus-within { background: var(--tint); border-color: var(--link); }
 .dropzone__title { font-size: var(--fs-18); color: var(--text-1); }
-.dropzone .input { background: transparent; border: 0; min-block-size: 0; padding: 0; box-shadow: none; }
+.dropzone .input { background: transparent; border: 0; min-block-size: 44px; padding: 0; box-shadow: none; }
 
 /* ── Document states: icon plus words ─────────────────────────────── */
 .ai-state { border-radius: var(--r-pill); padding: 4px 12px 4px 10px; font-size: var(--fs-14); gap: 6px; }
@@ -460,3 +460,29 @@ html[lang="ur"] h1.auth-title { line-height: 1.7; }
 .mono-note { color: var(--text-2); font-size: var(--fs-12); }
 .oauth-divider { color: var(--text-2); }
 @media (max-width: 520px) { .auth-shell .card { padding: var(--s-5); border-radius: var(--r-4); } }
+
+/* ── Small utilities that replaced inline styles ──────────────────── */
+.flush { margin: 0; }
+.facts, .facts dd { margin: 0; }
+.facts dt { color: var(--text-2); font-size: var(--fs-14); font-weight: 600; }
+.inline-form { display: inline-flex; }
+tr.is-cancelled td { color: var(--text-3); }
+/* A group of fields inside a form card: a section, not a second card. */
+.subsection { display: flex; flex-direction: column; gap: var(--s-4); padding-block-start: var(--s-4); border-block-start: 1px solid var(--line); }
+
+/* ══ Phase 5 fixes from the automated audit ═══════════════════════════ */
+
+/* Touch targets: 44px for everything a thumb must hit. */
+.tab, .tl-tab, .fchip, .hero-copy { min-block-size: 44px; }
+input[type="file"] { min-block-size: 44px; }
+.tl-filters > summary { display: flex; align-items: center; min-block-size: 44px; }
+.tl-card__more, .panel__foot .linkish { display: inline-flex; align-items: center; min-block-size: 44px; }
+
+/* The phone pill never wraps, even with a long Urdu label on the active item. */
+@media (max-width: 720px) {
+  .pillnav__list { flex-wrap: nowrap; }
+  .pillnav__list > li { min-inline-size: 0; }
+  .pillnav__link { min-inline-size: 48px; flex-shrink: 1; overflow: hidden; }
+  .pillnav__link-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-inline-size: 0; }
+  .pillnav__link[aria-current="page"] { flex-shrink: 1; }
+}

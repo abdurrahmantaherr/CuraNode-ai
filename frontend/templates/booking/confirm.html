@@ -19,22 +19,22 @@
     <div class="panel stack">
       <h2 class="panel__label">{{ page_title }}</h2>
       {% if moving %}<p class="field-help">{{ replaces_text }}</p>{% endif %}
-      <dl class="stack" style="margin:0">
+      <dl class="stack facts">
         <div>
           <dt class="eyebrow">{{ t('booking.field.doctor') }}</dt>
-          <dd style="margin:0">{{ doctor.name }}{% if doctor.specialty %} · {{ doctor.specialty }}{% endif %}</dd>
+          <dd>{{ doctor.name }}{% if doctor.specialty %} · {{ doctor.specialty }}{% endif %}</dd>
         </div>
         <div>
           <dt class="eyebrow">{{ t('booking.field.hospital') }}</dt>
-          <dd style="margin:0">{{ clinic.name }}{% if clinic.city %} - {{ clinic.city }}{% endif %}</dd>
+          <dd>{{ clinic.name }}{% if clinic.city %} - {{ clinic.city }}{% endif %}</dd>
         </div>
         <div>
           <dt class="eyebrow">{{ t('booking.field.date') }}</dt>
-          <dd style="margin:0">{{ weekday(day) }} <bdi>{{ day.isoformat() }}</bdi></dd>
+          <dd>{{ weekday(day) }} <bdi>{{ day.isoformat() }}</bdi></dd>
         </div>
         <div>
           <dt class="eyebrow">{{ t('booking.field.time') }}</dt>
-          <dd style="margin:0" class="mono" dir="ltr">{{ hhmm(start) }}</dd>
+          <dd class="mono" dir="ltr">{{ hhmm(start) }}</dd>
         </div>
       </dl>
 

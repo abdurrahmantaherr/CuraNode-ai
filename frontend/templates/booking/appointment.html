@@ -24,26 +24,26 @@
 
     <div class="panel stack">
       <h2 class="panel__label">{{ t('booking.appointment.title') }}</h2>
-      <dl class="stack" style="margin:0">
+      <dl class="stack facts">
         <div>
           <dt class="eyebrow">{{ t('booking.field.doctor') }}</dt>
-          <dd style="margin:0">{{ row.doctor_name }}{% if row.specialty %} · {{ row.specialty }}{% endif %}</dd>
+          <dd>{{ row.doctor_name }}{% if row.specialty %} · {{ row.specialty }}{% endif %}</dd>
         </div>
         <div>
           <dt class="eyebrow">{{ t('booking.field.hospital') }}</dt>
-          <dd style="margin:0">{{ row.clinic_name }}</dd>
+          <dd>{{ row.clinic_name }}</dd>
         </div>
         <div>
           <dt class="eyebrow">{{ t('booking.field.date') }}</dt>
-          <dd style="margin:0">{{ weekday(row.starts_at) }} <bdi>{{ row.starts_at.date().isoformat() }}</bdi></dd>
+          <dd>{{ weekday(row.starts_at) }} <bdi>{{ row.starts_at.date().isoformat() }}</bdi></dd>
         </div>
         <div>
           <dt class="eyebrow">{{ t('booking.field.time') }}</dt>
-          <dd style="margin:0" class="mono" dir="ltr">{{ hhmm(row.starts_at) }}</dd>
+          <dd class="mono" dir="ltr">{{ hhmm(row.starts_at) }}</dd>
         </div>
         <div>
           <dt class="eyebrow">{{ t('booking.field.status') }}</dt>
-          <dd style="margin:0"><span class="badge {{ status_badge(row.status) }}">{{ status_label(row.status) }}</span></dd>
+          <dd><span class="badge {{ status_badge(row.status) }}">{{ status_label(row.status) }}</span></dd>
         </div>
       </dl>
       {% set r = row %}

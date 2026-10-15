@@ -39,7 +39,7 @@
       </fieldset>
 
       <div id="doctor-fields" data-hide-when="patient">
-        <div class="card" style="box-shadow:none;padding:var(--sp-6);gap:var(--sp-4)">
+        <div class="subsection">
           {{ f.field('pmdc_number', t('field.pmdc'), value=values.get('pmdc_number', ''),
                      errors=errors, help=t('field.pmdc_help'), placeholder='41192') }}
           {{ f.field('specialty', t('field.specialty'), value=values.get('specialty', ''),

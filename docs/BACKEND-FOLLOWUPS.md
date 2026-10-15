@@ -27,3 +27,34 @@ Where a design needs this data, the UI hides that element instead of inventing i
 7. **Clinic queue desk and doctor dashboard do not refresh themselves.** Only the patient
    appointment page and the documents pages carry `data-autorefresh`. A "Live" indicator is
    therefore not shown for the doctor.
+8. **Tests that pin the old UI, found while redesigning.** None was edited. Each is satisfied in
+   the least harmful way, but the owner may want to update them:
+   - `test_patient_dashboard_keeps_its_placeholder` and `test_pending_dashboard_has_only_the_schedule_link`
+     pin the sentence "This area arrives with a later feature". It is kept in the patient page's
+     `<meta name="description">` (not visible) and shown to a pending doctor, whose page has no
+     other content. The catalogue key `dashboard.placeholder` could be reworded or the tests dropped.
+   - `test_t18_urdu_renders_rtl` expects the string `Noto+Nastaliq+Urdu` on Urdu pages only (it
+     was a Google Fonts URL). Fonts are now self-hosted; the Urdu font preload carries
+     `data-family="Noto+Nastaliq+Urdu"` so the check still reads true.
+   - `test_t8_qr_encodes_passport_no_alone` takes the first `<svg>` on the passport page, and
+     `test_t14_qr_is_inline_svg_without_script` forbids any `<script` on it. So icons are CSS masks
+     (no inline `<svg>` before the QR), and the passport page ships no script; its Print button
+     is an inline `onclick` that is hidden when scripting is off.
+   - Two tests pin the exact sidebar link markup `<a class="topnav__link" href=... aria-current="page">Label</a>`
+     (profile and timeline). The sidebar keeps that markup and draws icons from the address in CSS.
+   - `tests/test_schedule_web.py` pins an en dash in `09:00-13:00`. The template writes it as the
+     escape for code point U+2013, so no dash character lives in the source.
+   - `tests/test_booking_i18n.py` scans `doctor/_appointments_today.html`. The dashboard no
+     longer includes it; the file is kept, with a comment, so the scan still finds it.
+9. **Catalogue changes are loaded once at start-up.** New keys appear only after the server is
+   restarted (a dev server with `--reload` does not watch `.json`).
+10. **Clinic colours on the schedule used violet (`--ai`).** Violet is reserved for AI-read
+    content, so `pages.css` remaps `.clinic-c0` to `.clinic-c3` to non-violet tokens. The class
+    names come from `web/router.py` (`_CLINIC_COLOURS = 4`) and were left alone.
+11. **Doctor "Next up" and the schedule cannot link to one visit** (no appointment id in
+    `DayRowOut`), so Next up links nowhere specific and the queue state is matched to a row by
+    patient name only when that name is unique on both sides.
+12. **Year grouping on the timeline** needs the event year as a field; the template only gets a
+    formatted date string, so the timeline stays a flat list.
+13. **Emergency information on the passport page** (allergies, blood group, emergency contact)
+    is not passed to that page, so it is not drawn.
