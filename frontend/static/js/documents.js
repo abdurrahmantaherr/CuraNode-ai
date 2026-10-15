@@ -1,6 +1,6 @@
 /* Progressive enhancement for the medical-document pages.
 
-   Every form works with JavaScript disabled — the upload is a plain multipart
+   Every form works with JavaScript disabled - the upload is a plain multipart
    POST and the review is a plain form. The server is authoritative (it
    re-validates the file's real type and size); this file only makes the flow
    friendlier:
@@ -10,7 +10,7 @@
       state while the upload + OCR request runs.
    2. Every form: the submitting-state guard shared with auth.js/profile.js
       (disable THAT form's submit button and show a spinner, so a double-click
-      cannot submit twice — the server also makes confirm/process idempotent).
+      cannot submit twice - the server also makes confirm/process idempotent).
    3. Processing page: reload itself until the document leaves `processing`. */
 
 (function () {

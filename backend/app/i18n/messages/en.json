@@ -996,5 +996,12 @@
   "dashboard.passport.copy": "Copy ID",
   "dashboard.passport.copied": "Copied",
   "dashboard.quick.title": "Quick actions",
-  "dashboard.privacy_note": "Only the clinicians you choose can see your record, and every view is logged."
+  "dashboard.privacy_note": "Only the clinicians you choose can see your record, and every view is logged.",
+  "dashboard.stat.shared": "Patients who shared records",
+  "dashboard.nextup.title": "Next up",
+  "dashboard.nextup.in_room": "In the room now",
+  "dashboard.nextup.none": "No one is next. You are clear for now.",
+  "dashboard.schedule.title": "Today's schedule",
+  "queue.room_free": "Room is free",
+  "doctor_dashboard.open": "Open record"
 }

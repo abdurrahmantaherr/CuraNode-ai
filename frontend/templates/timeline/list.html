@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{#- The medical history timeline (P3 — FR8, FR9), laid out like the prototype's Medical Timeline:
+{#- The medical history timeline (P3 - FR8, FR9), laid out like the prototype's Medical Timeline:
     tabs, then a rail with a dot per event, the date above each card, the provenance at the right
     of the card's title and "View details →" under it.
 
     Every SAVED event of one patient's record, newest first, placed on the day it HAPPENED (a
-    visit's date, a prescription's issue date, the date a document itself states) — never the day
+    visit's date, a prescription's issue date, the date a document itself states) - never the day
     it was uploaded. Events with no date at all are listed apart, last. Uploads that are not saved
     yet are NOT events: they are listed in "Documents in progress", with where they stand and
     nothing read from them.
@@ -16,7 +16,7 @@
     the address. timeline.js only adds the loading state.
 
     Context (web/timeline.py::_render_list):
-      data            TimelineOut — total, counts per tab, facilities, doctors
+      data            TimelineOut - total, counts per tab, facilities, doctors
       events          [TimelineEvent] with a date, newest first (this page)
       undated         [TimelineEvent] with no date (this page)
       pending         [PendingItem] uploads in progress (the patient's own view; after tab + search)
@@ -54,7 +54,7 @@
         <h3 class="tl-card__title" id="ev-{{ e.ref | replace(':', '-') }}">{{ e.title }}</h3>
         {#- A document the patient uploaded, reviewed and saved after it was read: said as that, not as "AI".
             The state is the existing one (`ai_patient_confirmed` exists only for a saved, patient-confirmed
-            document — never for a pending, failed or doctor-written one). -#}
+            document - never for a pending, failed or doctor-written one). -#}
         {% if owner and e.provenance == 'ai_patient_confirmed' %}
           <span class="tl-prov tl-prov--confirmed">{{ t('timeline.prov.reviewed_confirmed') }}</span>
         {% else %}

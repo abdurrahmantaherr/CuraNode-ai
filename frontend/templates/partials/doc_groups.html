@@ -1,5 +1,5 @@
-{#- The TABLES of a document — medicines, diagnosis, symptoms, vital signs, allergies, lab
-    results, vaccine doses (documents/groups.py) — for the review step (editable) and the
+{#- The TABLES of a document - medicines, diagnosis, symptoms, vital signs, allergies, lab
+    results, vaccine doses (documents/groups.py) - for the review step (editable) and the
     saved record (read-only), so the two never drift apart.
 
     Import with context:  {% import "partials/doc_groups.html" as dg with context %}
@@ -8,7 +8,7 @@
                                 `g` is a review view-model from web/documents.py::_review_groups.
       dg.saved_group(g, doc)    the confirmed rows, read-only. `g` is a GroupOut.
 
-    Input names are `row-<index>-<field>` — one scheme for every table, parsed by
+    Input names are `row-<index>-<field>` - one scheme for every table, parsed by
     web/documents.py::_parse_review_form. A removed row is `remove_row=<index>`. -#}
 {% import "partials/doc_sections.html" as ds with context %}
 

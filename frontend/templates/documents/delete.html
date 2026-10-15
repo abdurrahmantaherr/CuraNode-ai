@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{#- "Delete this document?" — the confirmation step, as a page so it works without JavaScript.
+{#- "Delete this document?" - the confirmation step, as a page so it works without JavaScript.
 
     Context (web/documents.py::_render_delete):
-      doc      DocumentOut (can_delete is true — the handler checked)
+      doc      DocumentOut (can_delete is true - the handler checked)
       banner   error text, or None   (a deletion that failed says so here; nothing was deleted)
       errors   {confirm: message}    (a saved record needs the box ticked) -#}
 {% import "partials/form_field.html" as f %}

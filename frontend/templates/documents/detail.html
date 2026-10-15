@@ -17,7 +17,7 @@
       review_groups
                   review view-model, one per TABLE of the document (medicines,
                   diagnosis, symptoms, vital signs, allergies, ...): {key, label,
-                  layout, rows, blank_row, list_row} — submitted values laid over
+                  layout, rows, blank_row, list_row} - submitted values laid over
                   the proposals after a failed save
       date_value  ISO date for the date input
       errors      {document_date: message}
@@ -39,7 +39,7 @@
 {% set base = '/' ~ locale ~ '/patient/documents/' ~ doc.id %}
 {#- Every document type has a layout of its own (partials/doc_layouts.html). A prescription's is
     the compact one below: who / for whom / when, then medicines, advice, diagnosis, symptoms,
-    vital signs, allergies — nothing else. -#}
+    vital signs, allergies - nothing else. -#}
 {% set compact = doc.document_type == 'prescription' %}
 {#- The text the reader found stays on the page for checking against the original: folded away
     when the page already shows what it holds, open when it is all there is. -#}
@@ -80,7 +80,7 @@
         {% endif %}
       </div>
       {#- Managing the document: look at the original exactly as uploaded, keep a copy,
-          or (a saved record only — an unconfirmed upload has "Discard" below) delete it.
+          or (a saved record only - an unconfirmed upload has "Discard" below) delete it.
           Shown only when the server says each is valid. -#}
       {% if doc.can_download %}
         <div class="btn-row">
@@ -172,8 +172,8 @@
           <p class="lead">{{ t('documents.review.notice') }} {{ t('documents.review.ai_note') }}</p>
 
           {% if compact %}
-            {#- Prescription: who it is from, for whom, and when — as the document says it
-                (read-only), the document date (editable) and the upload day — then medicines,
+            {#- Prescription: who it is from, for whom, and when - as the document says it
+                (read-only), the document date (editable) and the upload day - then medicines,
                 advice, and the clinical tables. Nothing else. -#}
             <section class="stack doc-details" aria-labelledby="det-h">
               <h3 id="det-h" class="panel__label">{{ t('documents.section.details') }}</h3>
@@ -243,7 +243,7 @@
 
       <div class="review">
         {#- The original file the patient uploaded, preserved and shown in its
-            own format — an image inline, a PDF as an open link — exactly as
+            own format - an image inline, a PDF as an open link - exactly as
             the review step already does, so comparing the record against the
             source document doesn't require leaving this page. -#}
         <section class="panel stack" aria-labelledby="orig-h">

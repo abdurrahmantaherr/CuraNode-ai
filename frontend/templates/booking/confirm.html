@@ -4,8 +4,8 @@
     Names are autoescaped; never use |safe here.
 
     Context (built in web/booking.py::confirm_page):
-      doctor      DoctorCard; clinic — the ClinicRef; day — a date (Pakistan)
-      start       the chosen instant (UTC); moving — AppointmentRow or None
+      doctor      DoctorCard; clinic - the ClinicRef; day - a date (Pakistan)
+      start       the chosen instant (UTC); moving - AppointmentRow or None
       replaces_text, action (the form's address), back_href
       hhmm(start), slot_value(start), weekday(day) -#}
 
@@ -26,7 +26,7 @@
         </div>
         <div>
           <dt class="eyebrow">{{ t('booking.field.hospital') }}</dt>
-          <dd style="margin:0">{{ clinic.name }}{% if clinic.city %} — {{ clinic.city }}{% endif %}</dd>
+          <dd style="margin:0">{{ clinic.name }}{% if clinic.city %} - {{ clinic.city }}{% endif %}</dd>
         </div>
         <div>
           <dt class="eyebrow">{{ t('booking.field.date') }}</dt>

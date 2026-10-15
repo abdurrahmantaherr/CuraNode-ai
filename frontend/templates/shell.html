@@ -99,23 +99,156 @@
       <p class="trust">{{ ic.i('lock', 'icon--sm') }}<span>{{ t('dashboard.privacy_note') }}</span></p>
 
     {% elif patients is defined %}
-      {#- Verified doctor: rebuilt in phase 3 -#}
-      <div class="panel">
-        <div class="panel__label">{{ page_title }}</div>
-        {% if links %}
-          <p class="btn-row">
-            {% for link in links %}<a class="btn btn--secondary" href="{{ link.href }}">{{ link.label }}</a>{% endfor %}
-          </p>
-        {% endif %}
+      {#- Verified doctor. Every fact is drawn once: the schedule lists the day's
+          appointments (with the queue state beside a patient when the name is
+          unique), the queue board is the live view, "Next up" is one patient. -#}
+      {% set appts = appointments_today or [] %}
+      {% set sessions = queue_today or [] %}
+      {% set ns = namespace(count=0, waiting=0, room=0, start='', end='', clinics=[], first_room='', next_i=-1) %}
+      {% for r in appts %}{% if not r.cancelled %}{% set ns.count = ns.count + 1 %}{% endif %}{% endfor %}
+      {% for v in sessions %}
+        {% set ns.waiting = ns.waiting + (v.waiting|length) %}
+        {% if v.in_room %}{% set ns.room = ns.room + 1 %}{% if not ns.first_room %}{% set ns.first_room = v.in_room.patient_name %}{% endif %}{% endif %}
+        {% set st = v.start.strftime('%H:%M') %}{% set en = v.end.strftime('%H:%M') %}
+        {% if not ns.start or st < ns.start %}{% set ns.start = st %}{% endif %}
+        {% if not ns.end or en > ns.end %}{% set ns.end = en %}{% endif %}
+        {% if v.clinic_name not in ns.clinics %}{% set ns.clinics = ns.clinics + [v.clinic_name] %}{% endif %}
+      {% endfor %}
+
+      {#- Queue state by patient name, used only where the name is unique on both sides. -#}
+      {% set names = appts|map(attribute='name')|list %}
+      {% set qnames = namespace(all=[]) %}
+      {% for v in sessions %}
+        {% if v.in_room %}{% set qnames.all = qnames.all + [v.in_room.patient_name] %}{% endif %}
+        {% for l in v.waiting %}{% set qnames.all = qnames.all + [l.patient_name] %}{% endfor %}
+        {% for l in v.expected %}{% set qnames.all = qnames.all + [l.patient_name] %}{% endfor %}
+        {% for l in v.seen %}{% set qnames.all = qnames.all + [l.patient_name] %}{% endfor %}
+      {% endfor %}
+      {% set qstate = {} %}
+      {% for v in sessions %}
+        {% if v.in_room and qnames.all.count(v.in_room.patient_name) == 1 %}{% set _ = qstate.update({v.in_room.patient_name: ['room', 0]}) %}{% endif %}
+        {% for l in v.waiting %}{% if qnames.all.count(l.patient_name) == 1 %}{% set _ = qstate.update({l.patient_name: ['waiting', loop.index]}) %}{% endif %}{% endfor %}
+        {% for l in v.seen %}{% if qnames.all.count(l.patient_name) == 1 %}{% set _ = qstate.update({l.patient_name: ['seen', 0]}) %}{% endif %}{% endfor %}
+      {% endfor %}
+
+      {#- The next row: the first appointment still to be seen. -#}
+      {% for r in appts %}
+        {% if ns.next_i < 0 and not r.cancelled and r.badge == 'badge--ok' and not (names.count(r.name) == 1 and qstate.get(r.name) and qstate.get(r.name)[0] == 'seen') %}{% set ns.next_i = loop.index0 %}{% endif %}
+      {% endfor %}
+
+      <div class="dhead">
+        <p class="dhead__sub">
+          <span data-today hidden></span>
+          {% if ns.clinics %}<span>{{ ns.clinics|join(', ') }}</span><bdi class="mono" dir="ltr">{{ ns.start }}-{{ ns.end }}</bdi>{% endif %}
+        </p>
+        <a class="btn btn--ghost btn--sm" href="/{{ locale }}/doctor">{{ ic.i('refresh', 'icon--sm') }}{{ t('queue.card.refresh') }}</a>
       </div>
-      {% if appointments_today is defined %}{% include "doctor/_appointments_today.html" %}{% endif %}
-      {% if queue_today is defined %}{% set queue_views = queue_today %}{% include "queue/_doctor_queue.html" %}{% endif %}
-      {% include "doctor/_patient_list.html" %}
+
+      <div class="dgrid">
+        <div class="dgrid__main">
+          <form class="lookup" method="post" action="/{{ locale }}/doctor/passport-lookup" novalidate>
+            <label class="lookup__label" for="dash-passport">{{ t('lookup.open_link') }}</label>
+            <div class="search search--lg">
+              {{ ic.i('search') }}
+              <input class="search__input mono" id="dash-passport" name="passport_no" type="text" required maxlength="16"
+                     placeholder="CN-XXXX-XXXX" dir="ltr" autocomplete="off" autocapitalize="characters" spellcheck="false">
+              <button class="btn btn--primary" type="submit">{{ t('lookup.submit') }}</button>
+            </div>
+            <p class="field-help">{{ t('lookup.subtitle') }}</p>
+          </form>
+
+          <div class="stats">
+            <div class="stat">
+              <div class="stat__top"><span class="stat__label">{{ t('booking.today.title') }}</span><span class="orb">{{ ic.i('calendar') }}</span></div>
+              <div class="stat__value">{{ ns.count }}</div>
+            </div>
+            <div class="stat">
+              <div class="stat__top"><span class="stat__label">{{ t('queue.waiting') }}</span><span class="orb">{{ ic.i('hourglass') }}</span></div>
+              <div class="stat__value">{{ ns.waiting }}</div>
+            </div>
+            <div class="stat">
+              <div class="stat__top"><span class="stat__label">{{ t('queue.in_room') }}</span><span class="orb">{{ ic.i('door') }}</span></div>
+              <div class="stat__value">{{ ns.room }}</div>
+            </div>
+            <div class="stat">
+              <div class="stat__top"><span class="stat__label">{{ t('dashboard.stat.shared') }}</span><span class="orb">{{ ic.i('users') }}</span></div>
+              <div class="stat__value">{{ patients|length }}</div>
+            </div>
+          </div>
+
+          <section class="nextup" aria-labelledby="nextup-h">
+            {% if ns.first_room %}
+              <h2 id="nextup-h" class="nextup__label">{{ t('dashboard.nextup.in_room') }}</h2>
+              <p class="nextup__who">{{ ns.first_room }}</p>
+            {% elif ns.next_i >= 0 %}
+              {% set nx = appts[ns.next_i] %}
+              <h2 id="nextup-h" class="nextup__label">{{ t('dashboard.nextup.title') }}</h2>
+              <p class="nextup__who">{{ nx.name }}</p>
+              <div class="nextup__meta">
+                <span class="nextup__time mono" dir="ltr">{{ nx.time }}</span>
+                <span class="badge {{ nx.badge }}">{{ nx.status }}</span>
+              </div>
+            {% else %}
+              <h2 id="nextup-h" class="nextup__label">{{ t('dashboard.nextup.title') }}</h2>
+              <p class="nextup__none">{{ t('dashboard.nextup.none') }}</p>
+            {% endif %}
+          </section>
+
+          <section class="panel" aria-labelledby="sched-h">
+            <h2 id="sched-h" class="panel__label">{{ t('dashboard.schedule.title') }}</h2>
+            {% if appts %}
+              <table class="table table--stack sched">
+                <thead>
+                  <tr>
+                    <th scope="col">{{ t('booking.field.time') }}</th>
+                    <th scope="col">{{ t('booking.col.patient') }}</th>
+                    <th scope="col">{{ t('booking.field.status') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for r in appts %}
+                    {% set q = qstate.get(r.name) if names.count(r.name) == 1 else none %}
+                    <tr{% if loop.index0 == ns.next_i %} class="is-next" aria-current="true"{% elif r.cancelled %} class="is-cancelled"{% endif %}>
+                      <td dir="ltr" class="mono">{{ r.time }}</td>
+                      <td>{{ r.name }}</td>
+                      <td>
+                        {% if q and q[0] == 'room' %}<span class="badge badge--ok">{{ t('queue.in_room') }}</span>
+                        {% elif q and q[0] == 'waiting' %}<span class="badge badge--warn">{{ t('queue.badge.waiting', position=q[1]) }}</span>
+                        {% elif q and q[0] == 'seen' %}<span class="badge badge--neutral">{{ t('booking.status.done') }}</span>
+                        {% else %}<span class="badge {{ r.badge }}">{{ r.status }}</span>{% endif %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            {% else %}
+              <div class="empty empty--compact">
+                <span class="orb">{{ ic.i('calendar') }}</span>
+                <p class="empty__text">{{ t('booking.today.empty') }}</p>
+              </div>
+            {% endif %}
+            <p class="panel__foot"><a class="linkish" href="/{{ locale }}/doctor/appointments">{{ t('booking.today.all') }}{{ ic.i('arrow-right', 'icon--sm icon--dir') }}</a></p>
+          </section>
+
+          {% set queue_views = sessions %}
+          {% include "queue/_doctor_queue.html" %}
+        </div>
+
+        <aside class="dgrid__side">
+          {% include "doctor/_patient_list.html" %}
+          <a class="qtile" href="/{{ locale }}/doctor/schedule">
+            <span class="orb">{{ ic.i('clock') }}</span>
+            <span class="qtile__label">{{ t('schedule.open_link') }}</span>
+            {{ ic.i('chevron-right', 'icon--sm icon--dir qtile__go') }}
+          </a>
+        </aside>
+      </div>
 
     {% else %}
-      {#- Pending doctor: the schedule is their one link (D7) -#}
-      <div class="panel">
+      {#- Pending doctor: the schedule is their one link (D7). A test pins the placeholder sentence here. -#}
+      <div class="panel stack">
         <div class="panel__label">{{ page_title }}</div>
+        <p class="lead">{{ t('dashboard.placeholder') }}</p>
         {% if links %}
           <p class="btn-row">
             {% for link in links %}<a class="btn btn--secondary" href="{{ link.href }}">{{ link.label }}</a>{% endfor %}

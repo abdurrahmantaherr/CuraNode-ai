@@ -112,3 +112,170 @@ html[lang="ur"] .passport-hero__name { line-height: 1.7; }
   .qtile__go { display: none; }
   .qtile__label { font-size: var(--fs-14); }
 }
+
+/* ── Doctor dashboard ─────────────────────────────────────────────── */
+.dhead { display: flex; align-items: center; justify-content: space-between; gap: var(--s-4); flex-wrap: wrap; }
+.dhead__sub { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-4); color: var(--text-2); font-size: var(--fs-16); font-weight: 500; }
+.dhead__sub > * + *::before { content: "\00B7"; margin-inline-end: var(--s-4); color: var(--text-3); }
+.dhead__sub > [hidden] + *::before { content: none; }
+
+.dgrid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: var(--s-6); align-items: start; }
+.dgrid__main, .dgrid__side { display: flex; flex-direction: column; gap: var(--s-6); min-inline-size: 0; }
+.dgrid__side { position: sticky; inset-block-start: var(--s-5); }
+
+/* The primary task: look a patient up by passport number. */
+.lookup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-6);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4);
+  box-shadow: var(--shadow-2);
+}
+.lookup__label { font: 600 var(--fs-18)/1.3 var(--font-sans); }
+.lookup .field-help { margin: 0; }
+.search__input.mono { font-size: var(--fs-18); color: var(--text-1); letter-spacing: .04em; }
+.search__input.mono::placeholder { letter-spacing: .04em; }
+
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s-4); }
+.stat .orb { inline-size: 36px; block-size: 36px; }
+.stat__top { align-items: flex-start; }
+.stat { justify-content: space-between; }
+.stat__label { line-height: 1.3; }
+
+/* Next up: the one frosted card on the doctor's page. */
+.nextup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-6);
+  border-radius: var(--r-4);
+  background:
+    radial-gradient(70% 150% at 100% 0%, var(--tint-2), transparent 68%),
+    var(--glass);
+  box-shadow: var(--shadow-2);
+}
+.nextup__label { margin: 0; font: 600 var(--fs-14)/1.3 var(--font-sans); color: var(--text-2); }
+.nextup__who { margin: 0; font: 500 var(--fs-28)/1.15 var(--font-serif); letter-spacing: -.01em; overflow-wrap: anywhere; }
+html[lang="ur"] .nextup__who { line-height: 1.7; }
+.nextup__meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-3); }
+.nextup__time { font: 500 var(--fs-22)/1 var(--font-mono); color: var(--text-1); }
+.nextup__none { margin: 0; color: var(--text-2); }
+
+/* The day's schedule */
+.sched td:nth-child(2) { font-weight: 600; }
+.sched tr.is-next { background: var(--tint); }
+.sched tr.is-cancelled td { color: var(--text-3); }
+.sched tr.is-cancelled td:nth-child(2) { text-decoration: line-through; }
+.panel__foot { margin: var(--s-4) 0 0; }
+.panel__foot .linkish { display: inline-flex; align-items: center; gap: var(--s-2); font-size: var(--fs-14); }
+
+/* Live queue board */
+.qsession { display: flex; flex-direction: column; gap: var(--s-3); padding-block: var(--s-4); border-block-start: 1px solid var(--line); }
+.qsession:first-of-type { border-block-start: 0; padding-block-start: 0; }
+.qsession__head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); font-weight: 600; }
+.qsession__where { display: inline-flex; align-items: center; gap: var(--s-2); }
+.qroom { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) var(--s-4); border-radius: var(--r-3); background: var(--surface-2); }
+.qroom--busy { background: var(--ok-soft); }
+.qroom__label { font-size: var(--fs-14); color: var(--text-2); }
+.qroom__who { font-size: var(--fs-18); font-weight: 600; overflow-wrap: anywhere; }
+.qsub { margin: 0; font-size: var(--fs-14); font-weight: 600; color: var(--text-2); }
+.qlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s-1); }
+.qlist__item { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-3); border-radius: var(--r-2); min-block-size: 44px; }
+.qlist__pos { display: grid; place-items: center; inline-size: 28px; block-size: 28px; border-radius: var(--r-pill); background: var(--tint); font-size: var(--fs-14); font-weight: 600; flex: none; }
+.qlist__name { flex: 1; min-inline-size: 0; font-weight: 500; overflow-wrap: anywhere; }
+.qempty { margin: 0; padding-inline: var(--s-3); color: var(--text-2); font-size: var(--fs-14); }
+
+/* My patients */
+.plist { list-style: none; margin: 0; padding: 0; }
+.plist__item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--s-3); padding-block: var(--s-3); border-block-end: 1px solid var(--line); }
+.plist__item:last-child { border-block-end: 0; }
+.plist__name { font-weight: 600; color: var(--text-1); overflow-wrap: anywhere; }
+.plist__name:hover { color: var(--link); }
+.plist__meta { display: flex; flex-wrap: wrap; gap: 0 var(--s-3); font-size: var(--fs-14); color: var(--text-2); }
+.plist__meta .mono { white-space: nowrap; }
+.btn--icon { inline-size: 40px; min-inline-size: 40px; padding: 0; }
+
+@media (max-width: 1100px) {
+  .dgrid { grid-template-columns: minmax(0, 1fr); }
+  .dgrid__side { position: static; }
+}
+@media (max-width: 720px) {
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-3); }
+  .stat { padding: var(--s-4); }
+  .stat__value { font-size: var(--fs-28); }
+  .lookup { padding: var(--s-4); }
+  .search--lg .search__input { font-size: var(--fs-16); }
+  .search .btn { padding-inline: var(--s-4); }
+  .nextup__who { font-size: var(--fs-22); }
+  .sched tr { grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--s-3); }
+}
+
+/* ── Clinic queue desk: read at arm's length, act with one tap ────── */
+.qdesk .entry-row { min-block-size: 72px; padding-block: var(--s-3); }
+.qdesk .entry-row__title { font-size: var(--fs-18); font-weight: 600; }
+.qdesk .eyebrow { margin-block: var(--s-2) var(--s-1); }
+.qdesk__free { margin: 0; padding: var(--s-3) var(--s-4); border-radius: var(--r-3); background: var(--surface-2); color: var(--text-2); font-weight: 600; }
+/* The row's actions read as one segmented control. */
+.qdesk .entry-row__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+  padding: var(--s-1);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.qdesk .entry-row__actions form { display: inline-flex !important; }
+.qdesk .entry-row__actions .btn--sm { min-block-size: 44px; padding-inline: var(--s-5); }
+.qdesk .entry-row__actions .btn--secondary { background: transparent; border-color: transparent; }
+.qdesk .entry-row__actions .btn--secondary:hover { background: var(--tint); }
+
+/* Shared row anatomy used by lists on several pages */
+.entry-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s-4); flex-wrap: wrap; padding-block: var(--s-3); }
+.entry-row__main { min-inline-size: 0; flex: 1 1 14rem; display: flex; flex-direction: column; gap: 2px; }
+.entry-list { list-style: none; margin: 0; padding: 0; }
+.btn-row { display: flex; flex-wrap: wrap; gap: var(--s-3); align-items: center; margin: 0; }
+
+/* ── Fieldsets, check pills and the schedule week ─────────────────── */
+fieldset.field, .field > fieldset {
+  min-inline-size: 0;
+  margin: 0;
+  padding: var(--s-4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-3);
+}
+fieldset.field > legend, .field-label--legend { padding-inline: var(--s-2); font-size: var(--fs-14); font-weight: 600; }
+.section-checks { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-block-start: var(--s-3); }
+.section-check {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  min-block-size: 44px;
+  padding: var(--s-2) var(--s-4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  font-size: var(--fs-14);
+  transition: background .16s var(--ease), border-color .16s var(--ease);
+}
+.section-check:has(input:checked) { background: var(--tint); border-color: var(--link); }
+.section-check input { inline-size: 18px; block-size: 18px; accent-color: var(--link); margin: 0; }
+.muted-note { font-style: normal; color: var(--text-2); font-size: var(--fs-14); }
+
+/* Clinic colours must not use violet (that is AI only) and are never the only cue:
+   each block also carries the clinic's name. */
+.clinic-c0 { --clinic: var(--link); --clinic-soft: var(--tint); }
+.clinic-c1 { --clinic: var(--accent); --clinic-soft: var(--tint-2); }
+.clinic-c2 { --clinic: var(--warn); --clinic-soft: var(--warn-soft); }
+.clinic-c3 { --clinic: var(--text-2); --clinic-soft: var(--surface-2); }
+.slot-block__clinic { color: var(--text-1); }
+.legend { font-size: var(--fs-14); }
+.week__day { border-radius: var(--r-3); background: var(--surface-2); border: 1px solid var(--line); padding: var(--s-3); }
+.week__day--today { background: var(--tint); border-color: var(--link); }
+.week__empty { color: var(--text-2); font-size: var(--fs-14); }
+.week__name { font-size: var(--fs-14); }
+.slot-block { border-radius: var(--r-2); background: var(--clinic-soft); }

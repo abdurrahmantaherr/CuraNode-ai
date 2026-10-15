@@ -3,8 +3,8 @@
     confirm step; nothing on this page books anything. Names are autoescaped.
 
     Context (built in web/booking.py::_render_doctor):
-      doctor      DoctorCard; clinic — the ClinicRef whose times are shown
-      days        list[DayOptions] — only days with at least one free time
+      doctor      DoctorCard; clinic - the ClinicRef whose times are shown
+      days        list[DayOptions] - only days with at least one free time
       moving      AppointmentRow being moved, or None; moving_text its banner text
       page_error  banner text or None
       clinic_href(clinic), time_href(start), weekday(day), hhmm(start) -#}
@@ -39,7 +39,7 @@
           {% for c in doctor.clinics %}
             <a class="btn btn--sm {% if c.id == clinic.id %}btn--primary{% else %}btn--secondary{% endif %}"
                href="{{ clinic_href(c) }}"
-               {% if c.id == clinic.id %}aria-current="true"{% endif %}>{{ c.name }}{% if c.city %} — {{ c.city }}{% endif %}</a>
+               {% if c.id == clinic.id %}aria-current="true"{% endif %}>{{ c.name }}{% if c.city %} - {{ c.city }}{% endif %}</a>
           {% endfor %}
         </p>
       </div>

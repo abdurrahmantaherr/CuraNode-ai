@@ -1,12 +1,12 @@
 {#- Deleting a document, with an explicit confirmation step. Two ways in, one action:
 
       * every "Delete" control is a plain link to the confirmation PAGE
-        (`documents/delete.html`) — it works with JavaScript off;
+        (`documents/delete.html`) - it works with JavaScript off;
       * with JavaScript, `documents.js` intercepts that link and shows the single dialog below
         instead, filling in the document's name and the address to post to.
 
     Either way the answer is a POST to `/{locale}/patient/documents/{id}/delete`, and the server
-    — not the page — decides whether the deletion is allowed and confirmed.
+    - not the page - decides whether the deletion is allowed and confirmed.
 
     Import with context:  {% import "partials/doc_delete.html" as dd with context %}
 

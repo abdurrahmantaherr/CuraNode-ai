@@ -3,9 +3,9 @@
     it works without JavaScript. Names are autoescaped; never use |safe here.
 
     Context (built in web/booking.py::_render_find):
-      cards          list[DoctorCard] — verified doctors with a live hospital
-      specialties    list[str]; specialty — the chosen one or ""
-      q              the search text; filters_active — q or specialty is set
+      cards          list[DoctorCard] - verified doctors with a live hospital
+      specialties    list[str]; specialty - the chosen one or ""
+      q              the search text; filters_active - q or specialty is set
       page_error, notice   banner texts or None
       specialty_href(value), doctor_href(card) -#}
 
@@ -66,7 +66,7 @@
                 <div class="entry-row__title">{{ c.name }}</div>
                 {% if c.specialty %}<div class="field-help">{{ c.specialty }}</div>{% endif %}
                 <div class="mono">
-                  {% for cl in c.clinics %}{{ cl.name }}{% if cl.city %} — {{ cl.city }}{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}
+                  {% for cl in c.clinics %}{{ cl.name }}{% if cl.city %} - {{ cl.city }}{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}
                 </div>
               </div>
               <span class="badge badge--ok">{{ t('booking.find.verified') }}</span>

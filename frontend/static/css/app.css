@@ -1,7 +1,7 @@
 /* CuraNode application styles.
 
    Two rules govern everything here:
-   1. Logical properties only — margin-inline, padding-inline, inset-inline.
+   1. Logical properties only - margin-inline, padding-inline, inset-inline.
       Never margin-left / padding-right. This is what makes Urdu RTL work
       without a second stylesheet (TDD §2.3 rule 1).
    2. Colour comes only from tokens.css. No raw hex below this line. */
@@ -154,7 +154,7 @@ h1.auth-title {
 }
 .checkline input { accent-color: var(--brand); margin-block-start: 2px; }
 
-/* ── Role toggle (DESIGN.md — kept exactly) ─────────────────────────
+/* ── Role toggle (DESIGN.md - kept exactly) ─────────────────────────
    Built on native radios so the selection submits without JavaScript and
    the selected state is driven by :checked, not a scripted attribute. */
 .role-fieldset { border: 0; padding: 0; margin: 0; min-inline-size: 0; }
@@ -432,7 +432,7 @@ h1.auth-title {
 }
 .qr__svg { display: block; inline-size: 100%; block-size: auto; }
 
-/* ── Medical documents (FR10–FR13) ─────────────────────────────────────
+/* ── Medical documents (FR10-FR13) ─────────────────────────────────────
    Components from the approved UI prototype (DESIGN.md §4): the pill step
    indicator, the document-type pills, the dropzone, the `ai-state` chips and
    the source-beside-result review layout. Tokens and logical properties only. */
@@ -625,7 +625,7 @@ a.btn--primary, a.btn--primary:hover { color: #fff; }
   .btn, .btn--sm, .role-tile, .input, .select, .doctype-pill { min-height: 44px; }
 }
 
-/* D4 — doctor's patient list. */
+/* D4 - doctor's patient list. */
 .patient-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .patient-table th,
 .patient-table td { text-align: start; padding: var(--sp-3) var(--sp-4); border-block-end: 1px solid var(--line); }
@@ -633,7 +633,7 @@ a.btn--primary, a.btn--primary:hover { color: #fff; }
 .patient-table tbody tr:last-child td { border-block-end: 0; }
 
 
-/* P9 — access page: section toggles, grant cards, the access log. */
+/* P9 - access page: section toggles, grant cards, the access log. */
 .grant-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-4); }
 .grant-card {
   border: 1px solid var(--line);
@@ -663,7 +663,7 @@ a.btn--primary, a.btn--primary:hover { color: #fff; }
   .section-check { min-height: 44px; }
 }
 
-/* D7 — doctor schedule: week grid and per-clinic colours (tokens only). */
+/* D7 - doctor schedule: week grid and per-clinic colours (tokens only). */
 .clinic-c0 { --clinic: var(--brand); --clinic-soft: var(--brand-soft); }
 .clinic-c1 { --clinic: var(--ai); --clinic-soft: var(--ai-soft); }
 .clinic-c2 { --clinic: var(--warn); --clinic-soft: var(--warn-soft); }

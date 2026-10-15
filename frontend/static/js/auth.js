@@ -45,7 +45,7 @@
     if (doctorFields) {
       var hideWhen = doctorFields.dataset.hideWhen || "patient";
       var shouldHide = current.value === hideWhen;
-      // Only wipe values on an actual user switch, never on initial load —
+      // Only wipe values on an actual user switch, never on initial load -
       // that would discard values the server re-rendered after a failure.
       if (shouldHide && userInitiated) clearDoctorFields();
       doctorFields.hidden = shouldHide;

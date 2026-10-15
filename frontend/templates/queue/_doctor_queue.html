@@ -1,40 +1,58 @@
+{% import "partials/icons.html" as ic %}
 {#- A verified doctor's queue today, view only (FR24, P6 spec 3.3): who is in the
     room, the waiting patients in order, and those still expected. Names and times
-    only. Expects `queue_views` (list[SessionView]). Names are autoescaped. -#}
-<div class="panel stack" style="margin-top:var(--sp-5)">
-  <div class="panel__label">{{ t('queue.doctor.title') }}</div>
+    only. Expects `queue_views` (list[SessionView]). Names are autoescaped.
+    Shared by the doctor dashboard and the doctor's appointments page. -#}
+<section class="panel qboard" aria-labelledby="qboard-h">
+  <h2 id="qboard-h" class="panel__label">{{ t('queue.doctor.title') }}</h2>
   {% if queue_views %}
     {% for v in queue_views %}
-      <section class="stack">
-        <div class="eyebrow">
-          {{ v.clinic_name }} · <bdi dir="ltr">{{ v.start.strftime('%H:%M') }}-{{ v.end.strftime('%H:%M') }}</bdi>
+      <div class="qsession">
+        <div class="qsession__head">
+          <span class="qsession__where">{{ ic.i('building', 'icon--sm') }}{{ v.clinic_name }}</span>
+          <bdi class="mono" dir="ltr">{{ v.start.strftime('%H:%M') }}-{{ v.end.strftime('%H:%M') }}</bdi>
         </div>
-        <p class="field-help">
-          {{ t('queue.in_room') }}:
-          {% if v.in_room %}{{ v.in_room.patient_name }}{% else %}{{ t('queue.room_empty') }}{% endif %}
-        </p>
+
+        <div class="qroom{% if v.in_room %} qroom--busy{% endif %}">
+          <span class="orb">{{ ic.i('door') }}</span>
+          <div class="qroom__text">
+            <div class="qroom__label">{{ t('queue.in_room') }}</div>
+            <div class="qroom__who">{% if v.in_room %}{{ v.in_room.patient_name }}{% else %}{{ t('queue.room_free') }}{% endif %}</div>
+          </div>
+        </div>
+
+        <h3 class="qsub">{{ t('queue.waiting') }}</h3>
         {% if v.waiting %}
-          <ol>
+          <ol class="qlist">
             {% for line in v.waiting %}
-              <li>{{ line.patient_name }}
+              <li class="qlist__item">
+                <span class="qlist__pos" aria-hidden="true">{{ loop.index }}</span>
+                <span class="qlist__name">{{ line.patient_name }}</span>
                 {% if line.walk_in %}<span class="badge badge--neutral">{{ t('queue.badge.walk_in') }}</span>{% endif %}
               </li>
             {% endfor %}
           </ol>
         {% else %}
-          <p class="field-help">{{ t('queue.waiting_empty') }}</p>
+          <p class="qempty">{{ t('queue.waiting_empty') }}</p>
         {% endif %}
+
         {% if v.expected %}
-          <div class="eyebrow">{{ t('queue.expected') }}</div>
-          <ul>
+          <h3 class="qsub">{{ t('queue.expected') }}</h3>
+          <ul class="qlist qlist--plain">
             {% for line in v.expected %}
-              <li>{{ line.patient_name }} · <span class="mono" dir="ltr">{{ line.booked_at.strftime('%H:%M') }}</span></li>
+              <li class="qlist__item">
+                <span class="qlist__name">{{ line.patient_name }}</span>
+                <span class="mono" dir="ltr">{{ line.booked_at.strftime('%H:%M') }}</span>
+              </li>
             {% endfor %}
           </ul>
         {% endif %}
-      </section>
+      </div>
     {% endfor %}
   {% else %}
-    <p class="empty-state">{{ t('queue.doctor.empty') }}</p>
+    <div class="empty empty--compact">
+      <span class="orb">{{ ic.i('door') }}</span>
+      <p class="empty__text">{{ t('queue.doctor.empty') }}</p>
+    </div>
   {% endif %}
-</div>
+</section>

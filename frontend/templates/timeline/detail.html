@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{#- One timeline event with everything the record holds about it (P3 — "View details").
+{#- One timeline event with everything the record holds about it (P3 - "View details").
 
     Context (web/timeline.py::_render_event):
-      event       TimelineDetail — title, date, provenance, blocks (facts / table / text)
+      event       TimelineDetail - title, date, provenance, blocks (facts / table / text)
       back_href   the timeline as the reader left it (filters and page kept)
       owner       the patient's own view: only they get links to the stored document -#}
 
@@ -86,7 +86,7 @@
     {% endfor %}
 
     {#- The records this one is linked to by a real relationship (a document and the visit it
-        belongs to) — both stay on the timeline; this says how they relate. -#}
+        belongs to) - both stay on the timeline; this says how they relate. -#}
     {% if event.related %}
       <section class="panel stack" aria-labelledby="related-h" data-timeline-state="related">
         <h2 id="related-h" class="panel__label">{{ t('timeline.related.heading') }}</h2>

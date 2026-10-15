@@ -996,5 +996,12 @@
   "dashboard.passport.copy": "آئی ڈی کاپی کریں",
   "dashboard.passport.copied": "کاپی ہو گیا",
   "dashboard.quick.title": "فوری کام",
-  "dashboard.privacy_note": "آپ کا ریکارڈ صرف وہی معالج دیکھ سکتے ہیں جنہیں آپ منتخب کریں، اور ہر بار دیکھنا درج ہوتا ہے۔"
+  "dashboard.privacy_note": "آپ کا ریکارڈ صرف وہی معالج دیکھ سکتے ہیں جنہیں آپ منتخب کریں، اور ہر بار دیکھنا درج ہوتا ہے۔",
+  "dashboard.stat.shared": "ریکارڈ شیئر کرنے والے مریض",
+  "dashboard.nextup.title": "اگلا مریض",
+  "dashboard.nextup.in_room": "اس وقت کمرے میں",
+  "dashboard.nextup.none": "کوئی اگلا مریض نہیں۔ فی الحال آپ فارغ ہیں۔",
+  "dashboard.schedule.title": "آج کا شیڈول",
+  "queue.room_free": "کمرہ خالی ہے",
+  "doctor_dashboard.open": "ریکارڈ کھولیں"
 }

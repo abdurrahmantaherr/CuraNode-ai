@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{#- D-VERIFY — clinic-admin doctor verification. Every action works without
+{#- D-VERIFY - clinic-admin doctor verification. Every action works without
     JavaScript: each row's form posts and redirects (PRG), same pattern as
     patient/access.html's revoke.
 
     Context (web/router.py::_render_admin):
       tab        "pending" | "verified" | "rejected"
       doctors    list[Doctor] at this admin's clinic, for this tab
-      decisions  dict[doctor_id -> DoctorVerification] — latest, for verified/rejected
+      decisions  dict[doctor_id -> DoctorVerification] - latest, for verified/rejected
       reasons    REASONS tuple
       saved      success banner text, or None
       page_error page-level error banner text, or None -#}

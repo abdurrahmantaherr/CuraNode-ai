@@ -5,10 +5,10 @@
     changes it.
 
     Context (built in web/queue.py::_render_queue):
-      views        list[SessionView] — today's sessions at the admin's clinics
-      hits         list[PatientHit] — walk-in search results (passport masked)
-      find, find_session, find_error — the search text, the session it was for, its error
-      saved, page_error — banner texts or None -#}
+      views        list[SessionView] - today's sessions at the admin's clinics
+      hits         list[PatientHit] - walk-in search results (passport masked)
+      find, find_session, find_error - the search text, the session it was for, its error
+      saved, page_error - banner texts or None -#}
 
 {% block title %}{{ t('queue.title') }} · {{ t('app.name') }}{% endblock %}
 
@@ -22,7 +22,7 @@
 <div class="shell">
   {% include "partials/topbar.html" %}
 
-  <main id="main" class="content">
+  <main id="main" class="content qdesk">
     {% if page_error %}
       <div class="banner banner--error" role="alert">
         <span aria-hidden="true">!</span><span>{{ page_error }}</span>
@@ -60,7 +60,7 @@
               </div>
             </div>
           {% else %}
-            <p class="field-help">{{ t('queue.room_empty') }}</p>
+            <p class="qdesk__free">{{ t('queue.room_free') }}</p>
           {% endif %}
         </div>
 
