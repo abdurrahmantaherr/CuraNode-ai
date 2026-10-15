@@ -218,9 +218,11 @@ async def _prescription_rows(session: AsyncSession, patient: Patient) -> list[di
             .join(Clinic, Clinic.id == Encounter.clinic_id)
             .outerjoin(PrescriptionItem, PrescriptionItem.prescription_id == Prescription.id)
             .outerjoin(Medicine, Medicine.id == PrescriptionItem.medicine_id)
-            # A prescription written from a CONFIRMED DOCUMENT (`document_id` set, no visit) is a copy
-            # of what that document already shows: the document stays the event, never listed twice.
-            .where(Prescription.patient_id == patient.id, Prescription.document_id.is_(None))
+            # A prescription written from a CONFIRMED DOCUMENT has no visit and no doctor, so the inner
+            # joins above never return it: it is a copy of what the document already shows, and the
+            # document stays the one event. (Deliberately NOT a filter on `document_id`: this read must
+            # work on a database that does not have that column yet.)
+            .where(Prescription.patient_id == patient.id)
             .order_by(Prescription.issue_date.desc(), Prescription.id, PrescriptionItem.id)
         )
     ).all()

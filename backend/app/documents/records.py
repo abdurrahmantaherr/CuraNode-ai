@@ -42,8 +42,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time
 from decimal import ROUND_HALF_UP, Decimal
+from time import monotonic
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import (
@@ -62,6 +63,57 @@ from ..db.models import (
 from ..db.types import pk_date, uuid7
 from . import groups, lab_flags
 from .sections import DocumentSections
+
+# ── Is the database ready for this? ──────────────────────────────────────
+# Migration c8e5a41f9b27 adds the columns `write` / `remove_for_document` use. The shared database is
+# migrated by its owner, not by the app, so this code can be running before that has happened. Until it
+# has, nothing here touches the new columns and the app behaves exactly as it did before; the moment the
+# migration is applied the copying switches on by itself (no restart: a "not ready" answer is only
+# remembered for a few seconds, a "ready" one for the life of the process).
+_NEEDED = (
+    ("prescription", "document_id"),
+    ("diagnosis", "document_id"),
+    ("vital_sign", "document_id"),
+    ("prescription_item", "medicine_text"),
+)
+_NOT_READY_FOR_S = 15.0
+_probe_state: dict[str, float | bool] = {"ready": False, "asked_at": -1e9}
+
+
+def reset_readiness() -> None:
+    """Forget what was learned about the database (tests; a process that is told to re-check)."""
+    _probe_state.update(ready=False, asked_at=-1e9)
+
+
+async def is_ready(session: AsyncSession) -> bool:
+    """Whether the migration's columns exist. One query on PostgreSQL, and only until the answer is
+    yes."""
+    if _probe_state["ready"]:
+        return True
+    if monotonic() - float(_probe_state["asked_at"]) < _NOT_READY_FOR_S:
+        return False
+    dialect = session.get_bind().dialect.name
+    if dialect == "postgresql":
+        wanted = " OR ".join(
+            f"(table_name = '{table}' AND column_name = '{column}')" for table, column in _NEEDED
+        )
+        found = (
+            await session.execute(
+                text(
+                    "SELECT count(*) FROM information_schema.columns "
+                    f"WHERE table_schema = ANY (current_schemas(false)) AND ({wanted})"
+                )
+            )
+        ).scalar_one()
+        ready = found == len(_NEEDED)
+    else:  # SQLite (the tests)
+        ready = True
+        for table, column in _NEEDED:
+            rows = (await session.execute(text(f"PRAGMA table_info({table})"))).all()
+            ready = ready and any(row[1] == column for row in rows)
+    _probe_state.update(ready=ready, asked_at=monotonic())
+    return ready
+
 
 SOURCE = "ocr_upload"  # prescription.source for a prescription read from an uploaded document
 LAB_STATUS = "received"  # lab_report.status — the table's own default for a report received
@@ -258,6 +310,8 @@ class RecordsOutcome:
     lab_results: int = 0
     lab_skipped: int = 0  # lab results with no plain number: they stay in `ocr_extraction`
     failed: bool = False
+    # The database does not have migration c8e5a41f9b27 yet: nothing was attempted.
+    unavailable: bool = False
 
     @property
     def stored(self) -> bool:
@@ -330,6 +384,8 @@ async def write(
     Does nothing if the document already has records."""
     if doc.doc_type not in (DOC_TYPE_RX, DOC_TYPE_OTHER, DOC_TYPE_LAB):
         return RecordsOutcome()  # a vaccination record has no table of its own here
+    if not await is_ready(session):
+        return RecordsOutcome(unavailable=True)
     if await has_records(session, doc.id):
         return RecordsOutcome()
 
@@ -527,7 +583,10 @@ async def remove_for_document(session: AsyncSession, document_id: uuid.UUID) -> 
     removed child first (results, items), and the OCR cells that pointed at an item are released
     before it goes. Records that are not this document's — a doctor's, a visit's — are never
     selected: every statement is keyed on `document_id`. Only ever called for a document the patient
-    uploaded themself (the only kind they may delete), so a `lab_report` keyed on it is theirs."""
+    uploaded themself (the only kind they may delete), so a `lab_report` keyed on it is theirs.
+    On a database without the migration no such row can exist, so there is nothing to remove."""
+    if not await is_ready(session):
+        return
     prescription_ids = select(Prescription.id).where(Prescription.document_id == document_id)
     item_ids = select(PrescriptionItem.id).where(
         PrescriptionItem.prescription_id.in_(prescription_ids)

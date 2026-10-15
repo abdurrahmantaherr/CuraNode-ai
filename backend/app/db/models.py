@@ -528,8 +528,12 @@ class Diagnosis(Base):
         Uuid, ForeignKey("encounter.encounter_id"), nullable=True
     )
     # The confirmed document this row was read from; NULL for a doctor's own row.
+    # Added by migration c8e5a41f9b27. DEFERRED, so a plain read of this table does not ask for a
+    # column a database without the migration does not have yet (every page that lists visits,
+    # prescriptions or diagnoses reads these tables). `documents/records.py` writes it, and only
+    # once it has checked the column exists.
     document_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("document.document_id", ondelete="CASCADE"), nullable=True
+        Uuid, ForeignKey("document.document_id", ondelete="CASCADE"), nullable=True, deferred=True
     )
     icd10_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
     description: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -581,8 +585,12 @@ class Prescription(Base):
         Uuid, ForeignKey("doctor.doctor_id"), nullable=True
     )
     # The confirmed document this prescription was read from; NULL for a doctor's own.
+    # Added by migration c8e5a41f9b27. DEFERRED, so a plain read of this table does not ask for a
+    # column a database without the migration does not have yet (every page that lists visits,
+    # prescriptions or diagnoses reads these tables). `documents/records.py` writes it, and only
+    # once it has checked the column exists.
     document_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("document.document_id", ondelete="CASCADE"), nullable=True
+        Uuid, ForeignKey("document.document_id", ondelete="CASCADE"), nullable=True, deferred=True
     )
     issue_date: Mapped[date] = mapped_column(nullable=False)
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="digital")
@@ -622,7 +630,11 @@ class PrescriptionItem(Base):
         Uuid, ForeignKey("medicine.medicine_id"), nullable=True
     )
     # The medicine as written on the paper, when it has no catalogue entry.
-    medicine_text: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Added by migration c8e5a41f9b27. DEFERRED, so a plain read of this table does not ask for a
+    # column a database without the migration does not have yet (every page that lists visits,
+    # prescriptions or diagnoses reads these tables). `documents/records.py` writes it, and only
+    # once it has checked the column exists.
+    medicine_text: Mapped[str | None] = mapped_column(String(255), nullable=True, deferred=True)
     dosage: Mapped[str | None] = mapped_column(String(50), nullable=True)
     frequency: Mapped[str | None] = mapped_column(String(50), nullable=True)
     duration_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -1044,8 +1056,12 @@ class VitalSign(Base):
         Uuid, ForeignKey("encounter.encounter_id"), nullable=True
     )
     # The confirmed document this row was read from; NULL for a doctor's own.
+    # Added by migration c8e5a41f9b27. DEFERRED, so a plain read of this table does not ask for a
+    # column a database without the migration does not have yet (every page that lists visits,
+    # prescriptions or diagnoses reads these tables). `documents/records.py` writes it, and only
+    # once it has checked the column exists.
     document_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("document.document_id", ondelete="CASCADE"), nullable=True
+        Uuid, ForeignKey("document.document_id", ondelete="CASCADE"), nullable=True, deferred=True
     )
     height_cm: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     weight_kg: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)

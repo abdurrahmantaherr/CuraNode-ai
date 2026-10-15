@@ -29,6 +29,7 @@ from app.db.models import (
 from app.documents import lab_flags, ocr, records
 from app.documents import service as doc_service
 from sqlalchemy import delete, func, select
+from sqlalchemy.orm import undefer
 
 from tests.conftest import make_user
 from tests.test_documents import (
@@ -240,14 +241,15 @@ async def test_a_confirmed_prescription_becomes_a_prescription_with_its_items(
     detail = await upload_and_process(client, fake_ocr)
     await confirm(client, detail, RX_ROWS, groups=RX_GROUPS)
 
-    [rx] = (await db.execute(select(Prescription))).scalars().all()
+    [rx] = (await db.execute(select(Prescription).options(undefer("*")))).scalars().all()
     assert rx.source == "ocr_upload" and rx.status == "active"
     assert rx.encounter_id is None and rx.doctor_id is None  # no visit, no doctor: none invented
     assert str(rx.document_id) == detail["id"]
     assert rx.issue_date.isoformat() == "2024-08-11"  # the date the document states
 
     items = {
-        i.medicine_text: i for i in (await db.execute(select(PrescriptionItem))).scalars().all()
+        i.medicine_text: i
+        for i in (await db.execute(select(PrescriptionItem).options(undefer("*")))).scalars().all()
     }
     assert set(items) == {"Metformin", "Atorvastatin"}
     metformin = items["Metformin"]
@@ -269,7 +271,8 @@ async def test_the_cells_of_a_medicine_are_linked_to_the_item_written_from_them(
     await confirm(client, detail, RX_ROWS, groups=RX_GROUPS)
 
     item_of = {
-        i.id: i.medicine_text for i in (await db.execute(select(PrescriptionItem))).scalars()
+        i.id: i.medicine_text
+        for i in (await db.execute(select(PrescriptionItem).options(undefer("*")))).scalars()
     }
     cells = await extraction_rows(db, detail["id"])
     medicine_cells = [
@@ -291,7 +294,7 @@ async def test_the_cells_of_a_medicine_are_linked_to_the_item_written_from_them(
 async def test_a_confirmed_diagnosis_is_written_without_a_visit(client, db, fake_ocr, patient_user):
     detail = await upload_and_process(client, fake_ocr)
     await confirm(client, detail, RX_ROWS, groups=RX_GROUPS)
-    [dx] = (await db.execute(select(Diagnosis))).scalars().all()
+    [dx] = (await db.execute(select(Diagnosis).options(undefer("*")))).scalars().all()
     assert dx.description == "Type 2 diabetes mellitus"
     assert dx.encounter_id is None and str(dx.document_id) == detail["id"]
     assert dx.icd10_code is None and dx.is_chronic is False  # no code or chronicity is invented
@@ -302,7 +305,7 @@ async def test_vital_signs_keep_the_six_measurements_the_table_has_columns_for(
 ):
     detail = await upload_and_process(client, fake_ocr)
     await confirm(client, detail, RX_ROWS, groups=RX_GROUPS)
-    [vital] = (await db.execute(select(VitalSign))).scalars().all()
+    [vital] = (await db.execute(select(VitalSign).options(undefer("*")))).scalars().all()
     assert vital.encounter_id is None and str(vital.document_id) == detail["id"]
     assert (vital.bp_systolic, vital.bp_diastolic, vital.pulse_bpm, vital.spo2) == (120, 80, 72, 98)
     assert vital.temperature_c == Decimal("37.0")  # 98.6 F, converted because the column is Celsius
@@ -365,7 +368,10 @@ async def test_a_medicine_links_to_the_catalogue_only_when_exactly_one_entry_mat
     detail = await upload_and_process(client, fake_ocr)
     await confirm(client, detail, RX_ROWS, groups=RX_GROUPS)
 
-    items = {i.medicine_text: i for i in (await db.execute(select(PrescriptionItem))).scalars()}
+    items = {
+        i.medicine_text: i
+        for i in (await db.execute(select(PrescriptionItem).options(undefer("*")))).scalars()
+    }
     assert items["Metformin"].medicine_id == one.id
     assert items["Atorvastatin"].medicine_id is None  # two strengths: never a guess between them
     assert items["Atorvastatin"].medicine_text == "Atorvastatin"
@@ -379,7 +385,7 @@ async def test_a_dosage_too_long_for_its_column_is_kept_whole_in_the_instruction
     detail = await upload_and_process(client, fake_ocr)
     rows = [{"index": 0, "fields": {"medicine": "Metformin", "dosage": long_dose}}]
     await confirm(client, detail, rows)
-    [item] = (await db.execute(select(PrescriptionItem))).scalars().all()
+    [item] = (await db.execute(select(PrescriptionItem).options(undefer("*")))).scalars().all()
     assert item.dosage is None and long_dose in (item.instructions or "")
 
 
