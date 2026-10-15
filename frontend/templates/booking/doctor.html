@@ -35,9 +35,9 @@
       <p style="margin:0"><span class="badge badge--ok">{{ t('booking.find.verified') }}</span></p>
       <div>
         <div class="eyebrow">{{ t('booking.field.hospital') }}</div>
-        <p style="display:flex;flex-wrap:wrap;gap:var(--sp-2);margin:var(--sp-2) 0 0">
+        <p class="chips">
           {% for c in doctor.clinics %}
-            <a class="btn btn--sm {% if c.id == clinic.id %}btn--primary{% else %}btn--secondary{% endif %}"
+            <a class="fchip"
                href="{{ clinic_href(c) }}"
                {% if c.id == clinic.id %}aria-current="true"{% endif %}>{{ c.name }}{% if c.city %} - {{ c.city }}{% endif %}</a>
           {% endfor %}
@@ -55,15 +55,15 @@
     {% for d in days %}
       <section class="panel stack" aria-labelledby="day-{{ d.day.isoformat() }}">
         <h3 id="day-{{ d.day.isoformat() }}" class="panel__label">{{ weekday(d.day) }} <bdi>{{ d.day.isoformat() }}</bdi></h3>
-        <p style="display:flex;flex-wrap:wrap;gap:var(--sp-2);margin:0">
+        <p class="chips">
           {% for start in d.times %}
-            <a class="btn btn--secondary btn--sm mono" dir="ltr" href="{{ time_href(start) }}">{{ hhmm(start) }}</a>
+            <a class="fchip fchip--time" dir="ltr" href="{{ time_href(start) }}">{{ hhmm(start) }}</a>
           {% endfor %}
         </p>
       </section>
     {% endfor %}
 
-    <p><a class="btn btn--secondary" href="/{{ locale }}/patient/doctors">{{ t('booking.doctor.back') }}</a></p>
+    <p><a class="btn btn--ghost" href="/{{ locale }}/patient/doctors">{{ t('booking.doctor.back') }}</a></p>
   </main>
 </div>
 {% endblock %}

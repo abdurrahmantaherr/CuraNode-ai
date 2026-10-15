@@ -3,6 +3,8 @@
 {% block title %}{{ t('auth.onboarding.title') }} · {{ t('app.name') }}{% endblock %}
 
 {% block body %}
+{#- Language switch in the corner (Urdu and English are equals). -#}
+<a class="auth-lang btn btn--ghost btn--sm" href="/{{ other_locale }}{{ path_suffix }}" hreflang="{{ other_locale }}">{{ t('nav.language') }}</a>
 <main class="auth-page">
   <div class="auth-shell auth-shell--wide">
     <div class="auth-head auth-head--start">

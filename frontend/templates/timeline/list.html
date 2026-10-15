@@ -106,7 +106,7 @@
                  {% if errors.q %}aria-invalid="true" aria-describedby="e-q"{% endif %}>
           {% if errors.q %}<span class="field-error" id="e-q" role="alert">{{ errors.q }}</span>{% endif %}
         </label>
-        <button class="btn btn--primary" type="submit"
+        <button class="btn btn--secondary" type="submit"
                 data-label="{{ t('timeline.filter.applying') }}">{{ t('timeline.search.submit') }}</button>
       </div>
       <details class="tl-filters" {% if more_filters %}open{% endif %}>

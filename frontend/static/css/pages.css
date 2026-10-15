@@ -279,3 +279,184 @@ fieldset.field > legend, .field-label--legend { padding-inline: var(--s-2); font
 .week__empty { color: var(--text-2); font-size: var(--fs-14); }
 .week__name { font-size: var(--fs-14); }
 .slot-block { border-radius: var(--r-2); background: var(--clinic-soft); }
+
+/* ══ Phase 4: the remaining pages ═════════════════════════════════════ */
+
+/* ── Tabs and filter chips (documents, timeline, find a doctor) ────── */
+.tabs, .tl-tabs {
+  display: flex;
+  gap: var(--s-1);
+  padding: var(--s-1);
+  margin: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+}
+.tabs::-webkit-scrollbar, .tl-tabs::-webkit-scrollbar { display: none; }
+.tab, .tl-tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-block-size: 40px;
+  padding: 0 var(--s-4);
+  margin: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  color: var(--text-2);
+  font-size: var(--fs-14);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background .16s var(--ease), color .16s var(--ease);
+}
+.tab:hover, .tl-tab:hover { background: var(--tint); color: var(--text-1); }
+.tab[aria-current="page"], .tl-tab[aria-current="page"] { background: var(--primary-bg); color: var(--primary-ink); }
+.tl-count { background: var(--tint-2); color: var(--text-1); border-radius: var(--r-pill); }
+.tl-tab[aria-current="page"] .tl-count { background: var(--primary-ink); color: var(--primary-bg); }
+
+.chips { display: flex; flex-wrap: wrap; gap: var(--s-2); margin: var(--s-2) 0 0; }
+.fchip {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: 40px;
+  padding: 0 var(--s-4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--text-1);
+  font-size: var(--fs-14);
+  font-weight: 600;
+  transition: background .16s var(--ease), border-color .16s var(--ease);
+}
+.fchip:hover { background: var(--tint); color: var(--text-1); }
+.fchip[aria-current] { background: var(--primary-bg); color: var(--primary-ink); border-color: var(--primary-bg); }
+.fchip--time { font-family: var(--font-mono); font-weight: 500; letter-spacing: .02em; }
+
+/* ── Doctor cards ─────────────────────────────────────────────────── */
+.dlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.dcard { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--s-4); padding-block: var(--s-4); border-block-end: 1px solid var(--line); }
+.dcard:last-child { border-block-end: 0; }
+.dcard__name { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); font-size: var(--fs-18); font-weight: 600; }
+.dcard__spec { color: var(--text-1); font-size: var(--fs-14); font-weight: 500; }
+.dcard__where { color: var(--text-2); font-size: var(--fs-14); }
+@media (max-width: 720px) {
+  .dcard { grid-template-columns: auto minmax(0, 1fr); }
+  .dcard .btn { grid-column: 1 / -1; }
+}
+
+/* ── Rows and cards that sit inside a panel ───────────────────────── */
+.entry-row__main { flex: 1 1 auto; min-inline-size: min(14rem, 100%); }
+.stack > .entry-row__main { flex: none; }
+.grant-card { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-3) var(--s-4); }
+.grant-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+/* A panel that holds only an intro sentence reads as plain text, not a card. */
+.panel:has(> .lead:only-child) { background: transparent; border: 0; box-shadow: none; padding: 0; }
+
+/* ── File input and dropzone ──────────────────────────────────────── */
+input[type="file"] { font: 500 var(--fs-14)/1.4 var(--font-sans); color: var(--text-2); max-inline-size: 100%; }
+input[type="file"]::file-selector-button {
+  min-block-size: 40px;
+  margin-inline-end: var(--s-3);
+  padding: 0 var(--s-5);
+  border: 1px solid var(--tint-2);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--text-1);
+  font: 600 var(--fs-14)/1 var(--font-sans);
+  cursor: pointer;
+}
+input[type="file"]::file-selector-button:hover { background: var(--tint); }
+.dropzone { border: 2px dashed var(--accent); border-radius: var(--r-4); background: var(--surface-2); padding: var(--s-7) var(--s-5); }
+.dropzone:hover, .dropzone.is-dragover, .dropzone:focus-within { background: var(--tint); border-color: var(--link); }
+.dropzone__title { font-size: var(--fs-18); color: var(--text-1); }
+.dropzone .input { background: transparent; border: 0; min-block-size: 0; padding: 0; box-shadow: none; }
+
+/* ── Document states: icon plus words ─────────────────────────────── */
+.ai-state { border-radius: var(--r-pill); padding: 4px 12px 4px 10px; font-size: var(--fs-14); gap: 6px; }
+.ai-state::before {
+  content: "";
+  inline-size: 14px;
+  block-size: 14px;
+  flex: none;
+  background: currentColor;
+  -webkit-mask: var(--ic-check-circle) center / contain no-repeat;
+  mask: var(--ic-check-circle) center / contain no-repeat;
+}
+.ai-state--processing { background: var(--ai-soft); color: var(--ai-ink); }
+.ai-state--processing::before { -webkit-mask-image: var(--ic-sparkles); mask-image: var(--ic-sparkles); }
+.ai-state--processing:has(.spinner)::before { display: none; }
+.ai-state--verify::before { -webkit-mask-image: var(--ic-alert-circle); mask-image: var(--ic-alert-circle); }
+.ai-state--error::before { -webkit-mask-image: var(--ic-x-circle); mask-image: var(--ic-x-circle); }
+.ai-state--neutral::before { -webkit-mask-image: var(--ic-info); mask-image: var(--ic-info); }
+.spinner--dark { border-block-start-color: var(--ai); }
+a.btn--primary, a.btn--primary:hover { color: var(--primary-ink); }
+.steps .step { border-radius: var(--r-pill); }
+
+/* ── Timeline: a quiet rail, cards that use the width ─────────────── */
+.tl-card { max-inline-size: none; padding: var(--s-4) 0 var(--s-5); border-block-end: 1px solid var(--line); }
+.tl-item:last-child .tl-card { border-block-end: 0; }
+.tl-card__title { font-size: var(--fs-16); color: var(--text-1); }
+.tl-card__summary { font-size: var(--fs-16); }
+.tl-card__who { font-size: var(--fs-14); }
+.tl-card__more { font-size: var(--fs-14); color: var(--link); }
+.tl-prov { font-size: var(--fs-14); letter-spacing: 0; }
+.tl-item__when { font-size: var(--fs-14); color: var(--text-2); }
+.tl-item__rail::after { background: var(--accent); border-color: var(--surface); box-shadow: 0 0 0 2px var(--tint-2); }
+.tl-item--ai .tl-item__rail::after { background: var(--ai); box-shadow: 0 0 0 2px var(--ai-soft); }
+.tl-item--user .tl-item__rail::after { background: var(--text-3); box-shadow: 0 0 0 2px var(--line); }
+.tl-item__rail::before { background: var(--tint-2); }
+
+/* ── Passport: the most valuable object, large and printable ──────── */
+.passport-card {
+  padding: var(--s-7);
+  border-radius: var(--r-5);
+  background: linear-gradient(135deg, var(--surface) 0%, var(--tint) 100%);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-2);
+}
+.passport-card__head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); }
+.passport-card__head .panel__label { margin: 0; }
+.passport { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-7); background: transparent; border: 0; padding: 0; }
+.qr { margin: 0; padding: var(--s-4); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-4); inline-size: 232px; block-size: 232px; display: grid; place-items: center; }
+.qr svg { inline-size: 100%; block-size: 100%; }
+.passport__main { flex: 1 1 18rem; min-inline-size: 0; }
+.passport__number { font: 500 var(--fs-36)/1.1 var(--font-mono); letter-spacing: .06em; color: var(--text-1); overflow-wrap: anywhere; }
+@media (scripting: none) { .print-btn { display: none; } }
+@media (max-width: 720px) {
+  .passport-card { padding: var(--s-5); border-radius: var(--r-4); }
+  .qr { inline-size: 100%; block-size: auto; aspect-ratio: 1; max-inline-size: 280px; margin-inline: auto; }
+  .passport__number { font-size: var(--fs-28); }
+}
+@media print {
+  .print-btn { display: none !important; }
+  .passport-card { box-shadow: none; border: 1px solid var(--text-1); background: var(--surface); }
+}
+
+/* ── Sign-in and sign-up: a centred glass card, language in the corner ─ */
+.auth-page { position: relative; }
+.auth-head .brandmark { margin-inline: auto; margin-block-end: var(--s-4); inline-size: 56px; block-size: 56px; font-size: var(--fs-22); }
+h1.auth-title { font: 500 var(--fs-28)/1.15 var(--font-serif); letter-spacing: -.02em; }
+html[lang="ur"] h1.auth-title { line-height: 1.7; }
+.auth-shell > .card, .auth-shell .card {
+  background: var(--glass);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-5);
+  box-shadow: var(--shadow-3);
+  padding: var(--s-7);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+}
+@media (prefers-reduced-transparency: reduce) { .auth-shell .card { background: var(--glass-solid); -webkit-backdrop-filter: none; backdrop-filter: none; } }
+.auth-lang { position: fixed; inset-block-start: var(--s-4); inset-inline-end: var(--s-4); z-index: 10; }
+.role-group { grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); }
+.role-tile { border-radius: var(--r-pill); background: var(--surface); }
+.role-tile:has(.role-tile__radio:checked) { background: var(--primary-bg); border-color: var(--primary-bg); color: var(--primary-ink); }
+.role-tile:has(.role-tile__radio:checked) .role-tile__name { color: var(--primary-ink); }
+.mono-note { color: var(--text-2); font-size: var(--fs-12); }
+.oauth-divider { color: var(--text-2); }
+@media (max-width: 520px) { .auth-shell .card { padding: var(--s-5); border-radius: var(--r-4); } }

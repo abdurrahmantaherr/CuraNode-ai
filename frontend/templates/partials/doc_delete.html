@@ -13,7 +13,7 @@
       dd.trigger(item)   the "Delete" control for a document (`item.can_delete` must be true)
       dd.dialog()        the one dialog; include once per page that has triggers -#}
 
-{% macro trigger(item, class='btn btn--secondary btn--sm') %}
+{% macro trigger(item, class='btn btn--ghost btn--sm') %}
   {% set url = '/' ~ locale ~ '/patient/documents/' ~ item.id ~ '/delete' %}
   <a class="{{ class }}" href="{{ url }}"
      data-delete-url="{{ url }}"

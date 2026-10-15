@@ -1003,5 +1003,6 @@
   "dashboard.nextup.none": "کوئی اگلا مریض نہیں۔ فی الحال آپ فارغ ہیں۔",
   "dashboard.schedule.title": "آج کا شیڈول",
   "queue.room_free": "کمرہ خالی ہے",
-  "doctor_dashboard.open": "ریکارڈ کھولیں"
+  "doctor_dashboard.open": "ریکارڈ کھولیں",
+  "passport.print": "پرنٹ کریں"
 }

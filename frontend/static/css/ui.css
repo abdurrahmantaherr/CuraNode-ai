@@ -150,7 +150,7 @@ html[data-sidebar="rail"] .shell { grid-template-columns: var(--rail-w) minmax(0
   color: var(--text-3);
 }
 
-.topnav__link {
+.sidebar .topnav__link {
   display: flex;
   align-items: center;
   gap: var(--s-3);
@@ -162,14 +162,14 @@ html[data-sidebar="rail"] .shell { grid-template-columns: var(--rail-w) minmax(0
   font-weight: 500;
   transition: background .16s var(--ease), color .16s var(--ease);
 }
-.topnav__link:hover { background: var(--tint); color: var(--text-1); }
-.topnav__link[aria-current="page"] {
+.sidebar .topnav__link:hover { background: var(--tint); color: var(--text-1); }
+.sidebar .topnav__link[aria-current="page"] {
   background: var(--primary-bg);
   color: var(--primary-ink);
   font-weight: 600;
   box-shadow: var(--shadow-1);
 }
-.topnav__link::before {
+.sidebar .topnav__link::before {
   content: "";
   inline-size: 20px;
   block-size: 20px;
@@ -179,17 +179,17 @@ html[data-sidebar="rail"] .shell { grid-template-columns: var(--rail-w) minmax(0
   mask: var(--ic, var(--ic-shield-check)) center / contain no-repeat;
 }
 /* The icon comes from where the link goes. */
-.topnav__link[href$="/patient"], .topnav__link[href$="/doctor"] { --ic: var(--ic-home); }
-.topnav__link[href$="/patient/profile"] { --ic: var(--ic-user); }
-.topnav__link[href$="/patient/passport"] { --ic: var(--ic-id-card); }
-.topnav__link[href$="/patient/access"] { --ic: var(--ic-shield-check); }
-.topnav__link[href$="/patient/documents"] { --ic: var(--ic-file-text); }
-.topnav__link[href$="/patient/timeline"] { --ic: var(--ic-history); }
-.topnav__link[href$="/patient/doctors"] { --ic: var(--ic-stethoscope); }
-.topnav__link[href$="/patient/appointments"], .topnav__link[href$="/doctor/appointments"] { --ic: var(--ic-calendar); }
-.topnav__link[href$="/doctor/passport-lookup"] { --ic: var(--ic-user-search); }
-.topnav__link[href$="/doctor/schedule"] { --ic: var(--ic-clock); }
-.topnav__link[href$="/admin/queue"] { --ic: var(--ic-list); }
+.sidebar .topnav__link[href$="/patient"], .sidebar .topnav__link[href$="/doctor"] { --ic: var(--ic-home); }
+.sidebar .topnav__link[href$="/patient/profile"] { --ic: var(--ic-user); }
+.sidebar .topnav__link[href$="/patient/passport"] { --ic: var(--ic-id-card); }
+.sidebar .topnav__link[href$="/patient/access"] { --ic: var(--ic-shield-check); }
+.sidebar .topnav__link[href$="/patient/documents"] { --ic: var(--ic-file-text); }
+.sidebar .topnav__link[href$="/patient/timeline"] { --ic: var(--ic-history); }
+.sidebar .topnav__link[href$="/patient/doctors"] { --ic: var(--ic-stethoscope); }
+.sidebar .topnav__link[href$="/patient/appointments"], .sidebar .topnav__link[href$="/doctor/appointments"] { --ic: var(--ic-calendar); }
+.sidebar .topnav__link[href$="/doctor/passport-lookup"] { --ic: var(--ic-user-search); }
+.sidebar .topnav__link[href$="/doctor/schedule"] { --ic: var(--ic-clock); }
+.sidebar .topnav__link[href$="/admin/queue"] { --ic: var(--ic-list); }
 
 .sidebar__foot { display: flex; flex-direction: column; gap: var(--s-3); padding-block-start: var(--s-3); border-block-start: 1px solid var(--line); }
 .sidebar__user { display: flex; align-items: center; gap: var(--s-3); padding: 0 var(--s-2); min-inline-size: 0; }
@@ -232,7 +232,7 @@ html[data-sidebar="rail"] .toolbtn__label {
   clip-path: inset(50%);
   white-space: nowrap;
 }
-html[data-sidebar="rail"] .topnav__link { font-size: 0; gap: 0; justify-content: center; padding: 0; }
+html[data-sidebar="rail"] .sidebar .topnav__link { font-size: 0; gap: 0; justify-content: center; padding: 0; }
 html[data-sidebar="rail"] .toolbtn { justify-content: center; padding: 0; }
 html[data-sidebar="rail"] .sidebar__brand,
 html[data-sidebar="rail"] .sidebar__user { justify-content: center; padding: 0; }
@@ -357,7 +357,7 @@ html[lang="ur"] .pagebar__title { line-height: 1.7; }
   .sidebar__id, .navgroup__title, .sidebar__user-name, .toolbtn__label {
     position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
   }
-  .topnav__link { font-size: 0; gap: 0; justify-content: center; padding: 0; }
+  .sidebar .topnav__link { font-size: 0; gap: 0; justify-content: center; padding: 0; }
   .toolbtn { justify-content: center; padding: 0; }
   .sidebar__brand, .sidebar__user { justify-content: center; padding: 0; }
   [data-sidebar-toggle] { display: none !important; }
@@ -637,7 +637,7 @@ textarea.input { padding-block: var(--s-3); min-block-size: 96px; }
 
 /* ── Touch targets (older patients, one-handed use) ───────────────── */
 @media (pointer: coarse) {
-  .btn--sm, .toolbtn, .topnav__link, .tl-tab, .doctype-pill { min-block-size: 44px; }
+  .btn--sm, .toolbtn, .sidebar .topnav__link, .tl-tab, .doctype-pill { min-block-size: 44px; }
 }
 
 /* ── Motion: short, on press and hover; one gentle entrance ───────── */
@@ -670,7 +670,7 @@ textarea.input { padding-block: var(--s-3); min-block-size: 96px; }
 html[lang="ur"] .btn,
 html[lang="ur"] .badge,
 html[lang="ur"] .chip,
-html[lang="ur"] .topnav__link,
+html[lang="ur"] .sidebar .topnav__link,
 html[lang="ur"] .toolbtn,
 html[lang="ur"] .sheet__link,
 html[lang="ur"] .pillnav__link { line-height: 1.8; }

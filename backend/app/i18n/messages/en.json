@@ -1003,5 +1003,6 @@
   "dashboard.nextup.none": "No one is next. You are clear for now.",
   "dashboard.schedule.title": "Today's schedule",
   "queue.room_free": "Room is free",
-  "doctor_dashboard.open": "Open record"
+  "doctor_dashboard.open": "Open record",
+  "passport.print": "Print"
 }

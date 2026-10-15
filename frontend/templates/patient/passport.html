@@ -11,6 +11,7 @@
 {% block head_scripts %}{% endblock %}
 {% block shell_scripts %}{% endblock %}
 
+{% import "partials/icons.html" as ic %}
 {% block title %}{{ t('passport.title') }} · {{ t('app.name') }}{% endblock %}
 
 {% block body %}
@@ -18,8 +19,13 @@
   {% include "partials/topbar.html" %}
 
   <main id="main" class="content">
-    <section class="panel stack" aria-labelledby="passport-h">
-      <h2 id="passport-h" class="panel__label">{{ t('passport.number_label') }}</h2>
+    <section class="passport-card stack" aria-labelledby="passport-h">
+      <div class="passport-card__head">
+        <h2 id="passport-h" class="panel__label">{{ t('passport.number_label') }}</h2>
+        {#- window.print() needs script, and this page ships none, so the button is an inline
+            handler that is hidden (see pages.css) when scripting is off. -#}
+        <button class="btn btn--secondary btn--sm print-btn" type="button" onclick="window.print()">{{ ic.i('printer', 'icon--sm') }}{{ t('passport.print') }}</button>
+      </div>
       <div class="passport">
         <figure class="qr" role="img" aria-label="{{ t('passport.qr_title') }}">
           {{ qr_svg }}

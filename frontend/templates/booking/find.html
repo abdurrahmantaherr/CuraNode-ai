@@ -9,6 +9,7 @@
       page_error, notice   banner texts or None
       specialty_href(value), doctor_href(card) -#}
 
+{% import "partials/icons.html" as ic %}
 {% block title %}{{ t('booking.find.title') }} · {{ t('app.name') }}{% endblock %}
 
 {% block body %}
@@ -28,28 +29,25 @@
     <div class="panel stack">
       <p class="lead">{{ t('booking.find.subtitle') }}</p>
       <form class="stack" method="get" action="/{{ locale }}/patient/doctors" role="search">
-        <label class="field" for="f-q">
-          <span class="field-label">{{ t('booking.find.search_label') }}</span>
-          <input class="input" id="f-q" name="q" type="search" value="{{ q }}" maxlength="80">
-        </label>
-        {% if specialty %}<input type="hidden" name="specialty" value="{{ specialty }}">{% endif %}
-        <div class="btn-row">
+        <label class="field-label" for="f-q">{{ t('booking.find.search_label') }}</label>
+        <div class="search">
+          {{ ic.i('search') }}
+          <input class="search__input" id="f-q" name="q" type="search" value="{{ q }}" maxlength="80">
           <button class="btn btn--primary" type="submit">{{ t('booking.find.search_action') }}</button>
-          {% if filters_active %}
-            <a class="btn btn--secondary" href="/{{ locale }}/patient/doctors">{{ t('booking.find.clear') }}</a>
-          {% endif %}
         </div>
+        {% if specialty %}<input type="hidden" name="specialty" value="{{ specialty }}">{% endif %}
+        {% if filters_active %}
+          <div><a class="btn btn--ghost btn--sm" href="/{{ locale }}/patient/doctors">{{ t('booking.find.clear') }}</a></div>
+        {% endif %}
       </form>
 
       {% if specialties %}
         <div>
           <div class="eyebrow">{{ t('booking.find.specialties') }}</div>
-          <p style="display:flex;flex-wrap:wrap;gap:var(--sp-2);margin:var(--sp-2) 0 0">
-            <a class="btn btn--sm {% if not specialty %}btn--primary{% else %}btn--secondary{% endif %}"
-               href="{{ specialty_href('') }}">{{ t('booking.find.all') }}</a>
+          <p class="chips">
+            <a class="fchip" href="{{ specialty_href('') }}"{% if not specialty %} aria-current="true"{% endif %}>{{ t('booking.find.all') }}</a>
             {% for s in specialties %}
-              <a class="btn btn--sm {% if s == specialty %}btn--primary{% else %}btn--secondary{% endif %}"
-                 href="{{ specialty_href(s) }}">{{ s }}</a>
+              <a class="fchip" href="{{ specialty_href(s) }}"{% if s == specialty %} aria-current="true"{% endif %}>{{ s }}</a>
             {% endfor %}
           </p>
         </div>
@@ -59,20 +57,18 @@
     <section class="panel stack" aria-labelledby="results-h">
       <h2 id="results-h" class="panel__label">{{ t('booking.find.results', count=cards|length) }}</h2>
       {% if cards %}
-        <ul class="grant-list">
+        <ul class="dlist">
           {% for c in cards %}
-            <li class="grant-card stack">
-              <div class="entry-row__main">
-                <div class="entry-row__title">{{ c.name }}</div>
-                {% if c.specialty %}<div class="field-help">{{ c.specialty }}</div>{% endif %}
-                <div class="mono">
+            <li class="dcard">
+              <span class="avatar avatar--lg" aria-hidden="true">{{ c.name.replace('Dr. ', '')[:1] }}</span>
+              <div class="dcard__main">
+                <div class="dcard__name">{{ c.name }} <span class="badge badge--ok">{{ t('booking.find.verified') }}</span></div>
+                {% if c.specialty %}<div class="dcard__spec">{{ c.specialty }}</div>{% endif %}
+                <div class="dcard__where">
                   {% for cl in c.clinics %}{{ cl.name }}{% if cl.city %} - {{ cl.city }}{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}
                 </div>
               </div>
-              <span class="badge badge--ok">{{ t('booking.find.verified') }}</span>
-              <div class="entry-row__actions">
-                <a class="btn btn--primary btn--sm" href="{{ doctor_href(c) }}">{{ t('booking.find.view') }}</a>
-              </div>
+              <a class="btn btn--secondary" href="{{ doctor_href(c) }}">{{ t('booking.find.view') }}</a>
             </li>
           {% endfor %}
         </ul>

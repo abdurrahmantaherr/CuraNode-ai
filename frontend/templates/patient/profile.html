@@ -79,7 +79,7 @@
               <form class="entry-form stack" method="post" action="{{ base }}/{{ e.id }}" novalidate>
                 <div class="grid-2">{{ entry_fields(kind, vals, errs, kind ~ '-' ~ e.id ~ '-') }}</div>
                 <div class="entry-row__actions">
-                  <button class="btn btn--primary btn--sm" type="submit"
+                  <button class="btn btn--secondary btn--sm" type="submit"
                           data-label="{{ t('profile.action.save_entry') }}">{{ t('profile.action.save_entry') }}</button>
                   <a class="btn btn--secondary btn--sm"
                      href="/{{ locale }}/patient/profile#{{ section }}">{{ t('profile.action.cancel') }}</a>
@@ -130,7 +130,7 @@
                         form_state['errors'] if add_failed else {}, kind ~ '-new-') }}
       </div>
       <div>
-        <button class="btn btn--primary btn--sm" type="submit"
+        <button class="btn btn--secondary btn--sm" type="submit"
                 data-label="{{ add_label }}">{{ add_label }}</button>
       </div>
     </form>
