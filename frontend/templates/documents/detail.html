@@ -23,6 +23,7 @@
       errors      {document_date: message}
       banner      page-level error text, or None
       just_saved  True right after Confirm & Save
+      records_failed  True when the copy into the health records failed (offers a retry)
       processing  True while uploaded / processing -#}
 {% import "partials/form_field.html" as f %}
 {% import "partials/doc_steps.html" as d with context %}
@@ -231,6 +232,11 @@
             <div class="banner__title">{{ t('documents.saved.title') }}</div>
             <div class="banner__body">{{ t('documents.saved.body') }}
               {% for note in saved_notes %}<br>{{ note }}{% endfor %}</div>
+            {% if records_failed %}
+              <form method="post" action="{{ base }}/records" class="btn-row">
+                <button class="btn btn--secondary btn--sm" type="submit">{{ t('documents.saved.records_retry') }}</button>
+              </form>
+            {% endif %}
           </div>
         </div>
       {% endif %}

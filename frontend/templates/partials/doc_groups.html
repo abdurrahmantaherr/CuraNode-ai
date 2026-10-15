@@ -20,8 +20,9 @@
          {% if not r.blank and not fld.value and not list_item %}placeholder="{{ t('documents.review.not_available') }}"{% endif %}>
   {% set badge = confidence_badge(fld.confidence) %}
   {% if badge %}<span class="badge {{ badge.class }}">{{ badge.label }}</span>{% endif %}
-  {#- A lab result's flag: read-only and never stored — worked out from the row (see
-      documents/lab_flags.py), so it is not an input. -#}
+  {#- A lab result's flag: read-only, worked out from the row (see documents/lab_flags.py),
+      so it is not an input. Only the report's OWN printed marker is ever copied to the
+      stored record (documents/records.py); a calculated flag never is. -#}
   {% if fld.name == 'result' and doc.document_type == 'lab_report' and not r.blank %}
     <div class="flag-cell">{{ ds.flag(r.flag, r.flag_source) }}</div>
   {% endif %}
@@ -57,6 +58,9 @@
           <thead>
             <tr>
               {% for n in g.field_names %}<th scope="col">{{ t('documents.field.' ~ n) }}</th>{% endfor %}
+              {#- A prescription is history, not "currently taking": the patient ticks the medicines
+                  that belong on their current-medicines list. -#}
+              {% if g.key == 'medicines' %}<th scope="col">{{ t('documents.review.add_current') }}</th>{% endif %}
               <th scope="col">{{ t('documents.review.remove') }}</th>
             </tr>
           </thead>
@@ -66,6 +70,16 @@
                 {% for fld in r.fields %}
                   <td>{{ _input(r, fld, doc) }}</td>
                 {% endfor %}
+                {% if g.key == 'medicines' %}
+                  <td>
+                    {% if not r.blank %}
+                      <label class="checkline">
+                        <input type="checkbox" name="current_medicine" value="{{ r.index }}">
+                        <span>{{ t('documents.review.add_current') }}</span>
+                      </label>
+                    {% endif %}
+                  </td>
+                {% endif %}
                 <td>
                   {% if not r.blank %}
                     <label class="checkline">

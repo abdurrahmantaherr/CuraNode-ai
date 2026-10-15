@@ -2,7 +2,8 @@
 
 This is the only module that queries the doctor-owned clinical tables
 (encounter, diagnosis, vital_sign, prescription, lab_*) — itself, and through the
-timeline readers it calls (`timeline/sources.py`);
+timeline readers it calls (`timeline/sources.py`), apart from `documents/records.py`, which only
+writes and removes the rows made from a patient's OWN confirmed document;
 `tests/test_consent.py::test_no_direct_clinical_queries` enforces that.
 
 Access is decided by `consent.service.patient_and_grant_for_doctor`, which
