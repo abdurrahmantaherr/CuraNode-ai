@@ -1,22 +1,33 @@
 {#- Root layout. `dir` is derived from the locale here and NOWHERE else,
-    so no template decides direction for itself (TDD 2.3 rule 2). -#}
+    so no template decides direction for itself (TDD 2.3 rule 2).
+    The theme follows the device unless the person chose one: `data-theme` is set
+    by theme-init.js (a saved choice) and is not written here unless the page
+    was given an explicit `theme`. -#}
 <!DOCTYPE html>
-<html lang="{{ locale }}" dir="{{ direction }}" data-theme="{{ theme|default('light') }}">
+<html lang="{{ locale }}" dir="{{ direction }}"{% if theme is defined %} data-theme="{{ theme }}"{% endif %}>
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
   <title>{% block title %}{{ t('app.name') }}{% endblock %}</title>
 
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  {#- Urdu is loaded only for ur: an unsubsetted Nastaliq face is a
-      multi-hundred-kilobyte download and would breach NFR1 on its own. -#}
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:wght@400;500;600&family=Public+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500{% if locale == 'ur' %}&family=Noto+Nastaliq+Urdu:wght@400;600{% endif %}&display=swap">
+  {#- Fonts are served from this site: no third-party request. Only the files the
+      first paint needs are preloaded; Urdu loads only on the Urdu pages. -#}
+  <link rel="icon" href="/static/icons/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="/static/fonts/public-sans-latin-400-700.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/fonts/newsreader-latin-400-600.woff2" as="font" type="font/woff2" crossorigin>
+  {% if locale == 'ur' %}<link rel="preload" href="/static/fonts/noto-nastaliq-urdu-arabic-400-700.woff2" as="font" type="font/woff2" crossorigin data-family="Noto+Nastaliq+Urdu">{% endif %}
 
+  {% block head_scripts %}<script src="/static/js/theme-init.js"></script>{% endblock %}
+  <link rel="stylesheet" href="/static/css/fonts.css">
   <link rel="stylesheet" href="/static/css/tokens.css">
   <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/icons.css">
+  <link rel="stylesheet" href="/static/css/ui.css">
+  <link rel="stylesheet" href="/static/css/pages.css">
 </head>
 <body>
   {% block body %}{% endblock %}
+  {% block shell_scripts %}<script src="/static/js/ui.js" defer></script>{% endblock %}
 </body>
 </html>

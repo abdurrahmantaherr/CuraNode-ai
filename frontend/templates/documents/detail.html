@@ -52,7 +52,7 @@
 <div class="shell">
   {% include "partials/topbar.html" %}
 
-  <main class="content" {% if processing %}data-autorefresh="4000"{% endif %}>
+  <main id="main" class="content" {% if processing %}data-autorefresh="4000"{% endif %}>
     <div class="rowline">
       <a class="linkish" href="/{{ locale }}/patient/documents">← {{ t('documents.action.back') }}</a>
       {% if step %}{{ d.steps(step) }}{% endif %}

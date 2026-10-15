@@ -7,13 +7,17 @@
       passport_no   the patient's permanent passport number
       qr_svg        Markup — inline <svg> from segno -#}
 
+{#- This page ships no script at all (test T14): the QR and the print layout work without one. -#}
+{% block head_scripts %}{% endblock %}
+{% block shell_scripts %}{% endblock %}
+
 {% block title %}{{ t('passport.title') }} · {{ t('app.name') }}{% endblock %}
 
 {% block body %}
 <div class="shell">
   {% include "partials/topbar.html" %}
 
-  <main class="content">
+  <main id="main" class="content">
     <section class="panel stack" aria-labelledby="passport-h">
       <h2 id="passport-h" class="panel__label">{{ t('passport.number_label') }}</h2>
       <div class="passport">

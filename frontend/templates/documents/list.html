@@ -54,7 +54,7 @@
 <div class="shell">
   {% include "partials/topbar.html" %}
 
-  <main class="content" {% if auto_refresh %}data-autorefresh="5000"{% endif %}>
+  <main id="main" class="content" {% if auto_refresh %}data-autorefresh="5000"{% endif %}>
     {{ f.form_banner(page_error) }}
     {% if notice %}
       <div class="banner banner--ok" role="status"><span>{{ notice }}</span></div>

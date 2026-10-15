@@ -977,5 +977,14 @@
   "timeline.fact.file_name": "فائل کا نام",
   "timeline.fact.source": "ماخذ",
   "timeline.source.document": "اپ لوڈ کی گئی دستاویز سے پڑھا گیا، جس کی مریض نے تصدیق کی",
-  "errors.timeline_query_too_long": "تلاش کا متن بہت لمبا ہے — زیادہ سے زیادہ 100 حروف استعمال کریں۔"
+  "errors.timeline_query_too_long": "تلاش کا متن بہت لمبا ہے — زیادہ سے زیادہ 100 حروف استعمال کریں۔",
+  "nav.skip": "مواد پر جائیں",
+  "nav.main": "مرکزی مینو",
+  "nav.more": "مزید",
+  "nav.theme": "تھیم تبدیل کریں",
+  "nav.collapse": "مینو سمیٹیں",
+  "nav.group.overview": "جائزہ",
+  "nav.group.record": "میرا ریکارڈ",
+  "nav.group.privacy": "رازداری",
+  "nav.group.care": "نگہداشت"
 }

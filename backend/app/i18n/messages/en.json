@@ -977,5 +977,14 @@
   "timeline.fact.file_name": "File name",
   "timeline.fact.source": "Source",
   "timeline.source.document": "Read from an uploaded document the patient confirmed",
-  "errors.timeline_query_too_long": "The search is too long — use at most 100 characters."
+  "errors.timeline_query_too_long": "The search is too long — use at most 100 characters.",
+  "nav.skip": "Skip to content",
+  "nav.main": "Main navigation",
+  "nav.more": "More",
+  "nav.theme": "Switch theme",
+  "nav.collapse": "Collapse menu",
+  "nav.group.overview": "Overview",
+  "nav.group.record": "My record",
+  "nav.group.privacy": "Privacy",
+  "nav.group.care": "Care"
 }

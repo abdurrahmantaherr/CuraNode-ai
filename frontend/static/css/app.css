@@ -302,40 +302,6 @@ h1.auth-title {
 }
 
 /* ── App shell ─────────────────────────────────────────────────────── */
-.shell { display: flex; flex-direction: column; min-height: 100vh; }
-
-.topbar {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  gap: var(--sp-6);
-  padding: var(--sp-5) 30px;
-  background: var(--surface);
-  border-block-end: 1px solid var(--line);
-}
-.topbar__crumb {
-  font: 400 9.5px/1 var(--font-mono);
-  letter-spacing: .12em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-.topbar__title { margin-block-start: 5px; font: 500 19px/1.1 var(--font-serif); }
-.topbar__spacer { flex: 1; }
-.topbar__actions { display: flex; align-items: center; gap: var(--sp-2); }
-
-.content {
-  flex: 1;
-  width: 100%;
-  max-width: var(--stage-max);
-  margin-inline: auto;
-  padding: 26px 30px 60px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-7);
-}
-
 .avatar {
   width: 46px; height: 46px;
   border-radius: var(--r-card-sm);
@@ -375,23 +341,6 @@ h1.auth-title {
 /* ── Patient profile (FR2) ─────────────────────────────────────────── */
 .stack { display: flex; flex-direction: column; gap: var(--sp-5); }
 .stack > .panel__label { margin-block-end: 0; }
-
-.topnav { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
-.topnav__link {
-  display: inline-flex;
-  align-items: center;
-  padding: 9px 12px;
-  border-radius: var(--r-control);
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--muted);
-}
-.topnav__link:hover { color: var(--ink); background: var(--surface-2); }
-.topnav__link[aria-current="page"] {
-  background: var(--brand-soft);
-  color: var(--brand);
-  font-weight: 600;
-}
 
 .identity { display: flex; flex-wrap: wrap; gap: var(--sp-5); align-items: center; }
 .identity__main { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -656,11 +605,6 @@ a.btn--primary, a.btn--primary:hover { color: #fff; }
 }
 
 /* ── Responsive (DESIGN.md is intrinsic; 1024px is the shell threshold) ── */
-@media (max-width: 1024px) {
-  .topbar { padding: var(--sp-4) var(--sp-6); }
-  .content { padding: var(--sp-6) var(--sp-6) 48px; }
-}
-
 @media (max-width: 860px) {
   /* `minmax(0, 1fr)`, not `1fr`: a bare 1fr has a min-content floor, so the
      wide review table would stretch the whole page instead of scrolling
@@ -674,12 +618,11 @@ a.btn--primary, a.btn--primary:hover { color: #fff; }
   .role-group { grid-template-columns: 1fr; }
   h1.auth-title { font-size: 26px; }
   .readonly-list { grid-template-columns: 1fr; }
-  .topbar { flex-wrap: wrap; }
 }
 
 /* Touch targets stay >= 44px for older patients (NFR14). */
 @media (pointer: coarse) {
-  .btn, .btn--sm, .topnav__link, .role-tile, .input, .select, .doctype-pill { min-height: 44px; }
+  .btn, .btn--sm, .role-tile, .input, .select, .doctype-pill { min-height: 44px; }
 }
 
 /* D4 — doctor's patient list. */
