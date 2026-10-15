@@ -986,5 +986,15 @@
   "nav.group.overview": "Overview",
   "nav.group.record": "My record",
   "nav.group.privacy": "Privacy",
-  "nav.group.care": "Care"
+  "nav.group.care": "Care",
+  "dashboard.welcome": "Welcome back, {name}",
+  "dashboard.greeting.morning": "Good morning, {name}",
+  "dashboard.greeting.afternoon": "Good afternoon, {name}",
+  "dashboard.greeting.evening": "Good evening, {name}",
+  "dashboard.passport.show_qr": "Show QR code",
+  "dashboard.passport.manage": "Manage access",
+  "dashboard.passport.copy": "Copy ID",
+  "dashboard.passport.copied": "Copied",
+  "dashboard.quick.title": "Quick actions",
+  "dashboard.privacy_note": "Only the clinicians you choose can see your record, and every view is logged."
 }

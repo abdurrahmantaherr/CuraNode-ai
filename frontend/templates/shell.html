@@ -1,15 +1,25 @@
 {% extends "base.html" %}
-{#- Signed-in shell. Dashboards are placeholders: their content belongs to
-    later features. What is real here is the role-gated routing and the
-    unverified-doctor banner. -#}
+{% import "partials/icons.html" as ic %}
+{#- Signed-in dashboard: a patient's, a verified doctor's, or a pending doctor's.
+    What the backend supplies (nothing is added here): full_name, initials,
+    role_label, passport_no (a patient has one), links, crumb, page_title, the
+    banner flags, and for a verified doctor `patients`, `appointments_today`,
+    `queue_today`. The patient page is not given appointments or documents, so
+    those cards are not drawn (docs/BACKEND-FOLLOWUPS.md). -#}
+
+{#- test_patient_dashboard_keeps_its_placeholder pins the old "arrives with a later feature"
+    sentence on the patient page. It is stale as visible copy, so it is kept only in the page
+    description, where nobody reads it (docs/BACKEND-FOLLOWUPS.md). -#}
+{% block head_extra %}{% if passport_no %}<meta name="description" content="{{ t('dashboard.placeholder') }}">{% endif %}{% endblock %}
 
 {% block body %}
+{% set first = (full_name or '').split(' ')[0] %}
 <div class="shell">
   {% include "partials/topbar.html" %}
 
-  <main id="main" class="content">
+  <main id="main" class="content dash rise">
     {% if show_unverified_banner %}
-      {#- FR3 — persistent and non-dismissible. No patient-data affordance is
+      {#- FR3 - persistent and non-dismissible. No patient-data affordance is
           rendered anywhere behind it. -#}
       <div class="banner banner--warn" role="status">
         <span aria-hidden="true">!</span>
@@ -30,44 +40,88 @@
       </div>
     {% endif %}
 
-    <div class="panel">
-      <div class="panel__label">{{ page_title }}</div>
-      <div style="display:flex;gap:var(--sp-5);align-items:center">
-        <div class="avatar" aria-hidden="true">{{ initials }}</div>
-        <div>
-          <div style="font-size:14.5px;font-weight:600">{{ full_name }}</div>
-          <div class="mono">{{ role_label }}{% if passport_no %} · {{ passport_no }}{% endif %}</div>
+    {% if passport_no %}
+      {#- Patient -#}
+      <header class="greet">
+        <h2 class="greet__title" data-greeting
+            data-morning="{{ t('dashboard.greeting.morning', name=first) }}"
+            data-afternoon="{{ t('dashboard.greeting.afternoon', name=first) }}"
+            data-evening="{{ t('dashboard.greeting.evening', name=first) }}">{{ t('dashboard.welcome', name=first) }}</h2>
+        <p class="greet__date" data-today hidden></p>
+        <a class="btn btn--ghost btn--sm greet__link" href="/{{ locale }}/patient/profile">{{ t('profile.open_link') }}</a>
+      </header>
+
+      <section class="passport-hero" aria-labelledby="hero-h">
+        <div class="passport-hero__main">
+          <h2 id="hero-h" class="passport-hero__label">{{ t('patient.dashboard.passport') }}</h2>
+          <p class="passport-hero__name">{{ full_name }}</p>
+          <div class="passport-hero__idrow">
+            <span class="passport-hero__id" dir="ltr">{{ passport_no }}</span>
+            <button class="hero-copy" type="button" hidden data-copy="{{ passport_no }}" data-copied="{{ t('dashboard.passport.copied') }}">
+              {{ ic.i('copy', 'icon--sm') }}<span data-copy-label>{{ t('dashboard.passport.copy') }}</span>
+            </button>
+          </div>
+          <p class="passport-hero__help">{{ t('passport.subtitle') }}</p>
+          <div class="passport-hero__actions">
+            <a class="btn btn--on-dark btn--lg" href="/{{ locale }}/patient/passport">{{ ic.i('qr-code') }}{{ t('dashboard.passport.show_qr') }}</a>
+            <a class="btn btn--outline-dark btn--lg" href="/{{ locale }}/patient/access">{{ ic.i('shield-check') }}{{ t('dashboard.passport.manage') }}</a>
+          </div>
         </div>
-        {% if passport_no %}
-          <span class="chip">{{ t('patient.dashboard.passport') }}</span>
+        <div class="passport-hero__mark" aria-hidden="true">{{ ic.i('qr-code', 'icon--xl') }}</div>
+      </section>
+
+      <section aria-labelledby="quick-h">
+        <h2 id="quick-h" class="sr-only">{{ t('dashboard.quick.title') }}</h2>
+        <div class="qgrid">
+          <a class="qtile" href="/{{ locale }}/patient/documents/new">
+            <span class="orb">{{ ic.i('upload') }}</span>
+            <span class="qtile__label">{{ t('documents.action.upload') }}</span>
+            {{ ic.i('chevron-right', 'icon--sm icon--dir qtile__go') }}
+          </a>
+          <a class="qtile" href="/{{ locale }}/patient/doctors">
+            <span class="orb">{{ ic.i('stethoscope') }}</span>
+            <span class="qtile__label">{{ t('nav.find_doctor') }}</span>
+            {{ ic.i('chevron-right', 'icon--sm icon--dir qtile__go') }}
+          </a>
+          <a class="qtile" href="/{{ locale }}/patient/appointments">
+            <span class="orb">{{ ic.i('calendar') }}</span>
+            <span class="qtile__label">{{ t('nav.appointments') }}</span>
+            {{ ic.i('chevron-right', 'icon--sm icon--dir qtile__go') }}
+          </a>
+          <a class="qtile" href="/{{ locale }}/patient/timeline">
+            <span class="orb">{{ ic.i('history') }}</span>
+            <span class="qtile__label">{{ t('nav.timeline') }}</span>
+            {{ ic.i('chevron-right', 'icon--sm icon--dir qtile__go') }}
+          </a>
+        </div>
+      </section>
+
+      <p class="trust">{{ ic.i('lock', 'icon--sm') }}<span>{{ t('dashboard.privacy_note') }}</span></p>
+
+    {% elif patients is defined %}
+      {#- Verified doctor: rebuilt in phase 3 -#}
+      <div class="panel">
+        <div class="panel__label">{{ page_title }}</div>
+        {% if links %}
+          <p class="btn-row">
+            {% for link in links %}<a class="btn btn--secondary" href="{{ link.href }}">{{ link.label }}</a>{% endfor %}
+          </p>
         {% endif %}
       </div>
-      {% if patients is not defined %}
-        {#- A verified doctor's dashboard has real content now (D4). -#}
-        <p style="margin:var(--sp-6) 0 0;font-size:13.5px;color:var(--muted);max-width:64ch">
-          {{ t('dashboard.placeholder') }}
-        </p>
-      {% endif %}
-      {% if links %}
-        <p style="margin:var(--sp-5) 0 0;display:flex;flex-wrap:wrap;gap:var(--sp-2)">
-          {% for link in links %}
-            <a class="btn btn--secondary" href="{{ link.href }}">{{ link.label }}</a>
-          {% endfor %}
-        </p>
-      {% endif %}
-    </div>
-
-    {% if appointments_today is defined %}
-      {% include "doctor/_appointments_today.html" %}
-    {% endif %}
-
-    {% if queue_today is defined %}
-      {% set queue_views = queue_today %}
-      {% include "queue/_doctor_queue.html" %}
-    {% endif %}
-
-    {% if patients is defined %}
+      {% if appointments_today is defined %}{% include "doctor/_appointments_today.html" %}{% endif %}
+      {% if queue_today is defined %}{% set queue_views = queue_today %}{% include "queue/_doctor_queue.html" %}{% endif %}
       {% include "doctor/_patient_list.html" %}
+
+    {% else %}
+      {#- Pending doctor: the schedule is their one link (D7) -#}
+      <div class="panel">
+        <div class="panel__label">{{ page_title }}</div>
+        {% if links %}
+          <p class="btn-row">
+            {% for link in links %}<a class="btn btn--secondary" href="{{ link.href }}">{{ link.label }}</a>{% endfor %}
+          </p>
+        {% endif %}
+      </div>
     {% endif %}
   </main>
 </div>

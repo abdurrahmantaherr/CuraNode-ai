@@ -1,0 +1,114 @@
+/* Page-level layouts: dashboards and the pages built from the shared components.
+   Same rules as ui.css: tokens only, logical properties only. */
+
+/* ── Greeting row ─────────────────────────────────────────────────── */
+.greet { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-1) var(--s-4); }
+.greet__title { font: 500 var(--fs-36)/1.12 var(--font-serif); letter-spacing: -.02em; margin: 0; }
+html[lang="ur"] .greet__title { line-height: 1.7; font-size: var(--fs-28); }
+.greet__date { margin: 0; color: var(--text-2); font-size: var(--fs-16); font-weight: 500; }
+.greet__link { margin-inline-start: auto; }
+
+/* ── Passport hero: the one focal object on the patient dashboard ──── */
+.passport-hero {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s-6);
+  padding: var(--s-8);
+  border-radius: var(--r-5);
+  color: var(--hero-ink);
+  background:
+    radial-gradient(70% 140% at 100% 0%, var(--hero-glow), transparent 62%),
+    linear-gradient(135deg, var(--hero-from) 0%, var(--hero-to) 100%);
+  box-shadow: var(--shadow-3);
+  border: 1px solid var(--hero-chip-line);
+}
+.passport-hero__main { display: flex; flex-direction: column; gap: var(--s-3); min-inline-size: 0; }
+.passport-hero__label { margin: 0; font: 600 var(--fs-14)/1.3 var(--font-sans); color: var(--hero-ink-2); }
+.passport-hero__name { margin: 0; font: 500 var(--fs-28)/1.15 var(--font-serif); letter-spacing: -.01em; }
+html[lang="ur"] .passport-hero__name { line-height: 1.7; }
+.passport-hero__idrow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-3); }
+.passport-hero__id {
+  font: 500 var(--fs-28)/1.1 var(--font-mono);
+  letter-spacing: .06em;
+  padding: var(--s-2) var(--s-4);
+  border-radius: var(--r-3);
+  background: var(--hero-chip);
+  border: 1px solid var(--hero-chip-line);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  overflow-wrap: anywhere;
+}
+.hero-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-block-size: 40px;
+  padding: 0 var(--s-4);
+  border: 1px solid var(--hero-chip-line);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--hero-ink);
+  font: 600 var(--fs-14)/1 var(--font-sans);
+  cursor: pointer;
+  transition: background .16s var(--ease);
+}
+.hero-copy:hover { background: var(--hero-chip); }
+.hero-copy[hidden] { display: none; }
+.passport-hero__help { margin: 0; max-inline-size: 52ch; color: var(--hero-ink-2); font-size: var(--fs-14); }
+.passport-hero__actions { display: flex; flex-wrap: wrap; gap: var(--s-3); margin-block-start: var(--s-2); }
+.passport-hero__mark {
+  display: grid;
+  place-items: center;
+  inline-size: 168px;
+  block-size: 168px;
+  border-radius: var(--r-pill);
+  background: var(--hero-chip);
+  border: 1px solid var(--hero-chip-line);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+}
+.icon--xl { inline-size: 84px; block-size: 84px; }
+
+.btn--on-dark { background: var(--hero-btn); color: var(--hero-btn-ink); box-shadow: var(--shadow-1); }
+.btn--on-dark:hover { background: var(--tint); color: var(--hero-btn-ink); }
+.btn--outline-dark { background: transparent; color: var(--hero-ink); border-color: var(--hero-chip-line); }
+.btn--outline-dark:hover { background: var(--hero-chip); color: var(--hero-ink); }
+
+/* ── Quick actions: four plain links, one icon each ───────────────── */
+.qgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s-4); }
+.qtile {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-block-size: 76px;
+  padding: var(--s-4) var(--s-5);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4);
+  box-shadow: var(--shadow-1);
+  color: var(--text-1);
+  transition: transform .18s var(--ease), box-shadow .18s var(--ease), border-color .18s var(--ease);
+}
+.qtile:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); border-color: var(--tint-2); color: var(--text-1); }
+.qtile:active { transform: scale(.98); }
+.qtile__label { flex: 1; min-inline-size: 0; font-weight: 600; font-size: var(--fs-16); line-height: 1.3; }
+.qtile__go { color: var(--text-3); }
+
+.trust { display: flex; align-items: center; justify-content: center; gap: var(--s-2); margin: var(--s-2) 0 0; color: var(--text-2); font-size: var(--fs-14); text-align: center; }
+
+@media (max-width: 1023px) { .qgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 720px) {
+  .greet__title { font-size: var(--fs-28); }
+  .greet__link { margin-inline-start: 0; }
+  .passport-hero { grid-template-columns: minmax(0, 1fr); padding: var(--s-6) var(--s-5); border-radius: var(--r-4); }
+  .passport-hero__mark { display: none; }
+  .passport-hero__id { font-size: var(--fs-22); }
+  .passport-hero__actions .btn { flex: 1 1 100%; }
+  .qgrid { gap: var(--s-3); }
+  .qtile { flex-direction: column; align-items: flex-start; gap: var(--s-3); padding: var(--s-4); min-block-size: 0; }
+  .qtile__go { display: none; }
+  .qtile__label { font-size: var(--fs-14); }
+}

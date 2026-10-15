@@ -9,6 +9,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
+  {% block head_extra %}{% endblock %}
   <title>{% block title %}{{ t('app.name') }}{% endblock %}</title>
 
   {#- Fonts are served from this site: no third-party request. Only the files the

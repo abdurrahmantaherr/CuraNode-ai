@@ -986,5 +986,15 @@
   "nav.group.overview": "جائزہ",
   "nav.group.record": "میرا ریکارڈ",
   "nav.group.privacy": "رازداری",
-  "nav.group.care": "نگہداشت"
+  "nav.group.care": "نگہداشت",
+  "dashboard.welcome": "خوش آمدید، {name}",
+  "dashboard.greeting.morning": "صبح بخیر، {name}",
+  "dashboard.greeting.afternoon": "دوپہر بخیر، {name}",
+  "dashboard.greeting.evening": "شام بخیر، {name}",
+  "dashboard.passport.show_qr": "کیو آر کوڈ دکھائیں",
+  "dashboard.passport.manage": "رسائی کا انتظام",
+  "dashboard.passport.copy": "آئی ڈی کاپی کریں",
+  "dashboard.passport.copied": "کاپی ہو گیا",
+  "dashboard.quick.title": "فوری کام",
+  "dashboard.privacy_note": "آپ کا ریکارڈ صرف وہی معالج دیکھ سکتے ہیں جنہیں آپ منتخب کریں، اور ہر بار دیکھنا درج ہوتا ہے۔"
 }

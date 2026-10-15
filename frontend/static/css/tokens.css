@@ -78,6 +78,14 @@
   --sp-7: 20px;
   --sp-card: 24px;
 
+  /* Text and chips on the teal hero (same in both themes: the hero stays dark) */
+  --hero-ink: #FFFFFF;
+  --hero-ink-2: rgba(255, 255, 255, .88);
+  --hero-chip: rgba(255, 255, 255, .14);
+  --hero-chip-line: rgba(255, 255, 255, .30);
+  --hero-btn: #FFFFFF;
+  --hero-btn-ink: #033236;
+
   --stage-max: 1200px;
   --sidebar-w: 248px;
   --rail-w: 76px;
