@@ -525,3 +525,6 @@ html[lang="ur"] .nextstep__lead { line-height: 1.8; }
   .toolbtn { min-block-size: 36px; }
   .navgroup { gap: 0; }
 }
+
+/* An odd quick action on a phone spans the row instead of sitting alone. */
+@media (max-width: 720px) { .qgrid--3 .qtile:last-child:nth-child(odd) { grid-column: 1 / -1; } }
