@@ -3,6 +3,12 @@
 The redesign is frontend only. Everything here needs a backend change and was left alone.
 Where a design needs this data, the UI hides that element instead of inventing it.
 
+> Update after merging `feature/ux-improvements`: items 1, 2, 3 and 4 below are resolved by that
+> branch (`web/dashboard.py`, `patient_home`, `doctor_home`). The patient dashboard now shows the
+> next step, upcoming appointments and unfinished documents, and the doctor dashboard uses the
+> real next step and counts. The placeholder pins in item 8 were replaced by that branch's tests,
+> so the meta-description shim is gone. Items 5 to 13 still apply.
+
 1. **Patient dashboard has no appointments or documents data.** `patient_dashboard` passes
    only name, initials, passport number and links. To show "Upcoming appointments" and
    "Recent documents" the handler would need to pass the next appointments and the latest
