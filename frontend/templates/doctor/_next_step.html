@@ -1,0 +1,50 @@
+{% import "partials/icons.html" as ic %}
+{#- A verified doctor's summary: blocks that could not load, the counts, and the next step.
+    Drawn from the appointment, queue and consent lists the page already loads, with no extra
+    queries and no new permissions. Context: doctor_home {summary, unavailable, patient_count}.
+    Names are autoescaped; never use |safe here. There is no "pending review" count because the
+    system has no doctor-review step for documents: patients review their own. -#}
+{% set h = doctor_home %}
+{% for name in h.unavailable %}
+  <div class="banner banner--warn">
+    <span aria-hidden="true">!</span>
+    <div>
+      <div class="banner__body">{{ t('dashboard.doctor.unavailable.' ~ name) }}</div>
+      <a class="btn btn--secondary btn--sm" href="/{{ locale }}/doctor">{{ t('dashboard.retry') }}</a>
+    </div>
+  </div>
+{% endfor %}
+{% if h.summary %}
+  {% set s = h.summary %}
+  {% set in_room = namespace(n=0) %}
+  {% for v in queue_today or [] %}{% if v.in_room %}{% set in_room.n = in_room.n + 1 %}{% endif %}{% endfor %}
+
+  {#- One sentence for screen readers; the tiles below carry the same numbers for the eye. -#}
+  <p class="sr-only">{{ t('dashboard.doctor.counts', appointments=s.appointments_today, waiting=s.waiting, patients=s.patients) }}</p>
+  <div class="stats" aria-hidden="true">
+    <div class="stat">
+      <div class="stat__top"><span class="stat__label">{{ t('booking.today.title') }}</span><span class="orb">{{ ic.i('calendar') }}</span></div>
+      <div class="stat__value">{{ s.appointments_today }}</div>
+    </div>
+    <div class="stat">
+      <div class="stat__top"><span class="stat__label">{{ t('queue.waiting') }}</span><span class="orb">{{ ic.i('hourglass') }}</span></div>
+      <div class="stat__value">{{ s.waiting }}</div>
+    </div>
+    <div class="stat">
+      <div class="stat__top"><span class="stat__label">{{ t('queue.in_room') }}</span><span class="orb">{{ ic.i('door') }}</span></div>
+      <div class="stat__value">{{ in_room.n }}</div>
+    </div>
+    <div class="stat">
+      <div class="stat__top"><span class="stat__label">{{ t('dashboard.stat.shared') }}</span><span class="orb">{{ ic.i('users') }}</span></div>
+      <div class="stat__value">{{ s.patients }}</div>
+    </div>
+  </div>
+
+  <section class="nextup" aria-labelledby="today-h">
+    <h2 id="today-h" class="nextup__label">{{ t('dashboard.nextup.title') }}</h2>
+    <p class="nextup__who">{{ t('dashboard.doctor.next.' ~ s.step.kind, name=s.step.name, when=s.step.when, count=s.step.count) }}</p>
+    <div>
+      <a class="btn btn--secondary" href="{{ s.step.href }}">{{ t('dashboard.doctor.cta.idle' if s.step.kind == 'idle' else 'dashboard.doctor.cta.appointments') }}{{ ic.i('arrow-right', 'icon--sm icon--dir') }}</a>
+    </div>
+  </section>
+{% endif %}

@@ -4478,7 +4478,7 @@ async def test_a_patient_with_no_documents_sees_the_plain_empty_state(client, pa
 
 
 async def test_the_list_follows_a_document_that_is_being_read(client, db, library):
-    assert "data-autorefresh" not in (await client.get("/en/patient/documents")).text
+    assert "data-doc-list-poll" not in (await client.get("/en/patient/documents")).text
     await db.execute(
         update(Document)
         .where(Document.id == uuid.UUID(library["review"]["id"]))
@@ -4486,7 +4486,7 @@ async def test_the_list_follows_a_document_that_is_being_read(client, db, librar
     )
     await db.commit()
     page = (await client.get("/en/patient/documents?q=scan")).text
-    assert 'data-autorefresh="5000"' in page  # a reload keeps the search: it is in the address
+    assert "data-doc-list-poll" in page  # the swap leaves the search form (and what is typed) alone
     assert "Reading…" in page
 
 

@@ -1,23 +1,25 @@
 {% extends "base.html" %}
 {% import "partials/icons.html" as ic %}
+{% import "partials/doc_live.html" as live with context %}
 {#- Signed-in dashboard: a patient's, a verified doctor's, or a pending doctor's.
-    What the backend supplies (nothing is added here): full_name, initials,
-    role_label, passport_no (a patient has one), links, crumb, page_title, the
-    banner flags, and for a verified doctor `patients`, `appointments_today`,
-    `queue_today`. The patient page is not given appointments or documents, so
-    those cards are not drawn (docs/BACKEND-FOLLOWUPS.md). -#}
-
-{#- test_patient_dashboard_keeps_its_placeholder pins the old "arrives with a later feature"
-    sentence on the patient page. It is stale as visible copy, so it is kept only in the page
-    description, where nobody reads it (docs/BACKEND-FOLLOWUPS.md). -#}
-{% block head_extra %}{% if passport_no %}<meta name="description" content="{{ t('dashboard.placeholder') }}">{% endif %}{% endblock %}
+    Context from web/router.py::_guarded: full_name, initials, role_label, passport_no (a
+    patient has one), links, crumb, page_title, the banner flags, `pending_doctor`, and
+      patient_home   {step, appointments[_ok|_more], documents[_ok|_more], polling, saved_count}
+      doctor_home    {summary, unavailable[], patient_count}
+      patients, appointments_today, queue_today (each present only when it could be loaded).
+    A block that could not be loaded is named by its own banner; an empty state is never drawn
+    for data that is unknown. -#}
 
 {% block body %}
 {% set first = (full_name or '').split(' ')[0] %}
+{% set polling = patient_home is defined and patient_home.polling %}
+{% if polling %}{{ live.region() }}{% endif %}
 <div class="shell">
   {% include "partials/topbar.html" %}
 
-  <main id="main" class="content dash rise">
+  {#- A patient's home follows a document that is being read in place (documents.js, no reload). -#}
+  <main class="content dash rise" id="main"{% if polling %} data-doc-list-poll="/api/v1/documents/in-progress?limit=100"{% endif %}>
+    {% if polling %}{{ live.banner() }}{% endif %}
     {% if show_unverified_banner %}
       {#- FR3 - persistent and non-dismissible. No patient-data affordance is
           rendered anywhere behind it. -#}
@@ -70,9 +72,11 @@
         <div class="passport-hero__mark" aria-hidden="true">{{ ic.i('qr-code', 'icon--xl') }}</div>
       </section>
 
+      {% if patient_home is defined %}{% include "patient/_home.html" %}{% endif %}
+
       <section aria-labelledby="quick-h">
         <h2 id="quick-h" class="sr-only">{{ t('dashboard.quick.title') }}</h2>
-        <div class="qgrid">
+        <div class="qgrid qgrid--3">
           <a class="qtile" href="/{{ locale }}/patient/documents/new">
             <span class="orb">{{ ic.i('upload') }}</span>
             <span class="qtile__label">{{ t('documents.action.upload') }}</span>
@@ -81,11 +85,6 @@
           <a class="qtile" href="/{{ locale }}/patient/doctors">
             <span class="orb">{{ ic.i('stethoscope') }}</span>
             <span class="qtile__label">{{ t('nav.find_doctor') }}</span>
-            {{ ic.i('chevron-right', 'icon--sm icon--dir qtile__go') }}
-          </a>
-          <a class="qtile" href="/{{ locale }}/patient/appointments">
-            <span class="orb">{{ ic.i('calendar') }}</span>
-            <span class="qtile__label">{{ t('nav.appointments') }}</span>
             {{ ic.i('chevron-right', 'icon--sm icon--dir qtile__go') }}
           </a>
           <a class="qtile" href="/{{ locale }}/patient/timeline">
@@ -101,14 +100,11 @@
     {% elif patients is defined %}
       {#- Verified doctor. Every fact is drawn once: the schedule lists the day's
           appointments (with the queue state beside a patient when the name is
-          unique), the queue board is the live view, "Next up" is one patient. -#}
+          unique), the queue board is the live view, "Next up" is the one next step. -#}
       {% set appts = appointments_today or [] %}
       {% set sessions = queue_today or [] %}
-      {% set ns = namespace(count=0, waiting=0, room=0, start='', end='', clinics=[], first_room='', next_i=-1) %}
-      {% for r in appts %}{% if not r.cancelled %}{% set ns.count = ns.count + 1 %}{% endif %}{% endfor %}
+      {% set ns = namespace(start='', end='', clinics=[], next_i=-1) %}
       {% for v in sessions %}
-        {% set ns.waiting = ns.waiting + (v.waiting|length) %}
-        {% if v.in_room %}{% set ns.room = ns.room + 1 %}{% if not ns.first_room %}{% set ns.first_room = v.in_room.patient_name %}{% endif %}{% endif %}
         {% set st = v.start.strftime('%H:%M') %}{% set en = v.end.strftime('%H:%M') %}
         {% if not ns.start or st < ns.start %}{% set ns.start = st %}{% endif %}
         {% if not ns.end or en > ns.end %}{% set ns.end = en %}{% endif %}
@@ -131,7 +127,7 @@
         {% for l in v.seen %}{% if qnames.all.count(l.patient_name) == 1 %}{% set _ = qstate.update({l.patient_name: ['seen', 0]}) %}{% endif %}{% endfor %}
       {% endfor %}
 
-      {#- The next row: the first appointment still to be seen. -#}
+      {#- The row to look at: the first appointment still to be seen. -#}
       {% for r in appts %}
         {% if ns.next_i < 0 and not r.cancelled and r.badge == 'badge--ok' and not (names.count(r.name) == 1 and qstate.get(r.name) and qstate.get(r.name)[0] == 'seen') %}{% set ns.next_i = loop.index0 %}{% endif %}
       {% endfor %}
@@ -157,81 +153,51 @@
             <p class="field-help">{{ t('lookup.subtitle') }}</p>
           </form>
 
-          <div class="stats">
-            <div class="stat">
-              <div class="stat__top"><span class="stat__label">{{ t('booking.today.title') }}</span><span class="orb">{{ ic.i('calendar') }}</span></div>
-              <div class="stat__value">{{ ns.count }}</div>
-            </div>
-            <div class="stat">
-              <div class="stat__top"><span class="stat__label">{{ t('queue.waiting') }}</span><span class="orb">{{ ic.i('hourglass') }}</span></div>
-              <div class="stat__value">{{ ns.waiting }}</div>
-            </div>
-            <div class="stat">
-              <div class="stat__top"><span class="stat__label">{{ t('queue.in_room') }}</span><span class="orb">{{ ic.i('door') }}</span></div>
-              <div class="stat__value">{{ ns.room }}</div>
-            </div>
-            <div class="stat">
-              <div class="stat__top"><span class="stat__label">{{ t('dashboard.stat.shared') }}</span><span class="orb">{{ ic.i('users') }}</span></div>
-              <div class="stat__value">{{ patients|length }}</div>
-            </div>
-          </div>
+          {#- Blocks that could not load, the counts, and the next step (web/dashboard.py) -#}
+          {% if doctor_home is defined %}{% include "doctor/_next_step.html" %}{% endif %}
 
-          <section class="nextup" aria-labelledby="nextup-h">
-            {% if ns.first_room %}
-              <h2 id="nextup-h" class="nextup__label">{{ t('dashboard.nextup.in_room') }}</h2>
-              <p class="nextup__who">{{ ns.first_room }}</p>
-            {% elif ns.next_i >= 0 %}
-              {% set nx = appts[ns.next_i] %}
-              <h2 id="nextup-h" class="nextup__label">{{ t('dashboard.nextup.title') }}</h2>
-              <p class="nextup__who">{{ nx.name }}</p>
-              <div class="nextup__meta">
-                <span class="nextup__time mono" dir="ltr">{{ nx.time }}</span>
-                <span class="badge {{ nx.badge }}">{{ nx.status }}</span>
-              </div>
-            {% else %}
-              <h2 id="nextup-h" class="nextup__label">{{ t('dashboard.nextup.title') }}</h2>
-              <p class="nextup__none">{{ t('dashboard.nextup.none') }}</p>
-            {% endif %}
-          </section>
-
-          <section class="panel" aria-labelledby="sched-h">
-            <h2 id="sched-h" class="panel__label">{{ t('dashboard.schedule.title') }}</h2>
-            {% if appts %}
-              <table class="table table--stack sched">
-                <thead>
-                  <tr>
-                    <th scope="col">{{ t('booking.field.time') }}</th>
-                    <th scope="col">{{ t('booking.col.patient') }}</th>
-                    <th scope="col">{{ t('booking.field.status') }}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for r in appts %}
-                    {% set q = qstate.get(r.name) if names.count(r.name) == 1 else none %}
-                    <tr{% if loop.index0 == ns.next_i %} class="is-next" aria-current="true"{% elif r.cancelled %} class="is-cancelled"{% endif %}>
-                      <td dir="ltr" class="mono">{{ r.time }}</td>
-                      <td>{{ r.name }}</td>
-                      <td>
-                        {% if q and q[0] == 'room' %}<span class="badge badge--ok">{{ t('queue.in_room') }}</span>
-                        {% elif q and q[0] == 'waiting' %}<span class="badge badge--warn">{{ t('queue.badge.waiting', position=q[1]) }}</span>
-                        {% elif q and q[0] == 'seen' %}<span class="badge badge--neutral">{{ t('booking.status.done') }}</span>
-                        {% else %}<span class="badge {{ r.badge }}">{{ r.status }}</span>{% endif %}
-                      </td>
+          {% if appointments_today is defined %}
+            <section class="panel" aria-labelledby="sched-h">
+              <h2 id="sched-h" class="panel__label">{{ t('dashboard.schedule.title') }}</h2>
+              {% if appts %}
+                <table class="table table--stack sched">
+                  <thead>
+                    <tr>
+                      <th scope="col">{{ t('booking.field.time') }}</th>
+                      <th scope="col">{{ t('booking.col.patient') }}</th>
+                      <th scope="col">{{ t('booking.field.status') }}</th>
                     </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            {% else %}
-              <div class="empty empty--compact">
-                <span class="orb">{{ ic.i('calendar') }}</span>
-                <p class="empty__text">{{ t('booking.today.empty') }}</p>
-              </div>
-            {% endif %}
-            <p class="panel__foot"><a class="linkish" href="/{{ locale }}/doctor/appointments">{{ t('booking.today.all') }}{{ ic.i('arrow-right', 'icon--sm icon--dir') }}</a></p>
-          </section>
+                  </thead>
+                  <tbody>
+                    {% for r in appts %}
+                      {% set q = qstate.get(r.name) if names.count(r.name) == 1 else none %}
+                      <tr{% if loop.index0 == ns.next_i %} class="is-next" aria-current="true"{% elif r.cancelled %} class="is-cancelled"{% endif %}>
+                        <td dir="ltr" class="mono">{{ r.time }}</td>
+                        <td>{{ r.name }}</td>
+                        <td>
+                          {% if q and q[0] == 'room' %}<span class="badge badge--ok">{{ t('queue.in_room') }}</span>
+                          {% elif q and q[0] == 'waiting' %}<span class="badge badge--warn">{{ t('queue.badge.waiting', position=q[1]) }}</span>
+                          {% elif q and q[0] == 'seen' %}<span class="badge badge--neutral">{{ t('booking.status.done') }}</span>
+                          {% else %}<span class="badge {{ r.badge }}">{{ r.status }}</span>{% endif %}
+                        </td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              {% else %}
+                <div class="empty empty--compact">
+                  <span class="orb">{{ ic.i('calendar') }}</span>
+                  <p class="empty__text">{{ t('booking.today.empty') }}</p>
+                </div>
+              {% endif %}
+              <p class="panel__foot"><a class="linkish" href="/{{ locale }}/doctor/appointments">{{ t('booking.today.all') }}{{ ic.i('arrow-right', 'icon--sm icon--dir') }}</a></p>
+            </section>
+          {% endif %}
 
-          {% set queue_views = sessions %}
-          {% include "queue/_doctor_queue.html" %}
+          {% if queue_today is defined %}
+            {% set queue_views = sessions %}
+            {% include "queue/_doctor_queue.html" %}
+          {% endif %}
         </div>
 
         <aside class="dgrid__side">
@@ -244,18 +210,34 @@
         </aside>
       </div>
 
+    {% elif pending_doctor %}
+      {#- A doctor awaiting verification: no patient data, but one real thing to do meanwhile (D7). -#}
+      <section class="panel stack">
+        <h2 class="panel__label">{{ page_title }}</h2>
+        <p class="lead">{{ t('doctor.pending_next') }}</p>
+        {% if links %}
+          <p class="btn-row">
+            {% for link in links %}<a class="btn btn--secondary" href="{{ link.href }}">{{ ic.i('clock') }}{{ link.label }}</a>{% endfor %}
+          </p>
+        {% endif %}
+      </section>
+
     {% else %}
-      {#- Pending doctor: the schedule is their one link (D7). A test pins the placeholder sentence here. -#}
-      <div class="panel stack">
-        <div class="panel__label">{{ page_title }}</div>
+      {#- A role with no home yet (the clinic admin's shell). -#}
+      <section class="panel stack">
+        <h2 class="panel__label">{{ page_title }}</h2>
         <p class="lead">{{ t('dashboard.placeholder') }}</p>
         {% if links %}
           <p class="btn-row">
             {% for link in links %}<a class="btn btn--secondary" href="{{ link.href }}">{{ link.label }}</a>{% endfor %}
           </p>
         {% endif %}
-      </div>
+      </section>
     {% endif %}
   </main>
 </div>
+{% if polling %}
+<script src="/static/js/doc-status.js" defer></script>
+<script src="/static/js/documents.js" defer></script>
+{% endif %}
 {% endblock %}

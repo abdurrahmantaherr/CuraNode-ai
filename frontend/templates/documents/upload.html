@@ -12,14 +12,16 @@
       max_mb        the upload limit, in MB -#}
 {% import "partials/form_field.html" as f %}
 {% import "partials/doc_steps.html" as d with context %}
+{% import "partials/doc_live.html" as live with context %}
 
 {% block title %}{{ t('documents.upload.title') }} · {{ t('app.name') }}{% endblock %}
 
 {% block body %}
+{{ live.region() }}
 <div class="shell">
   {% include "partials/topbar.html" %}
 
-  <main id="main" class="content">
+  <main class="content" id="main">
     <div class="rowline">
       <a class="linkish" href="/{{ locale }}/patient/documents">← {{ t('documents.action.back') }}</a>
       {{ d.steps(1) }}
@@ -27,12 +29,28 @@
 
     {{ f.form_banner(form_error) }}
 
+    {#- Filled in by documents.js when the upload could not be completed. The selected file and
+        the chosen type stay in the form, so trying again needs no re-selecting. -#}
+    <div class="banner banner--error" id="upload-problem" role="alert" tabindex="-1" hidden>
+      <span aria-hidden="true">!</span>
+      <div>
+        <div class="banner__body" id="upload-problem-text"></div>
+        <div class="btn-row">
+          <a class="btn btn--secondary btn--sm" id="upload-problem-list" href="/{{ locale }}/patient/documents" hidden>{{ t('documents.upload.open_list') }}</a>
+        </div>
+      </div>
+    </div>
+
     <form class="panel stack" id="upload-form" method="post"
           action="/{{ locale }}/patient/documents" enctype="multipart/form-data" novalidate
           data-max-bytes="{{ max_mb * 1024 * 1024 }}"
           data-msg-type="{{ t('errors.file_type_unsupported') }}"
           data-msg-size="{{ t('errors.file_too_large', max_mb=max_mb) }}"
-          data-msg-required="{{ t('errors.file_required') }}">
+          data-msg-required="{{ t('errors.file_required') }}"
+          data-msg-failed="{{ t('documents.upload.failed') }}"
+          data-msg-network="{{ t('documents.upload.network') }}"
+          data-msg-unconfirmed="{{ t('documents.upload.unconfirmed') }}"
+          data-msg-uploading="{{ t('documents.upload.processing_title') }}">
       <h2 class="panel__label">{{ t('documents.upload.title') }}</h2>
       <p class="lead">{{ t('documents.subtitle') }}</p>
 
