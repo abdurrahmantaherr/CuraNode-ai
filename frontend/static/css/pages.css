@@ -514,3 +514,14 @@ html[lang="ur"] .nextstep__lead { line-height: 1.8; }
   .nextstep { padding: var(--s-4); }
   .nextstep .btn { inline-size: 100%; }
 }
+
+/* Short windows: the sidebar scrolls as one piece instead of squeezing its sections on top of
+   each other (its children never shrink; the whole sidebar scrolls). */
+.sidebar > * { flex-shrink: 0; }
+.sidebar__nav { flex: 1 0 auto; }
+@media (max-height: 820px) {
+  .sidebar { gap: var(--s-3); }
+  .sidebar .topnav__link { min-block-size: 40px; }
+  .toolbtn { min-block-size: 36px; }
+  .navgroup { gap: 0; }
+}
