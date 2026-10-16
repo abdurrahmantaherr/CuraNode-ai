@@ -1,26 +1,168 @@
-{#- Signed-in topbar, shared by the dashboard shell and the patient profile.
-    Expects `crumb`, `page_title`, and optional `nav_items` — a list of
-    {href, label, current}. Doctors and admins pass none, so their topbar
-    renders exactly as before. -#}
-<header class="topbar">
-  <div>
-    <div class="topbar__crumb">{{ crumb }}</div>
-    <div class="topbar__title">{{ page_title }}</div>
+{#- Signed-in chrome, shared by every signed-in page. The name is kept because every
+    page already includes "partials/topbar.html" inside <div class="shell">.
+
+    Renders, as siblings of <main class="content" id="main">:
+      - the skip link,
+      - the sidebar (desktop): brand, grouped navigation, user, language, theme, sign out,
+      - the page header: role label and the page title,
+      - the floating pill bar (mobile): the main destinations plus a "More" sheet.
+
+    Expects (all supplied by the backend already): `nav_items` [{href,label,current}],
+    `crumb`, `page_title`, `locale`, `other_locale`, `path_suffix`.
+    Optional: `full_name`, `initials` (only the dashboard passes them).
+
+    The role is read from the destinations the backend sent, never decided here:
+    a /patient link means a patient, /doctor a doctor, /admin a clinic admin. -#}
+{% import "partials/icons.html" as ic %}
+
+{% set ns = namespace(role='') %}
+{% for item in nav_items or [] %}
+  {% if not ns.role %}
+    {% if '/patient' in item.href %}{% set ns.role = 'patient' %}
+    {% elif '/doctor' in item.href %}{% set ns.role = 'doctor' %}
+    {% elif '/admin' in item.href %}{% set ns.role = 'admin' %}{% endif %}
+  {% endif %}
+{% endfor %}
+
+{% macro glyph(href) -%}
+  {%- if href.endswith('/patient') or href.endswith('/doctor') -%}home
+  {%- elif href.endswith('/patient/profile') -%}user
+  {%- elif href.endswith('/patient/passport') -%}id-card
+  {%- elif href.endswith('/patient/access') -%}shield-check
+  {%- elif href.endswith('/patient/documents') -%}file-text
+  {%- elif href.endswith('/patient/timeline') -%}history
+  {%- elif href.endswith('/patient/doctors') -%}stethoscope
+  {%- elif href.endswith('/patient/appointments') or href.endswith('/doctor/appointments') -%}calendar
+  {%- elif href.endswith('/doctor/passport-lookup') -%}user-search
+  {%- elif href.endswith('/doctor/schedule') -%}clock
+  {%- elif href.endswith('/admin/queue') -%}list
+  {%- else -%}shield-check{%- endif -%}
+{%- endmacro %}
+
+{#- Sidebar link. The markup is pinned by tests (class, href, aria-current, bare label), so
+    the icon is drawn by CSS from the href (ui.css), not placed in the anchor. -#}
+{% macro sidelink(item) %}<a class="topnav__link" href="{{ item.href }}" {% if item.current %}aria-current="page"{% endif %}>{{ item.label }}</a>{% endmacro %}
+
+{% macro navlink(item, cls) %}
+  <a class="{{ cls }}" href="{{ item.href }}"{% if item.current %} aria-current="page"{% endif %}>
+    {{ ic.i(glyph(item.href)|trim) }}<span class="{{ cls }}-label">{{ item.label }}</span>
+  </a>
+{% endmacro %}
+
+{#- Desktop groups. A patient's eight destinations are grouped; a doctor's or an
+    admin's few are a single flat list. -#}
+{% set group_of = {
+  '/patient': 'overview', '/patient/profile': 'record', '/patient/passport': 'record',
+  '/patient/documents': 'record', '/patient/timeline': 'record', '/patient/access': 'privacy',
+  '/patient/doctors': 'care', '/patient/appointments': 'care'
+} %}
+{% set group_order = ['overview', 'record', 'privacy', 'care'] %}
+
+{#- Mobile: four main destinations; the patient's rest go behind "More". -#}
+{% set pinned = ['/patient', '/patient/documents', '/patient/passport', '/patient/appointments'] %}
+{% set mobile = namespace(main=[], more=[]) %}
+{% for item in nav_items or [] %}
+  {% set path = item.href.split('?')[0] %}
+  {% set key = path[path.index('/', 1):] if path.count('/') >= 2 else path %}
+  {% if ns.role == 'patient' %}
+    {% if key in pinned %}{% set mobile.main = mobile.main + [item] %}{% else %}{% set mobile.more = mobile.more + [item] %}{% endif %}
+  {% elif loop.index <= 4 or (nav_items|length) <= 4 %}
+    {% set mobile.main = mobile.main + [item] %}
+  {% else %}
+    {% set mobile.more = mobile.more + [item] %}
+  {% endif %}
+{% endfor %}
+{% if ns.role != 'patient' and mobile.more %}
+  {#- more than four: keep three plus More -#}
+  {% set mobile.more = [mobile.main[3]] + mobile.more %}
+  {% set mobile.main = mobile.main[:3] %}
+{% endif %}
+
+<a class="skip-link" href="#main">{{ t('nav.skip') }}</a>
+
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar__brand">
+    <span class="brandmark" aria-hidden="true">C</span>
+    <div class="sidebar__id">
+      <div class="sidebar__name">{{ t('app.name') }}</div>
+      <div class="sidebar__role">{{ crumb }}</div>
+    </div>
   </div>
-  <div class="topbar__spacer"></div>
-  <div class="topbar__actions">
-    {% if nav_items %}
-      <nav class="topnav" aria-label="{{ crumb }}">
-        {% for item in nav_items %}
-          <a class="topnav__link" href="{{ item.href }}"
-             {% if item.current %}aria-current="page"{% endif %}>{{ item.label }}</a>
-        {% endfor %}
-      </nav>
+
+  <nav class="sidebar__nav" aria-label="{{ crumb }}">
+    {% if ns.role == 'patient' %}
+      {% for g in group_order %}
+        <div class="navgroup">
+          <div class="navgroup__title">{{ t('nav.group.' ~ g) }}</div>
+          {% for item in nav_items %}
+            {% set path = item.href.split('?')[0] %}
+            {% set key = path[path.index('/', 1):] %}
+            {% if group_of.get(key) == g %}{{ sidelink(item) }}{% endif %}
+          {% endfor %}
+        </div>
+      {% endfor %}
+    {% else %}
+      <div class="navgroup">
+        {% for item in nav_items or [] %}{{ sidelink(item) }}{% endfor %}
+      </div>
     {% endif %}
-    <a class="btn btn--secondary" href="/{{ other_locale }}{{ path_suffix }}"
-       hreflang="{{ other_locale }}">{{ t('nav.language') }}</a>
+  </nav>
+
+  <div class="sidebar__foot">
+    {% if full_name is defined and full_name %}
+      <div class="sidebar__user">
+        <span class="avatar" aria-hidden="true">{{ initials }}</span>
+        <span class="sidebar__user-name">{{ full_name }}</span>
+      </div>
+    {% endif %}
+    <div class="sidebar__tools">
+      <a class="toolbtn" href="/{{ other_locale }}{{ path_suffix }}" hreflang="{{ other_locale }}">
+        {{ ic.i('globe') }}<span class="toolbtn__label">{{ t('nav.language') }}</span>
+      </a>
+      <button class="toolbtn" type="button" data-theme-toggle hidden aria-label="{{ t('nav.theme') }}">
+        {{ ic.i('moon', 'icon--moon') }}{{ ic.i('sun', 'icon--sun') }}<span class="toolbtn__label">{{ t('nav.theme') }}</span>
+      </button>
+      <button class="toolbtn" type="button" data-sidebar-toggle hidden aria-label="{{ t('nav.collapse') }}">
+        {{ ic.i('panel-left') }}<span class="toolbtn__label">{{ t('nav.collapse') }}</span>
+      </button>
+      <form method="post" action="/{{ locale }}/logout">
+        <button class="toolbtn toolbtn--out" type="submit">
+          {{ ic.i('log-out') }}<span class="toolbtn__label">{{ t('nav.sign_out') }}</span>
+        </button>
+      </form>
+    </div>
+  </div>
+</aside>
+
+<header class="pagebar">
+  <div class="pagebar__text">
+    <div class="pagebar__crumb">{{ crumb }}</div>
+    <div class="pagebar__title" role="heading" aria-level="1">{{ page_title }}</div>
+  </div>
+  <div class="pagebar__tools">
+    <a class="btn btn--ghost btn--sm" href="/{{ other_locale }}{{ path_suffix }}" hreflang="{{ other_locale }}">{{ t('nav.language') }}</a>
     <form method="post" action="/{{ locale }}/logout">
-      <button class="btn btn--secondary" type="submit">{{ t('nav.sign_out') }}</button>
+      <button class="btn btn--ghost btn--sm" type="submit">{{ t('nav.sign_out') }}</button>
     </form>
   </div>
 </header>
+
+<nav class="pillnav" aria-label="{{ t('nav.main') }}">
+  <ul class="pillnav__list">
+    {% for item in mobile.main %}
+      <li>{{ navlink(item, 'pillnav__link') }}</li>
+    {% endfor %}
+    {% if mobile.more %}
+      <li class="pillnav__more">
+        <details>
+          <summary class="pillnav__link" aria-label="{{ t('nav.more') }}">
+            {{ ic.i('more') }}<span class="pillnav__link-label">{{ t('nav.more') }}</span>
+          </summary>
+          <div class="sheet" role="group" aria-label="{{ t('nav.more') }}">
+            {% for item in mobile.more %}{{ navlink(item, 'sheet__link') }}{% endfor %}
+          </div>
+        </details>
+      </li>
+    {% endif %}
+  </ul>
+</nav>

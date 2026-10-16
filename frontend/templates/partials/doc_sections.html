@@ -3,7 +3,7 @@
 
     Everything here is DISPLAY ONLY: built from what the document itself labelled,
     never invented, and a section with nothing found in it is simply absent. These
-    are not the reviewable rows (medicines / lab results) — those are tables of their
+    are not the reviewable rows (medicines / lab results) - those are tables of their
     own on the page.
 
     Import with context:  {% import "partials/doc_sections.html" as ds with context %}
@@ -109,7 +109,7 @@
 
 {#- What a lab report, a vaccination card or an "other" document shows is only what the reader
     FOUND: an item the document does not carry is not listed at all (a prescription keeps its
-    "Not specified" rows, below). `skip` names keys not to repeat — the document's own date,
+    "Not specified" rows, below). `skip` names keys not to repeat - the document's own date,
     when the page shows it as a field of its own. -#}
 {% macro rows(items, skip=()) %}
   {%- for item in items if item.value and item.key not in skip %}
@@ -133,8 +133,8 @@
   {% endif %}
 {% endmacro %}
 
-{#- The who / what of an "other" document — hospital, laboratory, doctor, patient, the document's
-    own title — each only if the document names it. -#}
+{#- The who / what of an "other" document - hospital, laboratory, doctor, patient, the document's
+    own title - each only if the document names it. -#}
 {% macro other_rows(doc) %}
   {% set s = doc.sections %}
   {% if s %}
@@ -204,7 +204,7 @@
 {% endmacro %}
 
 {#- A lab result's flag. `source` says whether the report printed it or it was worked
-    out from the result and the stated range — the second is labelled so it is never
+    out from the result and the stated range - the second is labelled so it is never
     mistaken for the laboratory's own judgement. -#}
 {% macro flag(kind, source) %}
   {% if kind %}

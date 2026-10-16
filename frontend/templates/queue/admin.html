@@ -5,15 +5,16 @@
     changes it.
 
     Context (built in web/queue.py::_render_queue):
-      views        list[SessionView] — today's sessions at the admin's clinics
-      hits         list[PatientHit] — walk-in search results (passport masked)
-      find, find_session, find_error — the search text, the session it was for, its error
-      saved, page_error — banner texts or None -#}
+      views        list[SessionView] - today's sessions at the admin's clinics
+      hits         list[PatientHit] - walk-in search results (passport masked)
+      find, find_session, find_error - the search text, the session it was for, its error
+      saved, page_error - banner texts or None -#}
 
+{% import "partials/icons.html" as ic %}
 {% block title %}{{ t('queue.title') }} · {{ t('app.name') }}{% endblock %}
 
 {% macro act(path, label, style='secondary') %}
-  <form method="post" action="/{{ locale }}/admin/queue/{{ path }}" style="display:inline">
+  <form class="inline-form" method="post" action="/{{ locale }}/admin/queue/{{ path }}">
     <button class="btn btn--{{ style }} btn--sm" type="submit" data-label="{{ label }}">{{ label }}</button>
   </form>
 {% endmacro %}
@@ -22,7 +23,7 @@
 <div class="shell">
   {% include "partials/topbar.html" %}
 
-  <main class="content">
+  <main class="content qdesk" id="main">
     {% if page_error %}
       <div class="banner banner--error" role="alert">
         <span aria-hidden="true">!</span><span>{{ page_error }}</span>
@@ -33,7 +34,12 @@
     {% endif %}
 
     {% if not views %}
-      <div class="panel"><p class="empty-state">{{ t('queue.admin.empty') }}</p></div>
+      <div class="panel">
+        <div class="empty">
+          <span class="orb">{{ ic.i('door') }}</span>
+          <p class="empty__text">{{ t('queue.admin.empty') }}</p>
+        </div>
+      </div>
     {% endif %}
 
     {% for v in views %}
@@ -60,7 +66,7 @@
               </div>
             </div>
           {% else %}
-            <p class="field-help">{{ t('queue.room_empty') }}</p>
+            <p class="qdesk__free">{{ t('queue.room_free') }}</p>
           {% endif %}
         </div>
 

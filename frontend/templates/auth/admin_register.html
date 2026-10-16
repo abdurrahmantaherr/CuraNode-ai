@@ -1,12 +1,14 @@
 {% extends "base.html" %}
 {% import "partials/form_field.html" as f %}
-{#- D-VERIFY — clinic-admin self-sign-up. Deliberately not linked from the
+{#- D-VERIFY - clinic-admin self-sign-up. Deliberately not linked from the
     public register page: the invite code is the gate, not discoverability.
     Context (web/router.py::admin_register_page/_submit): values, errors,
     form_error, clinics. -#}
 {% block title %}{{ t('admin.register.title') }} · {{ t('app.name') }}{% endblock %}
 
 {% block body %}
+{#- Language switch in the corner (Urdu and English are equals). -#}
+<a class="auth-lang btn btn--ghost btn--sm" href="/{{ other_locale }}{{ path_suffix }}" hreflang="{{ other_locale }}">{{ t('nav.language') }}</a>
 <main class="auth-page">
   <div class="auth-shell">
     <div class="auth-head">

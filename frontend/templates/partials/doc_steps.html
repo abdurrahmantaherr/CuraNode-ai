@@ -1,7 +1,7 @@
 {#- The pill step indicator shared by every document screen (DESIGN.md §4
     "Workflow / stepper"). `current` is 1..4: Upload, Read, Review, Saved.
     Steps before it read as done, the current one is highlighted, and the
-    rest are muted. Purely presentational — the server decides the state. -#}
+    rest are muted. Purely presentational - the server decides the state. -#}
 {% macro steps(current) %}
   {% set names = ['upload', 'read', 'review', 'saved'] %}
   <ol class="steps" aria-label="{{ t('documents.title') }}">

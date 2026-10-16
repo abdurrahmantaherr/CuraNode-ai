@@ -1,13 +1,13 @@
 {% extends "base.html" %}
-{#- Who can see my passport (FR4 per section, FR5 — P9 spec §5.1). Every
+{#- Who can see my passport (FR4 per section, FR5 - P9 spec §5.1). Every
     control works without JavaScript: search is a GET form, giving access and
     saving sections post and redirect (PRG), and Revoke is a two-step
     <details> confirmation. profile.js only adds the submitting-state guard.
 
     Context (built in web/router.py::_render_access):
-      grants          list[ConsentGrantOut] — active, newest first
-      past            list[ConsentGrantOut] — revoked or expired
-      log             list[AccessLogEntry]  — newest 50 reads by others
+      grants          list[ConsentGrantOut] - active, newest first
+      past            list[ConsentGrantOut] - revoked or expired
+      log             list[AccessLogEntry]  - newest 50 reads by others
       sections        canonical section keys
       later_sections  sections that fill up once P2/P3 exist
       durations       ("24h", "7d", "30d", "until_revoked")
@@ -37,7 +37,7 @@
 <div class="shell">
   {% include "partials/topbar.html" %}
 
-  <main class="content">
+  <main class="content" id="main">
     {% if page_error %}
       <div class="banner banner--error" role="alert">
         <span aria-hidden="true">!</span><span>{{ page_error }}</span>
@@ -197,7 +197,7 @@
                 <tr>
                   <td class="mono" dir="ltr">{{ pkt(e.occurred_at) }}</td>
                   <td>{{ e.accessor_name or t('access.grantee_unknown') }}{% if e.accessor_specialty %}<div class="field-help">{{ e.accessor_specialty }}</div>{% endif %}</td>
-                  <td>{{ e.clinic_name or '—' }}</td>
+                  <td>{{ e.clinic_name or '-' }}</td>
                   <td>{% if e.section in sections %}{{ t('section.' ~ e.section) }}{% else %}{{ e.section }}{% endif %}</td>
                 </tr>
               {% endfor %}

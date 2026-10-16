@@ -3,6 +3,8 @@
 {% block title %}{{ t('auth.onboarding.title') }} · {{ t('app.name') }}{% endblock %}
 
 {% block body %}
+{#- Language switch in the corner (Urdu and English are equals). -#}
+<a class="auth-lang btn btn--ghost btn--sm" href="/{{ other_locale }}{{ path_suffix }}" hreflang="{{ other_locale }}">{{ t('nav.language') }}</a>
 <main class="auth-page">
   <div class="auth-shell auth-shell--wide">
     <div class="auth-head auth-head--start">
@@ -37,7 +39,7 @@
       </fieldset>
 
       <div id="doctor-fields" data-hide-when="patient">
-        <div class="card" style="box-shadow:none;padding:var(--sp-6);gap:var(--sp-4)">
+        <div class="subsection">
           {{ f.field('pmdc_number', t('field.pmdc'), value=values.get('pmdc_number', ''),
                      errors=errors, help=t('field.pmdc_help'), placeholder='41192') }}
           {{ f.field('specialty', t('field.specialty'), value=values.get('specialty', ''),

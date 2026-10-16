@@ -1,0 +1,36 @@
+{#- Live status for the document pages (documents.js + doc-status.js).
+
+    `region()` - ONE screen-reader live region, kept OUTSIDE <main> so a swap of the page's
+    content never re-announces it. documents.js writes to it only when the status really
+    changes (never once per check), and carries the page's messages in data-* so they are
+    translated here, not in JavaScript. It is visually hidden with the shared `.sr-only` class.
+
+    `banner()` - the visible "we can't check right now" notice, an ordinary .banner. It is
+    NOT itself a live region (the text is also sent through `region()`, announced once), and it
+    carries words and an icon, so it never relies on colour alone. Put it at the top of <main>. -#}
+{% macro region(statuses=('uploaded', 'processing', 'awaiting_review', 'finalized', 'failed', 'cancelled')) %}
+  <div id="doc-live" class="sr-only" role="status" aria-live="polite" aria-atomic="true"
+       data-msg-temporary="{{ t('documents.live.temporary') }}"
+       data-msg-recovered="{{ t('documents.live.recovered') }}"
+       data-msg-slow="{{ t('documents.live.slow') }}"
+       data-msg-signed-out="{{ t('documents.live.signed_out') }}"
+       data-msg-gone="{{ t('documents.live.gone') }}"
+       data-msg-changed="{{ t('documents.live.changed') }}"
+       data-msg-done="{{ t('documents.live.done') }}"
+       data-msg-swap-failed="{{ t('documents.live.swap_failed') }}"
+       data-msg-checked="{{ t('documents.live.checked') }}"
+       {% for s in statuses %}data-label-{{ s }}="{{ t('documents.status.' ~ s) }}" {% endfor %}></div>
+{% endmacro %}
+
+{% macro banner() %}
+  <div class="banner banner--warn" data-doc-problem hidden>
+    <span aria-hidden="true">!</span>
+    <div>
+      <div class="banner__body" data-doc-problem-text></div>
+      <div class="btn-row">
+        <button class="btn btn--secondary btn--sm" type="button" data-doc-check-now>{{ t('documents.action.check_again') }}</button>
+        <a class="btn btn--secondary btn--sm" href="" data-doc-reload hidden>{{ t('documents.live.reload') }}</a>
+      </div>
+    </div>
+  </div>
+{% endmacro %}

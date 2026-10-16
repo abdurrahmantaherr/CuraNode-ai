@@ -3,8 +3,8 @@
     confirm step; nothing on this page books anything. Names are autoescaped.
 
     Context (built in web/booking.py::_render_doctor):
-      doctor      DoctorCard; clinic — the ClinicRef whose times are shown
-      days        list[DayOptions] — only days with at least one free time
+      doctor      DoctorCard; clinic - the ClinicRef whose times are shown
+      days        list[DayOptions] - only days with at least one free time
       moving      AppointmentRow being moved, or None; moving_text its banner text
       page_error  banner text or None
       clinic_href(clinic), time_href(start), weekday(day), hhmm(start) -#}
@@ -15,7 +15,7 @@
 <div class="shell">
   {% include "partials/topbar.html" %}
 
-  <main class="content">
+  <main class="content" id="main">
     {% if page_error %}
       <div class="banner banner--error" role="alert">
         <span aria-hidden="true">!</span><span>{{ page_error }}</span>
@@ -32,14 +32,14 @@
     <div class="panel stack">
       <div class="entry-row__title">{{ doctor.name }}</div>
       {% if doctor.specialty %}<div class="field-help">{{ doctor.specialty }}</div>{% endif %}
-      <p style="margin:0"><span class="badge badge--ok">{{ t('booking.find.verified') }}</span></p>
+      <p class="flush"><span class="badge badge--ok">{{ t('booking.find.verified') }}</span></p>
       <div>
         <div class="eyebrow">{{ t('booking.field.hospital') }}</div>
-        <p style="display:flex;flex-wrap:wrap;gap:var(--sp-2);margin:var(--sp-2) 0 0">
+        <p class="chips">
           {% for c in doctor.clinics %}
-            <a class="btn btn--sm {% if c.id == clinic.id %}btn--primary{% else %}btn--secondary{% endif %}"
+            <a class="fchip"
                href="{{ clinic_href(c) }}"
-               {% if c.id == clinic.id %}aria-current="true"{% endif %}>{{ c.name }}{% if c.city %} — {{ c.city }}{% endif %}</a>
+               {% if c.id == clinic.id %}aria-current="true"{% endif %}>{{ c.name }}{% if c.city %} - {{ c.city }}{% endif %}</a>
           {% endfor %}
         </p>
       </div>
@@ -55,15 +55,15 @@
     {% for d in days %}
       <section class="panel stack" aria-labelledby="day-{{ d.day.isoformat() }}">
         <h3 id="day-{{ d.day.isoformat() }}" class="panel__label">{{ weekday(d.day) }} <bdi>{{ d.day.isoformat() }}</bdi></h3>
-        <p style="display:flex;flex-wrap:wrap;gap:var(--sp-2);margin:0">
+        <p class="chips">
           {% for start in d.times %}
-            <a class="btn btn--secondary btn--sm mono" dir="ltr" href="{{ time_href(start) }}">{{ hhmm(start) }}</a>
+            <a class="fchip fchip--time" dir="ltr" href="{{ time_href(start) }}">{{ hhmm(start) }}</a>
           {% endfor %}
         </p>
       </section>
     {% endfor %}
 
-    <p><a class="btn btn--secondary" href="/{{ locale }}/patient/doctors">{{ t('booking.doctor.back') }}</a></p>
+    <p><a class="btn btn--ghost" href="/{{ locale }}/patient/doctors">{{ t('booking.doctor.back') }}</a></p>
   </main>
 </div>
 {% endblock %}

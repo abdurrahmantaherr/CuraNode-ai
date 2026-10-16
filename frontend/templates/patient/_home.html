@@ -1,0 +1,111 @@
+{% import "partials/doc_steps.html" as d with context %}
+{% import "partials/icons.html" as ic %}
+{#- Patient home: the next step, the upcoming appointments and the unfinished documents,
+    real rows only. Context: patient_home (built in web/router.py::_patient_home, shaped by
+    web/dashboard.py). Names are autoescaped; never use |safe here.
+
+    The two data-live-region blocks are swapped in place by documents.js while a document is
+    being read (it asks /api/v1/documents/in-progress, never reloads the page), so the wrappers
+    and the data-doc-* attributes on the rows must stay. A block whose data could not be loaded
+    says so and offers a retry; it never shows an empty state it cannot vouch for. -#}
+{% set h = patient_home %}
+
+<div data-live-region="next-step" class="contents">
+  {% if h.step %}
+    {% set kind = h.step.kind %}
+    {% set many = h.step.count > 1 and kind in ('doc_awaiting_review', 'doc_failed') %}
+    <section class="nextstep" aria-labelledby="next-step-h">
+      <div class="nextstep__text">
+        <h2 id="next-step-h" class="nextstep__label">{{ t('dashboard.next.title') }}</h2>
+        <p class="nextstep__lead">{{ t('dashboard.next.' ~ kind ~ ('_many' if many else ''),
+                                       name=h.step.name, when=h.step.when, count=h.step.count) }}</p>
+      </div>
+      <a class="btn btn--primary btn--lg" href="{{ h.step.href }}">{{ t('dashboard.next.cta.' ~ kind) }}{{ ic.i('arrow-right', 'icon--dir') }}</a>
+    </section>
+  {% endif %}
+</div>
+
+<div class="homegrid">
+  <section class="panel" aria-labelledby="appts-h">
+    <h2 id="appts-h" class="panel__label">{{ t('dashboard.appointments.title') }}</h2>
+    {% if not h.appointments_ok %}
+      <div class="banner banner--warn">
+        <span aria-hidden="true">!</span>
+        <div>
+          <div class="banner__body">{{ t('dashboard.appointments.unavailable') }}</div>
+          <a class="btn btn--secondary btn--sm" href="/{{ locale }}/patient">{{ t('dashboard.retry') }}</a>
+        </div>
+      </div>
+    {% elif h.appointments %}
+      <ul class="entry-list">
+        {% for a in h.appointments %}
+          <li class="entry-row">
+            <div class="entry-row__main">
+              <div class="entry-row__title"><a href="{{ a.href }}">{{ a.doctor }}</a></div>
+              <div class="field-help">{{ a.where }}</div>
+              <div class="mono" dir="ltr">{{ a.when }}</div>
+            </div>
+            <span class="badge {{ a.badge }}">{{ a.status }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+      <p class="panel__foot">
+        {% if h.appointments_more %}<span class="field-help">{{ t('dashboard.appointments.more') }}</span> {% endif %}
+        <a class="linkish" href="/{{ locale }}/patient/appointments">{{ t('dashboard.appointments.all') }}{{ ic.i('arrow-right', 'icon--sm icon--dir') }}</a>
+      </p>
+    {% else %}
+      <div class="empty empty--compact">
+        <span class="orb">{{ ic.i('calendar') }}</span>
+        <p class="empty__text">{{ t('booking.list.empty_upcoming') }}</p>
+      </div>
+    {% endif %}
+  </section>
+
+  <div data-live-region="in-progress" class="contents">
+    <section class="panel" aria-labelledby="docs-h">
+      <h2 id="docs-h" class="panel__label">{{ t('dashboard.documents.title') }}</h2>
+      {% if not h.documents_ok %}
+        <div class="banner banner--warn">
+          <span aria-hidden="true">!</span>
+          <div>
+            <div class="banner__body">{{ t('dashboard.documents.unavailable') }}</div>
+            <a class="btn btn--secondary btn--sm" href="/{{ locale }}/patient">{{ t('dashboard.retry') }}</a>
+          </div>
+        </div>
+      {% else %}
+        {% if h.documents %}
+          <ul class="entry-list">
+            {% for doc in h.documents %}
+              <li class="entry-row" data-doc-id="{{ doc.id }}" data-doc-status="{{ doc.status }}"
+                  data-doc-name="{{ doc.name }}">
+                <div class="entry-row__main">
+                  <div class="entry-row__title"><a href="{{ doc.href }}">{{ doc.name }}</a></div>
+                  <div class="mono">{{ doc.type }}</div>
+                  <div class="field-help">{{ doc.hint }}</div>
+                </div>
+                {{ d.state_chip(doc.status) }}
+              </li>
+            {% endfor %}
+          </ul>
+          {% if h.documents_more %}
+            <p class="field-help">{{ t('dashboard.documents.more') }}</p>
+          {% endif %}
+        {% elif h.saved_count %}
+          <div class="empty empty--compact">
+            <span class="orb">{{ ic.i('file-check') }}</span>
+            <p class="empty__text">{{ t('dashboard.documents.nothing_pending') }}</p>
+          </div>
+        {% elif h.saved_count == 0 %}
+          <div class="empty empty--compact">
+            <span class="orb">{{ ic.i('file-text') }}</span>
+            <p class="empty__text">{{ t('dashboard.documents.none_yet') }}</p>
+          </div>
+        {% endif %}
+        {% if h.saved_count %}
+          <p class="field-help">{{ t('dashboard.documents.saved_count', count=h.saved_count) }}</p>
+        {% endif %}
+      {% endif %}
+      <p class="panel__foot"><a class="linkish" href="/{{ locale }}/patient/documents">{{ t('dashboard.documents.all') }}{{ ic.i('arrow-right', 'icon--sm icon--dir') }}</a></p>
+    </section>
+  </div>
+</div>

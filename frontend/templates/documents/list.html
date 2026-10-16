@@ -27,6 +27,7 @@
 {% import "partials/form_field.html" as f %}
 {% import "partials/doc_steps.html" as d with context %}
 {% import "partials/doc_delete.html" as dd with context %}
+{% import "partials/doc_live.html" as live with context %}
 
 {% block title %}{{ t('documents.title') }} · {{ t('app.name') }}{% endblock %}
 
@@ -38,23 +39,28 @@
     <a class="btn btn--secondary btn--sm" href="{{ base }}">{{ t('documents.action.view' if saved else 'documents.action.resume') }}</a>
     {% if item.can_retry %}
       <form method="post" action="{{ base }}/process">
-        <button class="btn btn--primary btn--sm" type="submit"
+        <button class="btn btn--secondary btn--sm" type="submit"
                 data-label="{{ t('documents.action.retry') }}">{{ t('documents.action.retry') }}</button>
       </form>
     {% endif %}
     {% if item.can_download %}
-      <a class="btn btn--secondary btn--sm" href="{{ base }}/file" target="_blank" rel="noopener">{{ t('documents.action.open') }}</a>
-      <a class="btn btn--secondary btn--sm" href="{{ base }}/file?download=1">{{ t('documents.action.download') }}</a>
+      <a class="btn btn--ghost btn--sm" href="{{ base }}/file" target="_blank" rel="noopener">{{ t('documents.action.open') }}</a>
+      <a class="btn btn--ghost btn--sm" href="{{ base }}/file?download=1">{{ t('documents.action.download') }}</a>
     {% endif %}
     {% if item.can_delete %}{{ dd.trigger(item) }}{% endif %}
   </div>
 {% endmacro %}
 
 {% block body %}
+{{ live.region() }}
 <div class="shell">
   {% include "partials/topbar.html" %}
 
-  <main class="content" {% if auto_refresh %}data-autorefresh="5000"{% endif %}>
+  {#- While a document is being read, documents.js asks the API for the in-progress list (no
+      page reload) and swaps only the two data-live-region blocks below when a status changes -
+      the filter form above is never touched, so what has been typed in it is kept. -#}
+  <main class="content" id="main" {% if auto_refresh %}data-doc-list-poll="/api/v1/documents/in-progress?limit=100"{% endif %}>
+    {% if auto_refresh %}{{ live.banner() }}{% endif %}
     {{ f.form_banner(page_error) }}
     {% if notice %}
       <div class="banner banner--ok" role="status"><span>{{ notice }}</span></div>
@@ -93,7 +99,7 @@
       </div>
       <p class="field-help">{{ t('documents.filter.date_help') }}</p>
       <div class="btn-row">
-        <button class="btn btn--primary" type="submit"
+        <button class="btn btn--secondary" type="submit"
                 data-label="{{ t('documents.filter.apply') }}">{{ t('documents.filter.apply') }}</button>
         {% if filters_active %}
           <a class="btn btn--secondary" href="{{ reset_href }}">{{ t('documents.filter.reset') }}</a>
@@ -102,12 +108,15 @@
       </div>
     </form>
 
+    {#- `display:contents`: the wrapper adds no box, so the page keeps its spacing. -#}
+    <div data-live-region="in-progress" class="contents">
     {% if in_progress %}
       <section class="panel stack" aria-labelledby="inprogress-h">
         <h2 id="inprogress-h" class="panel__label">{{ t('documents.section.in_progress') }}</h2>
         <ul class="entry-list">
           {% for item in in_progress %}
-            <li class="entry-row">
+            <li class="entry-row" data-doc-id="{{ item.id }}" data-doc-status="{{ item.status }}"
+                data-doc-name="{{ item.original_filename or t('documents.detail.title') }}">
               <div class="entry-row__main">
                 <div class="entry-row__title">{{ item.original_filename or t('documents.detail.title') }}</div>
                 <div class="mono">{{ type_label(item.document_type) }} · {{ local_date(item.uploaded_at) }}</div>
@@ -127,18 +136,20 @@
         {% endif %}
       </section>
     {% endif %}
+    </div>
 
-    {#- With a filter on, a section that has nothing to show stays out of the way — unless
+    {#- With a filter on, a section that has nothing to show stays out of the way - unless
         nothing matched at all, which is said once, here. -#}
+    <div data-live-region="records" class="contents">
     {% if records or not filters_active or not in_progress %}
       <section class="panel stack" aria-labelledby="records-h">
         <h2 id="records-h" class="panel__label">{{ t('documents.section.records') }}</h2>
 
-        <nav class="topnav" aria-label="{{ t('documents.section.records') }}">
-          <a class="topnav__link" href="{{ tab_href('') }}"
+        <nav class="tabs" aria-label="{{ t('documents.section.records') }}">
+          <a class="tab" href="{{ tab_href('') }}"
              {% if not selected %}aria-current="page"{% endif %}>{{ t('documents.filter.all') }}</a>
           {% for opt in type_options %}
-            <a class="topnav__link" href="{{ tab_href(opt.value) }}"
+            <a class="tab" href="{{ tab_href(opt.value) }}"
                {% if selected == opt.value %}aria-current="page"{% endif %}>{{ opt.label }}</a>
           {% endfor %}
         </nav>
@@ -182,8 +193,10 @@
         {% endif %}
       </section>
     {% endif %}
+    </div>
   </main>
 </div>
 {{ dd.dialog() }}
+<script src="/static/js/doc-status.js" defer></script>
 <script src="/static/js/documents.js" defer></script>
 {% endblock %}

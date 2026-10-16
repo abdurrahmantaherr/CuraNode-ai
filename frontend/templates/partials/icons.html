@@ -1,0 +1,10 @@
+{#- Icons are CSS masks (static/css/icons.css), not inline SVG: they take the text colour,
+    cost no extra markup, and mirror with `icon--dir` in right-to-left.
+
+    Use:   {% import "partials/icons.html" as ic %}
+           {{ ic.i('calendar') }}              decorative (aria-hidden)
+           {{ ic.i('arrow-right', 'icon--dir') }}   mirrored in Urdu -#}
+
+{% macro i(name, cls='') -%}
+<span class="icon i-{{ name }}{% if cls %} {{ cls }}{% endif %}" aria-hidden="true"></span>
+{%- endmacro %}
