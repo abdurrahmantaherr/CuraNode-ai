@@ -369,7 +369,9 @@ async def test_verified_doctor_page_drops_the_coming_later_placeholder(client, d
     assert in_html("dashboard.placeholder") not in (await client.get(DASH_URL)).text
 
 
-async def test_patient_dashboard_keeps_its_placeholder(client, db):
+async def test_patient_dashboard_no_longer_shows_the_placeholder(client, db):
     await make_user(db, email="pat@x.com", role=UserRole.PATIENT)
     await login(client, "pat@x.com")
-    assert in_html("dashboard.placeholder") in (await client.get("/en/patient")).text
+    assert (
+        in_html("dashboard.placeholder") not in (await client.get("/en/patient")).text
+    )  # real content now (Priority 2)

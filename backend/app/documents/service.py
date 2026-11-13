@@ -33,7 +33,7 @@ import asyncio
 import contextlib
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -48,6 +48,7 @@ from ..audit import writer as audit
 from ..db import types as dbtypes
 from ..db.models import (
     DOC_TYPE_LAB,
+    DOC_TYPE_OTHER,
     DOC_TYPE_RX,
     DOC_TYPES,
     IN_PROGRESS_STATUSES,
@@ -79,7 +80,7 @@ from ..errors import (
 )
 from ..log_config import get_logger
 from ..profile import service as profile_service
-from ..profile.schemas import AllergyCreate
+from ..profile.schemas import AllergyCreate, MedicationCreate
 from ..settings import settings
 from . import (
     ai_sections,
@@ -90,6 +91,7 @@ from . import (
     normalization,
     ocr,
     proposals,
+    records,
     sections,
     storage,
     vaccines,
@@ -1437,6 +1439,13 @@ class ConfirmOutcome:
     # Confirmed allergies that were not added: already on the list, the list is full, or
     # the entry was not valid for the profile. The document is finalized either way.
     allergies_skipped: int = 0
+    # Medicines the patient ticked "add to my current medicines" on, added to their profile —
+    # and the ticked ones that were not (already on the list, the list is full, not valid).
+    medicines_added: int = 0
+    medicines_skipped: int = 0
+    # What was copied into the typed clinical tables (counts only; `failed` = it could not be,
+    # the document is saved anyway and `add_to_records` tries again).
+    records: records.RecordsOutcome = field(default_factory=records.RecordsOutcome)
 
 
 def _severity_for_profile(value: str) -> str | None:
@@ -1472,6 +1481,107 @@ async def _add_allergies_to_profile(
             await session.rollback()
             skipped += 1
     return ConfirmOutcome(allergies_added=added, allergies_skipped=skipped)
+
+
+async def _add_medicines_to_profile(
+    session: AsyncSession,
+    actor: Actor,
+    rows: list[dict[str, str]],
+    *,
+    user_agent: str | None,
+) -> tuple[int, int]:
+    """The medicines the patient ticked, added to THEIR OWN current-medicines list through the
+    profile service (same rules as the profile page: a duplicate is refused, the list has a cap,
+    the entry is audited and editable by the patient who recorded it). A prescription is history,
+    not "currently taking", so this happens only for a medicine the patient chose. One that cannot
+    be added never blocks the others and never un-finalizes the saved document.
+    Returns `(added, skipped)`."""
+    added = skipped = 0
+    for cells in rows:
+        spill: list[str] = []
+        strength = records.fit_to_column(cells.get("dosage", "").strip(), 50, "Dosage", spill)
+        frequency = records.fit_to_column(
+            cells.get("frequency", "").strip(), 50, "Frequency", spill
+        )
+        if cells.get("duration", "").strip():
+            spill.append(f"Duration: {cells['duration'].strip()}")
+        try:
+            body = MedicationCreate(
+                name=cells["medicine"],
+                strength=strength,
+                frequency=frequency,
+                notes="; ".join(spill) or None,
+            )
+            await profile_service.add_medication(session, actor, body, user_agent=user_agent)
+            added += 1
+        except (PydanticValidationError, ValidationFailed, DuplicateEntry, ListFull, NotFound):
+            await session.rollback()
+            skipped += 1
+    return added, skipped
+
+
+RECORD_DOC_TYPES = (DOC_TYPE_RX, DOC_TYPE_LAB, DOC_TYPE_OTHER)
+
+
+def _facts_of(doc: Document, *, document_date: date | None, finalized_at: datetime | None):
+    return records.DocumentFacts(
+        id=doc.id,
+        patient_id=doc.patient_id,
+        doc_type=doc.doc_type,
+        document_date=document_date,
+        uploaded_at=doc.uploaded_at,
+        finalized_at=finalized_at,
+        ocr_text=doc.ocr_text,
+    )
+
+
+async def _write_records(
+    session: AsyncSession,
+    actor: Actor,
+    facts: records.DocumentFacts,
+    rows: list[records.RowData],
+    ai_reading: object,
+    *,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> records.RecordsOutcome:
+    """Copy the confirmed values into the typed clinical tables, as ONE transaction of its own
+    (every row, its audit entry, then one commit — or nothing). It runs after the document was
+    saved, so a failure here never undoes the save: it is logged (the error CLASS only) and
+    reported as `failed`, and `add_to_records` can run it again."""
+    try:
+        parsed = None
+        if facts.doc_type == DOC_TYPE_LAB and facts.ocr_text:
+            parsed = sections.apply_ai_sections(
+                sections.structure_document(facts.ocr_text, facts.doc_type), ai_reading
+            )
+        outcome = await records.write(session, doc=facts, rows=rows, parsed=parsed)
+        if outcome.stored:
+            await audit.write(
+                session,
+                action=audit.DOCUMENT_RECORDS,
+                actor_user_id=actor.user_id,
+                actor_role=ACTOR_ROLE,
+                subject_patient_id=facts.patient_id,
+                resource_type=RESOURCE,
+                ip_address=ip,
+                user_agent=user_agent,
+                detail={
+                    "document_id": str(facts.id),
+                    "doc_type": facts.doc_type,
+                    "prescription_items": outcome.prescription_items,
+                    "diagnoses": outcome.diagnoses,
+                    "vital_measurements": outcome.vital_measurements,
+                    "lab_reports": outcome.lab_reports,
+                    "lab_results": outcome.lab_results,
+                },
+            )
+        await session.commit()
+        return outcome
+    except Exception as exc:  # noqa: BLE001 - a records failure must never undo a saved document
+        await session.rollback()
+        log.warning("document_records_failed", error=type(exc).__name__)
+        return records.RecordsOutcome(failed=True)
 
 
 def _existing_groups(
@@ -1631,8 +1741,14 @@ async def confirm_with_outcome(
             return doc, ConfirmOutcome()
         raise InvalidDocumentState()
 
+    # What the typed tables are written from, as plain values (see `records.DocumentFacts`).
+    facts = _facts_of(doc, document_date=new_date, finalized_at=now)
+    ai_reading = job.ai_sections if job is not None else None
+
     # 3. Store the reviewed values next to the proposals.
     corrected_fields = 0
+    cell_ids: dict[int, dict[str, uuid.UUID]] = {}
+    edited: dict[int, set[str]] = {}
     for index, (spec, cells) in final.items():
         for n in spec.fields:
             ext = by_cell.get((index, n))
@@ -1650,8 +1766,10 @@ async def confirm_with_outcome(
             ext.corrected_value = None if cells[n] == proposed else cells[n]
             ext.reviewed_by = actor.user_id
             ext.reviewed_at = now
+            cell_ids.setdefault(index, {})[n] = ext.id
             if ext.corrected_value is not None:
                 corrected_fields += 1
+                edited.setdefault(index, set()).add(n)
 
     allergy_rows = [c for s, c in kept.values() if s is groups.ALLERGIES]
     await audit.write(
@@ -1685,7 +1803,102 @@ async def confirm_with_outcome(
             session, actor, allergy_rows, user_agent=user_agent
         )
         await session.refresh(doc)
+
+    # 5. Medicines the patient ticked "add to my current medicines" on — only kept rows of the
+    #    medicines table; the same service and rules as the profile page.
+    ticked = [
+        kept[i][1]
+        for i in dict.fromkeys(body.current_medicines)
+        if i in kept and kept[i][0] is groups.MEDICINES
+    ]
+    if ticked:
+        added, skipped = await _add_medicines_to_profile(
+            session, actor, ticked, user_agent=user_agent
+        )
+        outcome = replace(outcome, medicines_added=added, medicines_skipped=skipped)
+        if skipped:
+            await session.refresh(doc)  # a skipped one rolled the session back
+
+    # 6. The confirmed values, copied into the typed clinical tables (prescription, diagnosis,
+    #    vital_sign, lab_report ...). A failure here leaves the saved document as it is.
+    if facts.doc_type in RECORD_DOC_TYPES and kept:
+        rows = [
+            records.RowData(
+                index=i,
+                group=spec.key,
+                values=c,
+                cell_ids=cell_ids.get(i, {}),
+                edited=frozenset(edited.get(i, ())),
+            )
+            for i, (spec, c) in kept.items()
+        ]
+        written = await _write_records(
+            session, actor, facts, rows, ai_reading, ip=ip, user_agent=user_agent
+        )
+        outcome = replace(outcome, records=written)
+        if written.failed:
+            await session.refresh(doc)
     return doc, outcome
+
+
+async def add_to_records(
+    session: AsyncSession,
+    actor: Actor,
+    document_id: uuid.UUID,
+    *,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> records.RecordsOutcome:
+    """Run the copy into the typed tables again for a document the patient already saved — the
+    way back when it failed the first time. It reads what the patient CONFIRMED (the cells that
+    carry `reviewed_at`) from the database, so it needs nothing from the request; a document that
+    already has records is left alone, so pressing it twice cannot double anything. Only the
+    patient's own upload: a document a doctor wrote is not theirs to copy."""
+    doc = await _owned(session, actor, document_id)
+    if (
+        doc.status != DocumentStatus.FINALIZED.value
+        or doc.doc_type not in RECORD_DOC_TYPES
+        or doc.uploaded_by != actor.user_id
+    ):
+        raise InvalidDocumentState()
+    # Two presses of "Try again" at once must not both pass the "already has records" check: the
+    # second waits here until the first has committed, then finds the records and does nothing.
+    # (A prescription is also guarded by a unique index, but a lab report and diagnoses are not,
+    # and a loser there would report a failure for a copy that in fact succeeded.)
+    await session.execute(select(Document.id).where(Document.id == doc.id).with_for_update())
+    job = await _job(session, doc.id)
+    existing = await _extractions(session, doc)
+    spec_of = _existing_groups(existing)
+    by_row: dict[int, list[OcrExtraction]] = {}
+    for cell in existing:
+        by_row.setdefault(cell.row_index or 0, []).append(cell)
+    rows: list[records.RowData] = []
+    for index, cells in by_row.items():
+        spec = spec_of.get(index)
+        if spec is None or not any(c.reviewed_at for c in cells):
+            continue  # a proposal the patient never reviewed is not a confirmed row
+        values = {c.field_name: _final_value(c) for c in cells}
+        if not any(values.values()):
+            continue
+        rows.append(
+            records.RowData(
+                index=index,
+                group=spec.key,
+                values=values,
+                cell_ids={c.field_name: c.id for c in cells},
+                edited=frozenset(c.field_name for c in cells if c.corrected_value is not None),
+            )
+        )
+    facts = _facts_of(doc, document_date=doc.document_date, finalized_at=doc.finalized_at)
+    return await _write_records(
+        session,
+        actor,
+        facts,
+        rows,
+        job.ai_sections if job is not None else None,
+        ip=ip,
+        user_agent=user_agent,
+    )
 
 
 # ── Doctor-generated prescription (no OCR, no patient review) ────────────
@@ -1893,7 +2106,12 @@ async def create_doctor_prescription(
 
 
 async def _tombstone(
-    session: AsyncSession, document_id: uuid.UUID, deletable: list[str], *, scrub: bool
+    session: AsyncSession,
+    document_id: uuid.UUID,
+    deletable: list[str],
+    *,
+    scrub: bool,
+    remove_records: bool = False,
 ) -> bool:
     """The database half of retiring a document, in the caller's transaction: ONE conditional
     UPDATE claims the row (taking its row lock, so a concurrent confirm or retry waits and then
@@ -1915,6 +2133,8 @@ async def _tombstone(
     )
     if claimed.rowcount != 1:
         return False
+    if remove_records:  # the typed rows written from this document go with it
+        await records.remove_for_document(session, document_id)
     job = await _job(session, document_id)
     if job is not None:
         await session.execute(delete(OcrExtraction).where(OcrExtraction.job_id == job.id))
@@ -1936,6 +2156,7 @@ async def _retire(
     detail: dict[str, object],
     ip: str | None,
     user_agent: str | None,
+    remove_records: bool = False,
 ) -> Document:
     """Discard or delete a document — the one routine behind both, so neither can leave a file
     behind or report a success that did not happen.
@@ -1952,7 +2173,9 @@ async def _retire(
     document_id, patient_id, key = doc.id, doc.patient_id, doc.object_key
 
     async def record() -> bool:
-        if not await _tombstone(session, document_id, deletable, scrub=scrub):
+        if not await _tombstone(
+            session, document_id, deletable, scrub=scrub, remove_records=remove_records
+        ):
             return False
         await audit.write(
             session,
@@ -2088,4 +2311,6 @@ async def delete_document(
         },
         ip=ip,
         user_agent=user_agent,
+        # a saved document may have records written from it; one that never was saved has none
+        remove_records=finalized and doc.doc_type in RECORD_DOC_TYPES,
     )

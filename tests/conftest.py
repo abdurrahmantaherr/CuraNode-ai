@@ -93,6 +93,17 @@ def no_ai_providers(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def fresh_records_probe():
+    """`documents/records.py` remembers whether the database has migration c8e5a41f9b27 (a
+    process-wide answer). Every test starts without that memory."""
+    from app.documents import records
+
+    records.reset_readiness()
+    yield
+    records.reset_readiness()
+
+
+@pytest.fixture(autouse=True)
 def fake_supabase(monkeypatch):
     """Every test gets its own isolated Supabase Auth double — no network,
     no shared state between tests, and no real JWKS fetch."""

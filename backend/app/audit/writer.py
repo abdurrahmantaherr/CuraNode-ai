@@ -100,6 +100,9 @@ DOCTOR_AFFILIATION_ADD = "doctor.affiliation.add"
 DOCUMENT_UPLOAD = "document.upload"
 DOCUMENT_PROCESS = "document.process"
 DOCUMENT_CONFIRM = "document.confirm"
+# Confirmed values copied into the typed clinical tables (prescription, diagnosis, vital_sign,
+# lab_report ...). `detail` holds the document id, its type and COUNTS only.
+DOCUMENT_RECORDS = "document.records"
 DOCUMENT_CANCEL = "document.cancel"
 # A patient deleting a document (any status). `detail` carries the id, the type and the
 # status it had — never the file name, text or values.

@@ -1,31 +1,30 @@
-{#- D4 v1 — the doctor's consented patients.
+{% import "partials/icons.html" as ic %}
+{#- D4 v1 - the doctor's consented patients.
     Context: patients  list[PatientRow] (name, age, gender, passport_no, href)
     Names are autoescaped; never use |safe here. No clinical data belongs on
     this list. The passport number is forced left-to-right on the Urdu page. -#}
-<div class="panel" style="margin-top:var(--sp-5)">
-  <div class="panel__label">{{ t('doctor_dashboard.patients.title') }}</div>
+<section class="panel" aria-labelledby="mypatients-h">
+  <h2 id="mypatients-h" class="panel__label">{{ t('doctor_dashboard.patients.title') }}</h2>
   {% if patients %}
-    <table class="patient-table">
-      <thead>
-        <tr>
-          <th scope="col">{{ t('doctor_dashboard.col.name') }}</th>
-          <th scope="col">{{ t('doctor_dashboard.col.age') }}</th>
-          <th scope="col">{{ t('doctor_dashboard.col.gender') }}</th>
-          <th scope="col">{{ t('doctor_dashboard.col.passport') }}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in patients %}
-          <tr>
-            <td><a href="{{ row.href }}">{{ row.name }}</a></td>
-            <td>{{ row.age }}</td>
-            <td>{{ row.gender }}</td>
-            <td dir="ltr" class="mono">{{ row.passport_no }}</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <ul class="plist">
+      {% for row in patients %}
+        <li class="plist__item">
+          <span class="avatar avatar--soft" aria-hidden="true">{{ row.name[:1] }}</span>
+          <div class="plist__main">
+            <a class="plist__name" href="{{ row.href }}">{{ row.name }}</a>
+            <div class="plist__meta">
+              <span>{{ row.age }}</span><span>{{ row.gender }}</span>
+              <span class="mono" dir="ltr">{{ row.passport_no }}</span>
+            </div>
+          </div>
+          <a class="btn btn--ghost btn--icon" href="{{ row.href }}" aria-label="{{ t('doctor_dashboard.open') }}: {{ row.name }}">{{ ic.i('chevron-right', 'icon--dir') }}</a>
+        </li>
+      {% endfor %}
+    </ul>
   {% else %}
-    <p style="margin:0;font-size:13.5px;color:var(--muted)">{{ t('doctor_dashboard.empty') }}</p>
+    <div class="empty empty--compact">
+      <span class="orb">{{ ic.i('users') }}</span>
+      <p class="empty__text">{{ t('doctor_dashboard.empty') }}</p>
+    </div>
   {% endif %}
-</div>
+</section>

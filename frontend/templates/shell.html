@@ -1,15 +1,27 @@
 {% extends "base.html" %}
-{#- Signed-in shell. Dashboards are placeholders: their content belongs to
-    later features. What is real here is the role-gated routing and the
-    unverified-doctor banner. -#}
+{% import "partials/icons.html" as ic %}
+{% import "partials/doc_live.html" as live with context %}
+{#- Signed-in dashboard: a patient's, a verified doctor's, or a pending doctor's.
+    Context from web/router.py::_guarded: full_name, initials, role_label, passport_no (a
+    patient has one), links, crumb, page_title, the banner flags, `pending_doctor`, and
+      patient_home   {step, appointments[_ok|_more], documents[_ok|_more], polling, saved_count}
+      doctor_home    {summary, unavailable[], patient_count}
+      patients, appointments_today, queue_today (each present only when it could be loaded).
+    A block that could not be loaded is named by its own banner; an empty state is never drawn
+    for data that is unknown. -#}
 
 {% block body %}
+{% set first = (full_name or '').split(' ')[0] %}
+{% set polling = patient_home is defined and patient_home.polling %}
+{% if polling %}{{ live.region() }}{% endif %}
 <div class="shell">
   {% include "partials/topbar.html" %}
 
-  <main class="content">
+  {#- A patient's home follows a document that is being read in place (documents.js, no reload). -#}
+  <main class="content dash rise" id="main"{% if polling %} data-doc-list-poll="/api/v1/documents/in-progress?limit=100"{% endif %}>
+    {% if polling %}{{ live.banner() }}{% endif %}
     {% if show_unverified_banner %}
-      {#- FR3 — persistent and non-dismissible. No patient-data affordance is
+      {#- FR3 - persistent and non-dismissible. No patient-data affordance is
           rendered anywhere behind it. -#}
       <div class="banner banner--warn" role="status">
         <span aria-hidden="true">!</span>
@@ -30,45 +42,202 @@
       </div>
     {% endif %}
 
-    <div class="panel">
-      <div class="panel__label">{{ page_title }}</div>
-      <div style="display:flex;gap:var(--sp-5);align-items:center">
-        <div class="avatar" aria-hidden="true">{{ initials }}</div>
-        <div>
-          <div style="font-size:14.5px;font-weight:600">{{ full_name }}</div>
-          <div class="mono">{{ role_label }}{% if passport_no %} · {{ passport_no }}{% endif %}</div>
+    {% if passport_no %}
+      {#- Patient -#}
+      <header class="greet">
+        <h2 class="greet__title" data-greeting
+            data-morning="{{ t('dashboard.greeting.morning', name=first) }}"
+            data-afternoon="{{ t('dashboard.greeting.afternoon', name=first) }}"
+            data-evening="{{ t('dashboard.greeting.evening', name=first) }}">{{ t('dashboard.welcome', name=first) }}</h2>
+        <p class="greet__date" data-today hidden></p>
+        <a class="btn btn--ghost btn--sm greet__link" href="/{{ locale }}/patient/profile">{{ t('profile.open_link') }}</a>
+      </header>
+
+      <section class="passport-hero" aria-labelledby="hero-h">
+        <div class="passport-hero__main">
+          <h2 id="hero-h" class="passport-hero__label">{{ t('patient.dashboard.passport') }}</h2>
+          <p class="passport-hero__name">{{ full_name }}</p>
+          <div class="passport-hero__idrow">
+            <span class="passport-hero__id" dir="ltr">{{ passport_no }}</span>
+            <button class="hero-copy" type="button" hidden data-copy="{{ passport_no }}" data-copied="{{ t('dashboard.passport.copied') }}">
+              {{ ic.i('copy', 'icon--sm') }}<span data-copy-label>{{ t('dashboard.passport.copy') }}</span>
+            </button>
+          </div>
+          <p class="passport-hero__help">{{ t('passport.subtitle') }}</p>
+          <div class="passport-hero__actions">
+            <a class="btn btn--on-dark btn--lg" href="/{{ locale }}/patient/passport">{{ ic.i('qr-code') }}{{ t('dashboard.passport.show_qr') }}</a>
+            <a class="btn btn--outline-dark btn--lg" href="/{{ locale }}/patient/access">{{ ic.i('shield-check') }}{{ t('dashboard.passport.manage') }}</a>
+          </div>
         </div>
-        {% if passport_no %}
-          <span class="chip">{{ t('patient.dashboard.passport') }}</span>
-        {% endif %}
+        <div class="passport-hero__mark" aria-hidden="true">{{ ic.i('qr-code', 'icon--xl') }}</div>
+      </section>
+
+      {% if patient_home is defined %}{% include "patient/_home.html" %}{% endif %}
+
+      <section aria-labelledby="quick-h">
+        <h2 id="quick-h" class="sr-only">{{ t('dashboard.quick.title') }}</h2>
+        <div class="qgrid qgrid--3">
+          <a class="qtile" href="/{{ locale }}/patient/documents/new">
+            <span class="orb">{{ ic.i('upload') }}</span>
+            <span class="qtile__label">{{ t('documents.action.upload') }}</span>
+            {{ ic.i('chevron-right', 'icon--sm icon--dir qtile__go') }}
+          </a>
+          <a class="qtile" href="/{{ locale }}/patient/doctors">
+            <span class="orb">{{ ic.i('stethoscope') }}</span>
+            <span class="qtile__label">{{ t('nav.find_doctor') }}</span>
+            {{ ic.i('chevron-right', 'icon--sm icon--dir qtile__go') }}
+          </a>
+          <a class="qtile" href="/{{ locale }}/patient/timeline">
+            <span class="orb">{{ ic.i('history') }}</span>
+            <span class="qtile__label">{{ t('nav.timeline') }}</span>
+            {{ ic.i('chevron-right', 'icon--sm icon--dir qtile__go') }}
+          </a>
+        </div>
+      </section>
+
+      <p class="trust">{{ ic.i('lock', 'icon--sm') }}<span>{{ t('dashboard.privacy_note') }}</span></p>
+
+    {% elif patients is defined %}
+      {#- Verified doctor. Every fact is drawn once: the schedule lists the day's
+          appointments (with the queue state beside a patient when the name is
+          unique), the queue board is the live view, "Next up" is the one next step. -#}
+      {% set appts = appointments_today or [] %}
+      {% set sessions = queue_today or [] %}
+      {% set ns = namespace(start='', end='', clinics=[], next_i=-1) %}
+      {% for v in sessions %}
+        {% set st = v.start.strftime('%H:%M') %}{% set en = v.end.strftime('%H:%M') %}
+        {% if not ns.start or st < ns.start %}{% set ns.start = st %}{% endif %}
+        {% if not ns.end or en > ns.end %}{% set ns.end = en %}{% endif %}
+        {% if v.clinic_name not in ns.clinics %}{% set ns.clinics = ns.clinics + [v.clinic_name] %}{% endif %}
+      {% endfor %}
+
+      {#- Queue state by patient name, used only where the name is unique on both sides. -#}
+      {% set names = appts|map(attribute='name')|list %}
+      {% set qnames = namespace(all=[]) %}
+      {% for v in sessions %}
+        {% if v.in_room %}{% set qnames.all = qnames.all + [v.in_room.patient_name] %}{% endif %}
+        {% for l in v.waiting %}{% set qnames.all = qnames.all + [l.patient_name] %}{% endfor %}
+        {% for l in v.expected %}{% set qnames.all = qnames.all + [l.patient_name] %}{% endfor %}
+        {% for l in v.seen %}{% set qnames.all = qnames.all + [l.patient_name] %}{% endfor %}
+      {% endfor %}
+      {% set qstate = {} %}
+      {% for v in sessions %}
+        {% if v.in_room and qnames.all.count(v.in_room.patient_name) == 1 %}{% set _ = qstate.update({v.in_room.patient_name: ['room', 0]}) %}{% endif %}
+        {% for l in v.waiting %}{% if qnames.all.count(l.patient_name) == 1 %}{% set _ = qstate.update({l.patient_name: ['waiting', loop.index]}) %}{% endif %}{% endfor %}
+        {% for l in v.seen %}{% if qnames.all.count(l.patient_name) == 1 %}{% set _ = qstate.update({l.patient_name: ['seen', 0]}) %}{% endif %}{% endfor %}
+      {% endfor %}
+
+      {#- The row to look at: the first appointment still to be seen. -#}
+      {% for r in appts %}
+        {% if ns.next_i < 0 and not r.cancelled and r.badge == 'badge--ok' and not (names.count(r.name) == 1 and qstate.get(r.name) and qstate.get(r.name)[0] == 'seen') %}{% set ns.next_i = loop.index0 %}{% endif %}
+      {% endfor %}
+
+      <div class="dhead">
+        <p class="dhead__sub">
+          <span data-today hidden></span>
+          {% if ns.clinics %}<span>{{ ns.clinics|join(', ') }}</span><bdi class="mono" dir="ltr">{{ ns.start }}-{{ ns.end }}</bdi>{% endif %}
+        </p>
+        <a class="btn btn--ghost btn--sm" href="/{{ locale }}/doctor">{{ ic.i('refresh', 'icon--sm') }}{{ t('queue.card.refresh') }}</a>
       </div>
-      {% if patients is not defined %}
-        {#- A verified doctor's dashboard has real content now (D4). -#}
-        <p style="margin:var(--sp-6) 0 0;font-size:13.5px;color:var(--muted);max-width:64ch">
-          {{ t('dashboard.placeholder') }}
-        </p>
-      {% endif %}
-      {% if links %}
-        <p style="margin:var(--sp-5) 0 0;display:flex;flex-wrap:wrap;gap:var(--sp-2)">
-          {% for link in links %}
-            <a class="btn btn--secondary" href="{{ link.href }}">{{ link.label }}</a>
-          {% endfor %}
-        </p>
-      {% endif %}
-    </div>
 
-    {% if appointments_today is defined %}
-      {% include "doctor/_appointments_today.html" %}
-    {% endif %}
+      <div class="dgrid">
+        <div class="dgrid__main">
+          <form class="lookup" method="post" action="/{{ locale }}/doctor/passport-lookup" novalidate>
+            <label class="lookup__label" for="dash-passport">{{ t('lookup.open_link') }}</label>
+            <div class="search search--lg">
+              {{ ic.i('search') }}
+              <input class="search__input mono" id="dash-passport" name="passport_no" type="text" required maxlength="16"
+                     placeholder="CN-XXXX-XXXX" dir="ltr" autocomplete="off" autocapitalize="characters" spellcheck="false">
+              <button class="btn btn--primary" type="submit">{{ t('lookup.submit') }}</button>
+            </div>
+            <p class="field-help">{{ t('lookup.subtitle') }}</p>
+          </form>
 
-    {% if queue_today is defined %}
-      {% set queue_views = queue_today %}
-      {% include "queue/_doctor_queue.html" %}
-    {% endif %}
+          {#- Blocks that could not load, the counts, and the next step (web/dashboard.py) -#}
+          {% if doctor_home is defined %}{% include "doctor/_next_step.html" %}{% endif %}
 
-    {% if patients is defined %}
-      {% include "doctor/_patient_list.html" %}
+          {% if appointments_today is defined %}
+            <section class="panel" aria-labelledby="sched-h">
+              <h2 id="sched-h" class="panel__label">{{ t('dashboard.schedule.title') }}</h2>
+              {% if appts %}
+                <table class="table table--stack sched">
+                  <thead>
+                    <tr>
+                      <th scope="col">{{ t('booking.field.time') }}</th>
+                      <th scope="col">{{ t('booking.col.patient') }}</th>
+                      <th scope="col">{{ t('booking.field.status') }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for r in appts %}
+                      {% set q = qstate.get(r.name) if names.count(r.name) == 1 else none %}
+                      <tr{% if loop.index0 == ns.next_i %} class="is-next" aria-current="true"{% elif r.cancelled %} class="is-cancelled"{% endif %}>
+                        <td dir="ltr" class="mono">{{ r.time }}</td>
+                        <td>{{ r.name }}</td>
+                        <td>
+                          {% if q and q[0] == 'room' %}<span class="badge badge--ok">{{ t('queue.in_room') }}</span>
+                          {% elif q and q[0] == 'waiting' %}<span class="badge badge--warn">{{ t('queue.badge.waiting', position=q[1]) }}</span>
+                          {% elif q and q[0] == 'seen' %}<span class="badge badge--neutral">{{ t('booking.status.done') }}</span>
+                          {% else %}<span class="badge {{ r.badge }}">{{ r.status }}</span>{% endif %}
+                        </td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              {% else %}
+                <div class="empty empty--compact">
+                  <span class="orb">{{ ic.i('calendar') }}</span>
+                  <p class="empty__text">{{ t('booking.today.empty') }}</p>
+                </div>
+              {% endif %}
+              <p class="panel__foot"><a class="linkish" href="/{{ locale }}/doctor/appointments">{{ t('booking.today.all') }}{{ ic.i('arrow-right', 'icon--sm icon--dir') }}</a></p>
+            </section>
+          {% endif %}
+
+          {% if queue_today is defined %}
+            {% set queue_views = sessions %}
+            {% include "queue/_doctor_queue.html" %}
+          {% endif %}
+        </div>
+
+        <aside class="dgrid__side">
+          {% include "doctor/_patient_list.html" %}
+          <a class="qtile" href="/{{ locale }}/doctor/schedule">
+            <span class="orb">{{ ic.i('clock') }}</span>
+            <span class="qtile__label">{{ t('schedule.open_link') }}</span>
+            {{ ic.i('chevron-right', 'icon--sm icon--dir qtile__go') }}
+          </a>
+        </aside>
+      </div>
+
+    {% elif pending_doctor %}
+      {#- A doctor awaiting verification: no patient data, but one real thing to do meanwhile (D7). -#}
+      <section class="panel stack">
+        <h2 class="panel__label">{{ page_title }}</h2>
+        <p class="lead">{{ t('doctor.pending_next') }}</p>
+        {% if links %}
+          <p class="btn-row">
+            {% for link in links %}<a class="btn btn--secondary" href="{{ link.href }}">{{ ic.i('clock') }}{{ link.label }}</a>{% endfor %}
+          </p>
+        {% endif %}
+      </section>
+
+    {% else %}
+      {#- A role with no home yet (the clinic admin's shell). -#}
+      <section class="panel stack">
+        <h2 class="panel__label">{{ page_title }}</h2>
+        <p class="lead">{{ t('dashboard.placeholder') }}</p>
+        {% if links %}
+          <p class="btn-row">
+            {% for link in links %}<a class="btn btn--secondary" href="{{ link.href }}">{{ link.label }}</a>{% endfor %}
+          </p>
+        {% endif %}
+      </section>
     {% endif %}
   </main>
 </div>
+{% if polling %}
+<script src="/static/js/doc-status.js" defer></script>
+<script src="/static/js/documents.js" defer></script>
+{% endif %}
 {% endblock %}

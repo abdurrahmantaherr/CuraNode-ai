@@ -1,6 +1,6 @@
 /* Progressive enhancement for the patient profile page.
 
-   Every form on the page works with JavaScript disabled — add, edit and
+   Every form on the page works with JavaScript disabled - add, edit and
    remove all post and redirect, and the remove confirmation is a native
    <details>. This file only adds the submitting-state guard (same contract
    as auth.js): disable THAT form's submit button and show a spinner, so a

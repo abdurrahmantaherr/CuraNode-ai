@@ -206,7 +206,7 @@ async def test_pending_dashboard_has_only_the_schedule_link(doctor_client):
     assert 'href="/en/doctor/schedule"' in body
     assert "Manage schedule" in body
     assert "passport-lookup" not in body  # FR3: no patient-data affordance
-    assert "This area arrives with a later feature" in body  # still the placeholder page
+    assert "While your account is being verified" in body  # a real next step, not a placeholder
 
 
 async def test_verified_dashboard_has_lookup_and_schedule_links(client, db, clinic):

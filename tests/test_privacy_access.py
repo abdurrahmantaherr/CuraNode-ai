@@ -146,9 +146,10 @@ def test_ac29_revision_chain_is_single_and_unbroken():
     config = Config()
     config.set_main_option("script_location", str(ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["92b61c6e9db4"]
+    assert script.get_heads() == ["c8e5a41f9b27"]
     chain = [rev.revision for rev in script.walk_revisions("base", "heads")]
     assert chain == [
+        "c8e5a41f9b27",  # records from confirmed documents
         "92b61c6e9db4",  # P5 booking index
         "a7d3c89106f9",  # D-VERIFY v1
         "291c06a2b86f",  # D7

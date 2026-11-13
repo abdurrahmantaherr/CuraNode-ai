@@ -11,7 +11,7 @@
   </thead>
   <tbody>
     {% for row in day_rows %}
-      <tr{% if row.cancelled %} style="color:var(--muted)"{% endif %}>
+      <tr{% if row.cancelled %} class="is-cancelled"{% endif %}>
         <td dir="ltr" class="mono">{{ row.time }}</td>
         <td>{{ row.name }}</td>
         <td><span class="badge {{ row.badge }}">{{ row.status }}</span></td>

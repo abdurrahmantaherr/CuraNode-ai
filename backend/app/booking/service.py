@@ -32,7 +32,7 @@ from ..db.models import (
     UserRole,
     VerificationStatus,
 )
-from ..deps import Actor
+from ..deps import Actor, remembered_patient_id
 from ..errors import BookingRefused, NotFound
 from ..queueing.schemas import CHANNEL_WALK_IN
 from ..schedule import service as schedule_service
@@ -525,6 +525,22 @@ async def reschedule(
 
 
 # ── Lists ────────────────────────────────────────────────────────────────
+def _row(appointment: Appointment, doctor: Doctor, clinic: Clinic, now: datetime) -> AppointmentRow:
+    start = slots.as_utc(appointment.slot_start)
+    return AppointmentRow(
+        id=appointment.id,
+        doctor_id=doctor.id,
+        doctor_name=doctor.full_name,
+        specialty=doctor.specialty,
+        clinic_id=clinic.id,
+        clinic_name=clinic.name,
+        starts_at=start.astimezone(dbtypes.PKT),
+        status=appointment.status,
+        upcoming=appointment.status in HELD_STATUSES and start >= now,
+        can_change=appointment.status == "booked" and start > now,
+    )
+
+
 async def _patient_rows(session: AsyncSession, patient_id: uuid.UUID) -> list[AppointmentRow]:
     stmt = (
         select(Appointment, Doctor, Clinic)
@@ -534,24 +550,34 @@ async def _patient_rows(session: AsyncSession, patient_id: uuid.UUID) -> list[Ap
         .order_by(Appointment.slot_start)
     )
     now = _now()
-    rows: list[AppointmentRow] = []
-    for appointment, doctor, clinic in (await session.execute(stmt)).all():
-        start = slots.as_utc(appointment.slot_start)
-        rows.append(
-            AppointmentRow(
-                id=appointment.id,
-                doctor_id=doctor.id,
-                doctor_name=doctor.full_name,
-                specialty=doctor.specialty,
-                clinic_id=clinic.id,
-                clinic_name=clinic.name,
-                starts_at=start.astimezone(dbtypes.PKT),
-                status=appointment.status,
-                upcoming=appointment.status in HELD_STATUSES and start >= now,
-                can_change=appointment.status == "booked" and start > now,
-            )
+    return [_row(a, d, c, now) for a, d, c in (await session.execute(stmt)).all()]
+
+
+async def next_appointments(
+    session: AsyncSession, actor: Actor, *, limit: int = 3
+) -> list[AppointmentRow]:
+    """The caller's next upcoming appointments (booked or checked in, not yet started), soonest
+    first, at most `limit`. One query that reads only what is shown — the dashboard must not
+    load a patient's whole history. A caller who is not a patient is `NotFound`."""
+    if actor.role != UserRole.PATIENT.value:
+        raise NotFound()
+    patient_id = remembered_patient_id(session, actor.user_id)
+    if patient_id is None:
+        patient_id = (await _patient(session, actor)).id
+    now = _now()
+    stmt = (
+        select(Appointment, Doctor, Clinic)
+        .join(Doctor, Doctor.id == Appointment.doctor_id)
+        .join(Clinic, Clinic.id == Appointment.clinic_id)
+        .where(
+            Appointment.patient_id == patient_id,
+            Appointment.status.in_(HELD_STATUSES),
+            Appointment.slot_start >= now,
         )
-    return rows
+        .order_by(Appointment.slot_start)
+        .limit(limit)
+    )
+    return [_row(a, d, c, now) for a, d, c in (await session.execute(stmt)).all()]
 
 
 async def my_appointments(

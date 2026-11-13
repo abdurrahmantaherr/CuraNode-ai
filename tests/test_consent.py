@@ -471,8 +471,14 @@ def test_no_direct_clinical_queries():
     backend = Path(__file__).resolve().parent.parent / "backend"
     offenders = []
     for path in backend.rglob("*.py"):
-        # the gateway itself, and the timeline's readers it calls (P3)
-        if (path.parent.name, path.name) in {("consent", "gateway.py"), ("timeline", "sources.py")}:
+        # the gateway itself, the timeline's readers it calls (P3), and `documents/records.py`, which
+        # only writes and removes the rows made from the patient's OWN confirmed document (it reads
+        # nobody's clinical record: every statement is keyed on that document's id)
+        if (path.parent.name, path.name) in {
+            ("consent", "gateway.py"),
+            ("timeline", "sources.py"),
+            ("documents", "records.py"),
+        }:
             continue
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if (
@@ -485,8 +491,8 @@ def test_no_direct_clinical_queries():
                     if name in guarded:
                         offenders.append(f"{path}:{node.lineno} select({name})")
     assert not offenders, (
-        "clinical tables queried outside consent/gateway.py and timeline/sources.py: "
-        + "; ".join(offenders)
+        "clinical tables queried outside consent/gateway.py, timeline/sources.py and "
+        "documents/records.py: " + "; ".join(offenders)
     )
 
 

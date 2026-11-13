@@ -498,6 +498,7 @@ async def _render_detail(
     banner: str | None = None,
     just_saved: bool = False,
     saved_notes: list[str] | None = None,
+    records_failed: bool = False,
 ) -> Response:
     try:
         detail = await doc_service.get_detail(session, actor, document_id)
@@ -535,6 +536,7 @@ async def _render_detail(
         banner=banner,
         just_saved=just_saved,
         saved_notes=saved_notes or [],
+        records_failed=records_failed,
         can_preview_image=(detail.mime_type or "").startswith("image/"),
         processing=detail.status in ("uploaded", "processing"),
         **ctx,
@@ -551,6 +553,14 @@ async def detail_page(
     saved: str = "",
     allergies: str = "",
     skipped: str = "",
+    meds: str = "",
+    medskipped: str = "",
+    records: str = "",
+    rx: str = "",
+    dx: str = "",
+    vt: str = "",
+    lab: str = "",
+    labskip: str = "",
 ) -> Response:
     if (redirect := _guard(request, locale, actor)) is not None:
         return redirect
@@ -567,13 +577,39 @@ async def detail_page(
             page_error=translate("errors.not_found", loc),
         )
     notes: list[str] = []
+    records_failed = False
     if saved == "1":
-        if allergies.isdigit() and int(allergies) > 0:
-            notes.append(translate("documents.saved.allergies_added", loc, count=int(allergies)))
-        if skipped.isdigit() and int(skipped) > 0:
-            notes.append(translate("documents.saved.allergies_skipped", loc, count=int(skipped)))
+        if n := _count(allergies):
+            notes.append(translate("documents.saved.allergies_added", loc, count=n))
+        if n := _count(skipped):
+            notes.append(translate("documents.saved.allergies_skipped", loc, count=n))
+        if n := _count(meds):
+            notes.append(translate("documents.saved.medicines_added", loc, count=n))
+        if n := _count(medskipped):
+            notes.append(translate("documents.saved.medicines_skipped", loc, count=n))
+        if records == "failed":
+            records_failed = True
+            notes.append(translate("documents.saved.records_failed", loc))
+        else:
+            parts = (("items", rx), ("diagnoses", dx), ("vitals", vt), ("labs", lab))
+            summary = ", ".join(
+                translate(f"documents.saved.records_part.{key}", loc, count=_count(value))
+                for key, value in parts
+                if _count(value)
+            )
+            if summary:
+                notes.append(translate("documents.saved.records_added", loc, summary=summary))
+            if n := _count(labskip):
+                notes.append(translate("documents.saved.records_lab_skipped", loc, count=n))
     return await _render_detail(
-        request, loc, session, actor, parsed, just_saved=saved == "1", saved_notes=notes
+        request,
+        loc,
+        session,
+        actor,
+        parsed,
+        just_saved=saved == "1",
+        saved_notes=notes,
+        records_failed=records_failed,
     )
 
 
@@ -703,6 +739,29 @@ async def retry_process(
     return _redirect_detail(loc, parsed)
 
 
+def _count(value: str) -> int:
+    """A count carried in the address after a save: a plain number or nothing (never trusted
+    for anything but showing it)."""
+    return int(value) if value.isdigit() and int(value) < 10_000 else 0
+
+
+def _records_query(outcome: Any) -> str:
+    """What was copied into the typed health records, as address parameters (counts only)."""
+    if outcome.failed:
+        return "&records=failed"
+    query = ""
+    for key, count in (
+        ("rx", outcome.prescription_items),
+        ("dx", outcome.diagnoses),
+        ("vt", outcome.vital_measurements),
+        ("lab", outcome.lab_results),
+        ("labskip", outcome.lab_skipped),
+    ):
+        if count:
+            query += f"&{key}={count}"
+    return query
+
+
 def _parse_review_form(
     form: Any, names: frozenset[str] | tuple[str, ...]
 ) -> tuple[dict[int, dict[str, str]], set[int]]:
@@ -767,6 +826,12 @@ async def confirm_submit(
         document_date=parsed_date,
         # The page shows every table of the document, so every one was reviewed.
         groups=[spec.key for spec in groups.groups_for(doc.doc_type)],
+        # The medicines the patient ticked "add to my current medicines" on.
+        current_medicines=[
+            int(v)
+            for v in form.getlist("current_medicine")[:100]
+            if str(v).isdigit() and int(v) <= 10_000
+        ],
     )
     outcome = doc_service.ConfirmOutcome()
     try:
@@ -795,7 +860,50 @@ async def confirm_submit(
         query += f"&allergies={outcome.allergies_added}"
     if outcome.allergies_skipped:
         query += f"&skipped={outcome.allergies_skipped}"
+    if outcome.medicines_added:
+        query += f"&meds={outcome.medicines_added}"
+    if outcome.medicines_skipped:
+        query += f"&medskipped={outcome.medicines_skipped}"
+    query += _records_query(outcome.records)
     return RedirectResponse(f"/{loc}/patient/documents/{parsed}?{query}", status_code=303)
+
+
+@router.post("/{locale}/patient/documents/{document_id}/records")
+async def add_to_records_submit(
+    request: Request, locale: str, document_id: str, session: SessionDep, actor: OptionalActorDep
+) -> Response:
+    """Copy a saved document's confirmed values into the health records again — the way back
+    when that failed right after the save. Harmless to press twice."""
+    redirect, loc, parsed = await _action_prologue(request, locale, document_id, actor)
+    if redirect is not None:
+        return redirect
+    assert actor is not None
+    if parsed is None:
+        return _redirect_detail(loc, uuid.UUID(int=0))
+    try:
+        await check_document_write_rate(actor)
+        written = await doc_service.add_to_records(
+            session,
+            actor,
+            parsed,
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except RateLimited:
+        return await _render_detail(
+            request,
+            loc,
+            session,
+            actor,
+            parsed,
+            status_code=429,
+            banner=translate("errors.rate_limited", loc),
+        )
+    except (InvalidDocumentState, NotFound):
+        return _redirect_detail(loc, parsed)
+    return RedirectResponse(
+        f"/{loc}/patient/documents/{parsed}?saved=1{_records_query(written)}", status_code=303
+    )
 
 
 @router.post("/{locale}/patient/documents/{document_id}/cancel")

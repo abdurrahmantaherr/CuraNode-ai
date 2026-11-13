@@ -142,7 +142,7 @@ async def seed_record(db, patient, doctor, clinic) -> None:
             test_name="Hemoglobin",
             value=Decimal("9.5"),
             unit="g/dL",
-            flag="L",
+            flag="low",  # the shared table only accepts low / normal / high (lab_result_flag_check)
         )
     )
     await db.commit()
@@ -179,7 +179,7 @@ async def test_ac12_page_shows_every_section(client, db, clinic, patient, verifi
     ):
         assert text in html, text
     # An abnormal flag is shown prominently.
-    assert 'class="badge badge--err">L<' in html
+    assert 'class="badge badge--err">low<' in html
 
 
 async def test_ac12_empty_record_shows_empty_states(client, patient, verified_doctor, grant):

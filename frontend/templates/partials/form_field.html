@@ -4,7 +4,7 @@
 
     `id_prefix` keeps ids unique on pages with several forms (the patient
     profile); it defaults to "" so single-form pages keep their ids.
-    `min`/`max`/`maxlength` are conveniences only — the server is
+    `min`/`max`/`maxlength` are conveniences only - the server is
     authoritative and profile forms use `novalidate`. -#}
 {% macro field(name, label, type='text', value='', errors={}, required=False,
                autocomplete=None, help=None, placeholder='', min=None, max=None,
