@@ -19,16 +19,16 @@
   <link rel="preload" href="/static/fonts/newsreader-latin-400-600.woff2" as="font" type="font/woff2" crossorigin>
   {% if locale == 'ur' %}<link rel="preload" href="/static/fonts/noto-nastaliq-urdu-arabic-400-700.woff2" as="font" type="font/woff2" crossorigin data-family="Noto+Nastaliq+Urdu">{% endif %}
 
-  {% block head_scripts %}<script src="/static/js/theme-init.js"></script>{% endblock %}
-  <link rel="stylesheet" href="/static/css/fonts.css">
-  <link rel="stylesheet" href="/static/css/tokens.css">
-  <link rel="stylesheet" href="/static/css/app.css">
-  <link rel="stylesheet" href="/static/css/icons.css">
-  <link rel="stylesheet" href="/static/css/ui.css">
-  <link rel="stylesheet" href="/static/css/pages.css">
+  {% block head_scripts %}<script src="/static/js/theme-init.js?v=20261016"></script>{% endblock %}
+  <link rel="stylesheet" href="/static/css/fonts.css?v=20261016">
+  <link rel="stylesheet" href="/static/css/tokens.css?v=20261016">
+  <link rel="stylesheet" href="/static/css/app.css?v=20261016">
+  <link rel="stylesheet" href="/static/css/icons.css?v=20261016">
+  <link rel="stylesheet" href="/static/css/ui.css?v=20261016">
+  <link rel="stylesheet" href="/static/css/pages.css?v=20261016">
 </head>
 <body>
   {% block body %}{% endblock %}
-  {% block shell_scripts %}<script src="/static/js/ui.js" defer></script>{% endblock %}
+  {% block shell_scripts %}<script src="/static/js/ui.js?v=20261016" defer></script>{% endblock %}
 </body>
 </html>

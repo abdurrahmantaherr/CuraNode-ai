@@ -1,72 +1,84 @@
 # CuraNode Design System
 
+> **Updated for the October 2026 UI redesign.** The palette, shell and component notes below now
+> describe the redesigned app (teal brand ramp, glass shell, sidebar and pill navigation). The
+> repo-root `DESIGN.md` is the working reference (rules, components, file map);
+> `tests/test_web.py::test_design_tokens_match_design_doc` pins the token values in this file.
+> The original warm-paper palette (`#0F5C56`, `#1A2422`, `#F6F4F0`) was replaced on purpose.
+
 ## 1. Design Overview
 
-CuraNode-AI is a calm, editorial, clinical-record product. The look is **warm off-white paper + deep teal brand + a distinct violet reserved exclusively for AI**. Surfaces are flat cards on a tinted background, separated by hairline borders and a very soft shadow — no gradients, no heavy elevation, no decorative imagery.
+CuraNode-AI is a calm, premium, clinical-record product. The look is **a mint-to-white atmosphere + a deep teal brand ramp + a distinct violet reserved exclusively for AI**. The navigation shell is frosted glass; data surfaces (tables, forms, lists) are solid white cards with hairline borders and soft teal-tinted shadows. Gradients are used only for the atmosphere, the passport hero and the brand badges.
 
 Guiding ideas visible throughout the artifact:
 
 - **Trust over flash.** Clinical copy is plain; ornament is minimal.
 - **AI is always visually marked.** Anything machine-generated uses the `--ai` violet (border, soft fill, chip, or pulse) so it can never be mistaken for a verified clinical fact.
 - **Provenance is a UI element.** AI answers and extracted data carry mono-font `src: …` citation chips.
-- **Three typefaces with fixed jobs.** Serif for headings, sans for UI, mono for identifiers/timestamps/metadata.
-- **Density is compact.** Body text sits at 12.5–13.5px; the interface is information-dense but airy through generous card padding.
+- **Three typefaces with fixed jobs.** Serif (Newsreader) for page titles and names, sans (Public Sans) for UI, mono (IBM Plex Mono) for identifiers, times and passport numbers. All three are self-hosted.
+- **Density follows the person.** Patient pages are airy (one action per screen, 16px body); doctor pages are denser and scannable.
 
 ## 2. Design Tokens
 
-All tokens are CSS custom properties on `:root`, overridden on `body[data-theme="dark"]`.
+All tokens are CSS custom properties in `frontend/static/css/tokens.css` (the only file that may hold a raw colour). Light is `:root`; dark is `[data-theme="dark"]` and, when no theme was chosen, the device's `prefers-color-scheme`.
 
 ### Colors
 
 | Token | Light | Dark | Use |
 |---|---|---|---|
-| `--brand` | `#0F5C56` | `#3E9A91` | Primary actions, links, active nav dot |
-| `--brand-2` | `#0B4741` | `#2E7D75` | Primary hover / second data series |
-| `--brand-soft` | `#E3EEEC` | `#12302D` | Brand chips, avatars, selected role tiles |
-| `--ai` | `#6B5FD9` | `#9B90F2` | AI accent — Medico, OCR, generated content |
-| `--ai-soft` | `#EDEBFB` | `#231F3D` | AI message bubbles, AI panels |
-| `--ok` / `--ok-soft` | `#2F8F5B` / `#E4F1E9` | `#4FB37B` / `#132B1E` | Confirmed, in-range, success |
-| `--warn` / `--warn-soft` | `#C68A1F` / `#F8F0DE` | `#DFAA45` / `#33280F` | Pending review, borderline values |
-| `--err` / `--err-soft` | `#C0432E` / `#F8E7E3` | `#E06751` / `#341C17` | Abnormal, allergy, revoke |
+| `--brand-950` | `#033236` | `#033236` | Ink, primary button, nav pill (constant) |
+| `--brand-700` | `#2C6975` | `#2C6975` | Links, secondary emphasis, chart main (constant) |
+| `--brand-500` | `#68B2A0` | `#68B2A0` | Accents, fills, progress. Never text on white, never under white text |
+| `--brand-200` | `#CDE0C9` | `#CDE0C9` | Selected fills |
+| `--brand-100` | `#E0ECDE` | `#E0ECDE` | Tinted surfaces and the page wash |
+| `--link` | `#2C6975` | `#78C0AE` | Links and brand text (`--brand` is an alias) |
+| `--primary-bg` / `--primary-ink` | `#033236` / `#FFFFFF` | `#68B2A0` / `#033236` | Primary button |
+| `--ai` | `#6B5FD9` | `#9B90F2` | AI accent: fills, rules, icons (text uses `--ai-ink`) |
+| `--ai-soft` | `#EDEBFB` | `#2A2650` | AI panels and chips |
+| `--ok` / `--ok-soft` | `#1B6F42` / `#DDEFE3` | `#5FC48A` / `#123F33` | Confirmed, in-range, success |
+| `--warn` / `--warn-soft` | `#8A5A00` / `#F8EDD3` | `#E3B04B` / `#3A2F10` | Pending review, borderline values |
+| `--err` / `--err-soft` | `#B3361F` / `#F8E3DE` | `#F08A76` / `#44221B` | Abnormal, allergy, revoke |
 
-Both `--brand` and `--ai` are exposed as editable component props (`accent`, `aiAccent`) and written back onto `documentElement` at runtime, so **never hardcode the hex values**.
+Status colours always pair with an icon and a word. Never hardcode the hex values outside `tokens.css`.
 
 ### Text, surface & line
 
 | Token | Light | Dark | Use |
 |---|---|---|---|
-| `--ink` | `#1A2422` | `#E9F1EE` | Primary text |
-| `--muted` | `#6B7A76` | `#94A5A1` | Secondary text, descriptions |
-| `--faint` | `#93A19D` | `#6E8280` | Eyebrow labels, mono metadata |
-| `--surface` | `#FFFFFF` | `#141E1C` | Cards, header |
-| `--surface-2` | `#FBFAF7` | `#101917` | Inputs, inset rows, nested tiles |
-| `--bg` | `#F6F4F0` | `#0B1211` | Page background |
-| `--line` | `rgba(26,36,34,.10)` | `rgba(255,255,255,.10)` | Card & row borders |
-| `--line-2` | `rgba(26,36,34,.16)` | `rgba(255,255,255,.18)` | Input borders, secondary button borders, timeline rails |
+| `--text-1` (`--ink`) | `#033236` | `#E6F1EE` | Primary text |
+| `--text-2` (`--muted`) | `#3F5F62` | `#A9C4C0` | Secondary text, descriptions |
+| `--text-3` (`--faint`) | `#4A6667` | `#8DAAA6` | Tertiary text, mono metadata (still 4.5:1) |
+| `--surface` | `#FFFFFF` | `#0A3F44` | Cards |
+| `--surface-2` | `#F6F6F6` | `#08373C` | Inputs, inset rows, subtle fills |
+| `--bg` | `#F6F6F6` | `#022A2D` | Page background (under the wash) |
+| `--line` | `rgba(3,50,54,.10)` | `rgba(224,236,222,.12)` | Card & row borders |
+| `--line-2` | `rgba(3,50,54,.22)` | `rgba(224,236,222,.26)` | Input borders, secondary button borders |
 
 ### Navigation (own scale, near-constant across themes)
 
 | Token | Light | Dark |
 |---|---|---|
-| `--nav` | `#0A1B19` | `#060F0E` |
-| `--nav-2` | `#081614` | `#050C0B` |
-| `--nav-ink` | `#DCE8E5` | `#DCE8E5` |
-| `--nav-muted` | `#7C948F` | `#7C948F` |
-| `--nav-active` | `#12433D` | `#123B36` |
+| `--nav` | `#033236` | `#021F22` |
+| `--nav-2` | `#0A4A50` | `#0A4A50` |
+| `--nav-ink` | `#E0ECDE` | `#E0ECDE` |
+| `--nav-muted` | `#A9CBC4` | `#A9CBC4` |
+| `--nav-active` | `#FFFFFF` | `#68B2A0` |
 
 ### Typography
 
 | Role | Family | Spec |
 |---|---|---|
 | Display | Newsreader (serif) | `400 34px/1.1` — design-system hero only |
-| Page title | Newsreader | `400 26px/1.15` (most screens), `400 30px/1.15` (auth & dashboards) |
-| Section / card heading | Newsreader | `500 22–25px` |
-| Header title | Newsreader | `500 19px/1.1` |
-| Eyebrow / card label | Public Sans | `600 10–10.5px`, uppercase, `letter-spacing:.14em` |
-| Body | Public Sans | `14.5px/1.6` long-form; `13–13.5px` in cards |
-| Label / row title | Public Sans | `600 12.5–13.5px` |
-| Small / meta | Public Sans | `11.5–12.5px` |
-| Mono | IBM Plex Mono | `400 10–12.5px` — IDs, dates, file sizes, citations, values in tables |
+| Page title | Newsreader | `500 28px/1.15` (22px on a phone) |
+| Greeting / next step | Newsreader | `500 22–36px` |
+| Section / card heading | Public Sans | `600 18px/1.3`, sentence case |
+| Body | Public Sans | `16px/1.55`; `14px` in dense rows |
+| Label / row title | Public Sans | `600 14px` |
+| Small / meta | Public Sans | `12–14px` |
+| Table column head | Public Sans | `600 12px`, uppercase, `letter-spacing:.06em` (the only uppercase label) |
+| Mono | IBM Plex Mono | `400–500 14–36px`: IDs, times, passport numbers, values in tables |
+
+Type scale: 12 / 14 / 16 / 18 / 22 / 28 / 36. Urdu uses Noto Nastaliq Urdu with line height 2.
 
 Weights in use: **400, 500, 600, 700**. Sans weights are effectively 400/500/600 (700 only for table column heads). Body line-height 1.5–1.65; headings 1.1–1.2.
 
@@ -74,37 +86,35 @@ Weights in use: **400, 500, 600, 700**. Sans weights are effectively 400/500/600
 
 | Token | Values |
 |---|---|
-| Spacing scale (gaps) | `7 · 8 · 9 · 10 · 12 · 14 · 16 · 18px` — `18px` between page sections, `14px` between stat cards, `8–10px` between list rows |
-| Card padding | `20–22px` (desktop), `16–19px` (compact cards) |
-| Inset row padding | `10–12px 12px` |
-| Radius | `999px` pills/chips/toggles · `16px` cards · `14px` compact cards & avatars · `10px` buttons & inputs · `11px` list rows · `6px` mono chips · `50%` dots/avatars |
-| `--shadow` | Light: `0 1px 2px rgba(26,36,34,.05), 0 6px 18px rgba(26,36,34,.04)` · Dark: `0 1px 2px rgba(0,0,0,.4)` |
-| Mobile stage shadow | `0 20px 50px rgba(26,36,34,.16)` |
+| Spacing scale | 4px scale: `4 · 8 · 12 · 16 · 20 · 24 · 32 · 40 · 48 · 64px` (`--s-1` to `--s-10`) |
+| Card padding | `24px` (desktop), `16–20px` on a phone |
+| Radius | `8 · 12 · 16 · 24 · 32px` and pill. Cards `24px`, hero `32px`, controls `12px`, buttons and chips pill |
+| Shadows | Tinted with the ink colour: `--shadow-1`, `--shadow-2`, `--shadow-3` (dark theme uses deeper teal-black) |
 
 ### Motion
 
-Three keyframes only: `cnPulse` (1.1–1.2s AI activity dot), `cnBar` (1.5–1.6s indeterminate progress fill), `cnSpin`. No CSS `transition` is declared anywhere.
+Hover and press: 150 to 220 ms ease-out. One 320 ms entrance stagger on the dashboards. Keyframes: `cnSpin` (spinner) and `rise` (entrance). Nothing loops, and nothing animates under `prefers-reduced-motion`.
 
 ## 3. Layout
 
-- **Shell:** fixed-width sidebar + fluid main column, `min-height:100vh`.
-- **Sidebar:** `262px`, `flex:none`, `position:sticky; top:0`, `height:100vh`, own scroll.
-- **Header:** sticky (`z-index:20`), `padding:14px 30px`, `--surface` background, `1px solid var(--line)` bottom border.
-- **Content area:** centred, `padding:26px 30px 60px` on `--bg`.
-- **Content max width:** `1240px` desktop, `412px` mobile.
+- **Shell:** a CSS grid: floating glass sidebar + fluid main column, `min-height:100dvh`.
+- **Sidebar:** `248px` (a `76px` icon rail between 721 and 1023px, and collapsible by the person), sticky, own scroll. Groups for a patient: Overview, My record, Privacy, Care; a doctor and a clinic admin get one flat list.
+- **Phone (up to 720px):** the sidebar is replaced by a floating dark pill at the bottom with the main destinations (a patient also gets a "More" sheet). The active item is a white pill with its label.
+- **Page header:** role label and a Newsreader title, no bar.
+- **Content area:** centred, `padding:24px 32px 64px`, on the atmosphere (soft mint-to-white wash).
+- **Content max width:** `1200px` desktop.
 - **Reading width:** long-form paragraphs capped at `56ch`–`80ch` (commonly `64ch`).
-- **Responsive grid:** every multi-column region is `repeat(auto-fit, minmax(Xpx, 1fr))` — `300px` for main panel pairs, `280–320px` for card grids, `160–180px` for stat/KPI tiles, `110–130px` for micro-tiles. There are **no `@media` queries**; reflow is entirely intrinsic (`auto-fit` + `flex-wrap` + `min-width:0`).
+- **Responsive grid:** multi-column regions use CSS grid with a few breakpoints (1100px: doctor side column drops below; 900px: patient home blocks stack; 720px: phone layout; 320px is the smallest tested width, with no horizontal scroll).
 - **Mobile stage:** rounded `30px` frame, `1px solid var(--line-2)`, padding `16px 14px 22px`, with a simulated status bar, a compact app bar (logo + screen title + avatar), and a sticky bottom tab bar.
 - **Wide tables/grids** are wrapped in `overflow-x:auto` with a `min-width` (e.g. the schedule grid at `min-width:660px`).
 
 ## 4. Theme
 
-- Light is the default; dark is applied by setting `data-theme="dark"` on `<body>`. **Only custom properties are redefined** — no component styles branch on theme.
-- Light: warm neutrals (`#F6F4F0` paper, white cards). Dark: cool desaturated greens (`#0B1211` page, `#141E1C` cards).
-- Brand and status hues **lighten** in dark mode (e.g. `#0F5C56` → `#3E9A91`) to hold contrast; their `-soft` companions **invert** from pale tints to deep tints.
-- Borders switch from `rgba(26,36,34,…)` to `rgba(255,255,255,…)` at the same alphas.
-- Shadow collapses to a single tight dark shadow in dark mode.
-- The navigation column is near-identical in both themes — it is always dark. Chip/button text on brand fills stays literal `#fff` in both themes.
+- The theme follows the device (`prefers-color-scheme`) until the person picks one with the sidebar switch; the choice is saved in `localStorage` and applied by `theme-init.js` before first paint (`data-theme` on `<html>`). **Only custom properties are redefined** — no component styles branch on theme.
+- Light: a mint-to-`#F6F6F6` wash with white cards. Dark: derived from the brand base `#033236` (`#022A2D` page, `#0A3F44` cards), not neutral grey.
+- Brand text and status hues **lighten** in dark mode (e.g. link `#2C6975` → `#78C0AE`) to hold 4.5:1; their `-soft` companions become deep tints. The primary button flips to `#68B2A0` with `#033236` text.
+- Borders switch from `rgba(3,50,54,…)` to `rgba(224,236,222,…)`.
+- The navigation pill is dark in both themes; its active item is white in light and `#68B2A0` in dark.
 
 ## 5. Core Components
 

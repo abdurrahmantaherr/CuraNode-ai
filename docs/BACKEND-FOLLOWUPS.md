@@ -23,11 +23,8 @@ Where a design needs this data, the UI hides that element instead of inventing i
    the doctor's clinic names would remove the script and cover days with no sessions.
 4. **No time-of-day greeting server side.** The greeting "Good evening" is a script
    enhancement; with JavaScript off the page says "Welcome back".
-5. **Palette test pins the old colours.** `tests/test_web.py::test_design_tokens_match_design_doc`
-   asserts `--brand: #0F5C56`, `--ink: #1A2422`, `--bg: #F6F4F0` and `#3E9A91` in
-   tokens.css. The requested brand ramp (#033236, #2C6975, #68B2A0, #CDE0C9, #E0ECDE) cannot
-   satisfy it. Tests are read-only for this task, so that one test fails by design until its
-   owner updates the expected values.
+5. **Palette test pinned the old colours.** Resolved: `test_design_tokens_match_design_doc` and
+   `docs/DESIGN.md` now describe the new palette (the redesign was intended to replace the old brand colour).
 6. **Existing known failure, unrelated:** `tests/test_schedule_schemas.py` `24:00` case fails
    on Python 3.14 (documented in CLAUDE.md).
 7. **Clinic queue desk and doctor dashboard do not refresh themselves.** Only the patient

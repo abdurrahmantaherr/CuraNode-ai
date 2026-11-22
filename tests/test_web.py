@@ -354,20 +354,31 @@ async def test_design_tokens_match_design_doc():
     from pathlib import Path
 
     css = Path("frontend/static/css/tokens.css").read_text(encoding="utf-8")
+    # The brand ramp (DESIGN.md at the repo root) and the semantic colours built on it.
+    # `--brand`, `--ink` and `--muted` are now aliases of the semantic tokens below.
     for token, value in [
-        ("--brand", "#0F5C56"),
+        ("--brand-950", "#033236"),
+        ("--brand-700", "#2C6975"),
+        ("--brand-500", "#68B2A0"),
+        ("--brand-200", "#CDE0C9"),
+        ("--brand-100", "#E0ECDE"),
+        ("--link", "#2C6975"),
+        ("--text-1", "#033236"),
+        ("--primary-bg", "#033236"),
         ("--ai", "#6B5FD9"),
-        ("--ok", "#2F8F5B"),
-        ("--warn", "#C68A1F"),
-        ("--err", "#C0432E"),
-        ("--ink", "#1A2422"),
+        ("--ok", "#1B6F42"),
+        ("--warn", "#8A5A00"),
+        ("--err", "#B3361F"),
         ("--surface", "#FFFFFF"),
-        ("--bg", "#F6F4F0"),
+        ("--bg", "#F6F6F6"),
     ]:
         assert f"{token}: {value};" in css, f"{token} does not match DESIGN.md"
     # Dark theme must redefine the palette, not patch components.
     assert '[data-theme="dark"]' in css
-    assert "#3E9A91" in css  # dark brand
+    assert "--link: #78C0AE;" in css  # dark link colour (passes AA on the dark surfaces)
+    assert "--bg: #022A2D;" in css  # dark page, derived from the brand base
+    # ...and follow the device when the person has not chosen a theme.
+    assert "prefers-color-scheme: dark" in css
 
 
 async def test_no_raw_hex_in_app_css():
