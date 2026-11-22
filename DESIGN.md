@@ -99,3 +99,11 @@ backend already sends (`nav_items`) and decides nothing about roles itself.
 ## Known limits (see docs/BACKEND-FOLLOWUPS.md)
 Patient dashboard has no upcoming appointments or recent documents (no data supplied). The
 palette test pins the old colours. Two pinned legacy strings are kept out of sight.
+
+## Cache busting (read before changing a stylesheet or script)
+Static files are served with no `Cache-Control` header, so a browser may keep an old copy of a file
+that has the same address (this made a redesigned page look unstyled on one machine: it still held the
+old `tokens.css`, so every new variable was undefined). Every stylesheet and script link in the
+templates therefore carries a version, for example `/static/css/ui.css?v=20261016`. **When you change
+a CSS or JS file, change the `?v=` value in `base.html` (and in the page templates that load scripts)
+so browsers fetch the new copy.** `profile.js` is the one exception: a test pins its exact tag.
